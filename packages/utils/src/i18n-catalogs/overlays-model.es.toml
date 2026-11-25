@@ -40,7 +40,7 @@
 "overlaysModel.controller.clipboard.item_empty" = "No hay nada que copiar en ese elemento"
 "overlaysModel.controller.clipboard.nothing_yet" = "Todavía no hay nada que copiar."
 "overlaysModel.controller.clipboard.opening" = "Abriendo {label}: {url}"
-"overlaysModel.controller.irc.viewer_disabled" = "El visor de IRC está desactivado (irc.operator.viewerEnabled)."
+"overlaysModel.controller.irc.viewer_disabled" = "El cliente de IRC está desactivado (irc.operator.viewerEnabled)."
 "overlaysModel.controller.menu.cancel" = "Cancelar"
 "overlaysModel.controller.menu.close_first" = "Cierra primero esta vista (Esc)"
 "overlaysModel.controller.menu.finish_prompt" = "Termina o cancela primero la consulta"

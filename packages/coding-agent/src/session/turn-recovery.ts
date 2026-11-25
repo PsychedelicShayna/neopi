@@ -3852,7 +3852,7 @@ export class TurnRecovery {
 	 * recent activity was a tool call: synthetic placeholder results trail the
 	 * failed turn (stream died mid-tool-call), or the message right before the
 	 * aborted boundary is an errored/aborted tool result (Esc landed during
-	 * tool execution). Drives the TUI's idle "F5 to Retry" status row;
+	 * tool execution). Drives the TUI's idle retry status row;
 	 * {@link retry} is the matching action.
 	 */
 	get hasAbortedToolCallTail(): boolean {

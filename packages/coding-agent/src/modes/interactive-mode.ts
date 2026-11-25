@@ -171,8 +171,13 @@ import {
 	isAgentTranscriptReadOnly,
 } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { DEFAULT_IRC_OPERATOR_HANDLE, operatorIrcLogSource, registerIrcOperator } from "../irc/operator";
-import { cfgIrcOperatorHandle } from "../irc/settings";
+import {
+	type IrcClientOpenRequest,
+	OperatorIrcClient,
+	operatorIrcLogSource,
+	registerIrcOperator,
+} from "../irc/operator";
+import { cfgIrcOperatorHandle, DEFAULT_IRC_OPERATOR_HANDLE } from "../irc/settings";
 import { executeSend } from "../irc/messaging";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
@@ -2282,6 +2287,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	get ircOperatorId(): string | undefined {
 		return this.#ircOperatorId;
 	}
+	get ircClient(): OperatorIrcClient | undefined {
+		return this.#ircClient;
+	}
 	/**
 	 * Send an IRC message as the operator: to a peer id or `all`, optionally as a
 	 * reply. Resolves with the delivery summary the hub tool would report.
@@ -2412,7 +2420,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			"irc",
 			new IrcSection({
 				source: operatorIrcLogSource(() => this.session),
-				openViewer: messageId => this.showIrcViewer(messageId),
+				openViewer: messageId => this.showIrcViewer(messageId === undefined ? undefined : { messageId }),
 				requestRender,
 			}),
 		);
@@ -2577,6 +2585,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** The operator's IRC id while she is registered as a participant (issue #31). */
 	#ircOperatorId: string | undefined;
 	#releaseIrcOperator: (() => void) | undefined;
+	#ircClient: OperatorIrcClient | undefined;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
 	#pinnedHudOverride: boolean | undefined;
 	#eventBus?: EventBus;
@@ -9110,6 +9119,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter?.();
 		this.#disposeImageBlobWriter = undefined;
 		this.#hideSessionInfo();
+		this.#selectorController.disposeIrcViewer();
 		if (this.#ownsStartedUi) {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
@@ -9143,11 +9153,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		const handle = cfgIrcOperatorHandle.get(this.settings).trim() || DEFAULT_IRC_OPERATOR_HANDLE;
 		this.#releaseIrcOperator = registerIrcOperator(registry, handle, root.id);
 		this.#ircOperatorId = this.#releaseIrcOperator ? handle : undefined;
+		// The visible transcript can belong to a focused child. IRC actions and
+		// the operator's state remain bound to the owning primary conversation.
+		const session = this.session;
+		const resetClient = () => {
+			this.#selectorController.disposeIrcViewer();
+			this.#ircClient?.dispose();
+			this.#ircClient = new OperatorIrcClient(root, session, {
+				operatorName: handle,
+				operatorId: this.#ircOperatorId,
+				requestRender: () => this.ui.requestRender(),
+				reconcileOverlay: () => this.#selectorController.reconcileIrcViewer(),
+			});
+		};
 		IrcBus.restoreGroupsForRoot(root);
 		const releaseOperator = this.#releaseIrcOperator;
-		const unsubscribe = this.session.registerSessionChangeCallback(() => IrcBus.restoreGroupsForRoot(root));
+		resetClient();
+		const unsubscribe = session.registerSessionChangeCallback(() => {
+			IrcBus.restoreGroupsForRoot(root);
+			resetClient();
+		});
+		// Focus follows a child's transcript subscription, but an operator
+		// notice still belongs to the person at this UI.
+		const unsubscribeRelay = session.subscribe(event => {
+			if (
+				this.focusedAgentId &&
+				event.type === "irc_message" &&
+				event.message.customType === "irc:relay" &&
+				event.message.display
+			) {
+				return this.#eventController.dispatchSessionEvent(event);
+			}
+		});
 		this.#releaseIrcOperator = () => {
 			unsubscribe();
+			unsubscribeRelay();
+			this.#selectorController.disposeIrcViewer();
+			this.#ircClient?.dispose();
+			this.#ircClient = undefined;
 			releaseOperator?.();
 		};
 	}
@@ -10193,7 +10236,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.releaseStaleYieldCompaction();
 	}
 	/**
-	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:
+	 * Reconcile the idle retry status row with the transcript tail:
 	 * mount it when the last turn died on a tool call (Esc mid-execution,
 	 * stream failure) and the status row is free, remove it when stale. Runs at
 	 * turn end and after every transcript replay (startup resume, `/tree`,
@@ -10210,7 +10253,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		// Never contend with a live loader (working/auto-retry/compaction).
 		if (!show || this.statusContainer.children.length > 0) return;
-		const retryKey = this.keybindings.getKeys("app.retry")[0] ?? "f5";
+		const retryKey = this.keybindings.getKeys("app.retry")[0];
+		if (!retryKey) return;
 		// Laid out as the working row it replaces: a blank row above, then the
 		// key in the column where the working row's interrupt key stood.
 		const hint = new Container();
@@ -10766,8 +10810,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		)?.trim();
 	}
 
-	showIrcViewer(messageId?: string): void {
-		this.#selectorController.showIrcViewer(messageId);
+	showIrcViewer(request?: IrcClientOpenRequest): void {
+		this.#selectorController.showIrcViewer(request);
 	}
 
 	resetObserverRegistry(): void {

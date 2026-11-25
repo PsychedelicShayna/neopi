@@ -4,6 +4,7 @@
 
 ### Added
 
+- IRC quick-reply hints are available in English and Spanish.
 - CLI hosts can localize explicit and implicit command help without changing command or flag syntax.
 - Added source-located template parsing, registered-helper inspection, and profile-aware built-in prompt override resolution for prompt tooling ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Shared main-settings TOML reading, top-level overlays and explicit-clear decoding across config consumers ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).

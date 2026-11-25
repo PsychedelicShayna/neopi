@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Retry the last failed turn with Ctrl+Alt+R instead of F5 or Alt+R.
 - Ctrl+R redoes edits in Vim Normal mode alongside Alt+U; prompt-history search moves to Ctrl+H on terminals that distinguish it from Backspace.
 - IRC messages in the transcript show the whole message, rendered as Markdown at full width, between an opening rule (sender, group or recipient, time) and a closing rule in the sender's Agent Hub colour, with a rail of that colour down the body.
 - Advisor notes appear in an outlined bubble like Chronicler Luna's, coloured by the worst note: grey for a nit, yellow for a concern, red for a blocker.

@@ -4,12 +4,14 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { OperatorIrcClient } from "@oh-my-pi/pi-coding-agent/irc/operator";
+import { IrcClientComponent } from "@oh-my-pi/pi-coding-agent/modes/components/irc-client";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { parseSgrMouse, Text } from "@oh-my-pi/pi-tui";
-import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { IrcLogEntry } from "@oh-my-pi/pi-tui/tools/irc";
@@ -49,12 +51,12 @@ it("pages to an older IRC row and opens the matching message by Enter or click",
 	const entries = Array.from({ length: 48 }, (_, index): IrcLogEntry => {
 		const id = `irc-${String(index).padStart(2, "0")}`;
 		return {
-			message: { id, from: `peer-${id}`, to: "Main", body: `body-${id}`, ts: index },
+			message: { id, from: `peer-${id}`, to: "Main", group: "everyone", body: `body-${id}`, ts: index },
 			outcome: "injected",
 			broadcast: false,
 		};
 	});
-	const history = vi.spyOn(IrcBus.prototype, "history").mockReturnValue(entries);
+	const history = vi.spyOn(IrcBus.prototype, "historyForRoot").mockReturnValue(entries);
 	const term = new VirtualTerminal(120, 24);
 	const scheduler = new VirtualRenderScheduler();
 	const composer = new Composer({
@@ -64,6 +66,15 @@ it("pages to an older IRC row and opens the matching message by Enter or click",
 	});
 	composer.start();
 	const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
+	const registry = AgentRegistry.global();
+	const root = registry.register({ id: "side-panel-irc-test", displayName: "Main", kind: "main", session });
+	const client = new OperatorIrcClient(root, session, {
+		operatorName: "Operator",
+		requestRender: () => composer.ui.requestRender(),
+		reconcileOverlay() {},
+		agentDir: tempDir.path(),
+	});
+	Object.defineProperty(mode, "ircClient", { get: () => client });
 	const selected = () =>
 		new Set(term.getViewport().flatMap((line, row) => {
 			const id = line.match(/irc-\d\d/)?.[0];
@@ -74,9 +85,11 @@ it("pages to an older IRC row and opens the matching message by Enter or click",
 		await scheduler.settle(term);
 	};
 	const viewerSelection = () => {
-		const viewer = composer.ui.getFocused();
-		if (!(viewer instanceof IrcViewerComponent)) throw new Error("Expected the IRC viewer to have focus");
-		return viewer.navigationSnapshot().selected;
+		if (!(composer.ui.getFocused() instanceof IrcClientComponent)) {
+			throw new Error("Expected the IRC client to have focus");
+		}
+		const selectedHeader = term.getViewport().find(line => line.includes("▍"));
+		return selectedHeader?.match(/irc-\d\d/)?.[0];
 	};
 	try {
 		composer.setRuntimeChildren([mode.chatContainer, new Text("EDITOR", 0, 0)]);
@@ -93,7 +106,9 @@ it("pages to an older IRC row and opens the matching message by Enter or click",
 		expect([...selected()]).toEqual([paged]);
 		await send("\r");
 		expect(viewerSelection()).toBe(paged);
-		expect(term.getViewport().some(line => line.includes("▍") && line.includes(`body-${paged}`))).toBe(true);
+		expect(
+			term.getViewport().some((line, row, viewport) => line.includes("▍") && viewport[row + 1]?.includes(`body-${paged}`)),
+		).toBe(true);
 
 		await send("\x1b");
 		const panel = composer.sidePanelGeometry()?.panelRect;
@@ -109,6 +124,8 @@ it("pages to an older IRC row and opens the matching message by Enter or click",
 		await send("\x1b");
 	} finally {
 		mode.stop();
+		client.dispose();
+		registry.unregister(root.id, root);
 		composer.stop();
 		history.mockRestore();
 	}

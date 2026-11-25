@@ -502,6 +502,15 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
+				const ircTraffic = this.ctx.keybindings.matches(data, "app.irc.traffic");
+				const ircQuickReply = this.ctx.keybindings.matches(data, "app.irc.quickReply");
+				if (ircTraffic || ircQuickReply || this.ctx.keybindings.matches(data, "app.irc.viewer")) {
+					if (this.ctx.ui.hasOverlay() || this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
+					if (!isKeyRelease(data) && !isKeyRepeat(data)) {
+						this.ctx.showIrcViewer(ircTraffic ? "traffic" : ircQuickReply ? "quickReply" : undefined);
+					}
+					return { consume: true };
+				}
 				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
 					// The inline tree selector binds Alt+T to its no-tools filter; its
 					// own binding stays authoritative, as for Alt+L above.
@@ -817,9 +826,6 @@ export class InputController {
 				this.ctx.showAgentHub(agentsHubKeys.has(key) ? { trayFirst: true } : undefined),
 			);
 		}
-		for (const key of this.ctx.keybindings.getKeys("app.irc.viewer")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showIrcViewer());
-		}
 		// The ask above the composer answers to its keys from here too, in every composer state.
 		for (const key of this.ctx.keybindings.getKeys("app.ask.hide")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
@@ -985,6 +991,12 @@ export class InputController {
 				return true;
 			case "app.irc.viewer":
 				this.ctx.showIrcViewer();
+				return true;
+			case "app.irc.traffic":
+				this.ctx.showIrcViewer("traffic");
+				return true;
+			case "app.irc.quickReply":
+				this.ctx.showIrcViewer("quickReply");
 				return true;
 			case "app.history.search":
 				void this.ctx.showHistorySearch();

@@ -112,35 +112,47 @@ Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows unde
 
 Collab does not replicate advisor rows or serve their transcripts to guests; the host also rejects advisor chat, revive, and kill requests by id.
 
-## IRC viewer
+## IRC client
 
-`Alt+I` (`app.irc.viewer`) opens a fullscreen history of the agent-to-agent messages in this session. The main transcript shows a message delivered to the agent you are viewing in full, between two rules in the sender's Agent Hub colour: the opening rule names the sender, the group or recipient, and the time; the closing rule repeats the sender. Those messages stay in the transcript. A message addressed to you shows as a three-line notification card that leaves after ten seconds, at most four at once, and you read it in the viewer. Messages between two other agents never show in the main transcript; they are only in the viewer. The transcript keeps only messages delivered to the main agent across `/resume`; the viewer keeps every message of the running process.
+`Alt+I` (`app.irc.viewer`) opens the IRC client. It goes to the newest conversation that notified you while it was closed, or resumes your last conversation. `Alt+Shift+I` (`app.irc.traffic`) jumps to the latest global Traffic, including exchanges between other agents. Passive traffic does not change what `Alt+I` reopens.
 
-Each row shows the time, sender `➤` recipient, and the message body. Broadcasts appear as one row per recipient, marked `broadcast`. Replies are marked `reply`, wake-turn relays `relay`, and failed deliveries show the error. Long bodies are collapsed to two lines.
+The left sidebar switches between Traffic, the room roster, recent direct messages, and rooms. Moving the cursor previews a conversation without marking it read. Enter opens it. The center shows whole messages in send order; a room message appears once, not once per recipient. The composer sends as you to your DMs and rooms you belong to. You can inspect other conversations read-only. The right pane shows a room's members.
+
+On a room you haven't joined, Enter offers **Spy** (read-only), **Join silently**, **Join and announce**, or **Join invisibly** (read and send without appearing in the member list). In a joined room, the member menu offers mentions, direct messages, permission changes, mute/unmute, and removal. Use `i` to invite multiple agents at once and choose whether to notify or wake them.
 
 | Key | Action |
 | --- | --- |
-| `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`, wheel | Select a message; `End` follows new traffic again. An expanded message taller than the screen scrolls through its lines first |
-| `Enter` or the tool-expand key | Expand or collapse the selected message |
-| `/` | Filter by participant (sender or recipient); `Enter` applies, `Esc` clears |
-| `r` | Reply to the selected message as yourself; `Enter` sends, `Esc` cancels |
-| `Esc` or `Alt+I` | Close |
+| `↑`/`↓` | Preview a conversation or select a row |
+| `Enter` | Open a conversation; in the composer, send to that conversation |
+| `Alt+Enter` | Insert a newline in the composer |
+| `Tab` / `Shift+Tab` | Move between the sidebar, center, and members |
+| `PgUp` / `PgDn` | Scroll the message history |
+| `/` | Filter the focused conversation list |
+| `o` | Conversation options, including notification level |
+| `Alt+K` / `Alt+Shift+K` | Pin / unpin a room or DM |
+| `Esc` / `Alt+I` | Back out of a field or popup / close the client |
 
-The history belongs to this UI's root session and its current conversation: `/new` or resuming another session shows that conversation's messages, with or without a session file. It lives in memory and is lost when the process exits. Settings:
+IRC belongs to the UI's primary conversation even while you view an agent's transcript. Messages delivered to the agent you are viewing still appear in full in its transcript. In conversation options, choose **Every message**, **Mentions only** (`@<your handle>`, `@operator`, or `@everyone`), or **Never**. This controls both the short card (which retires after ten seconds) and whether the message can become the next Alt+I destination. Messages still count as unread in quiet conversations; **Never** dims their unread counts. DMs to you default to **Every message**. Room notifications default to **Mentions only**.
 
-- `irc.operator.viewerEnabled` (default `true`) lets the key open the viewer.
-- `irc.operator.relayToMainTranscript` (default `true`) lets live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript, and the viewer keeps messages either way.
-- `irc.history.maxEntries` (default `1000`) caps the history per process; the oldest messages drop first.
+Recent history is capped per root conversation. Persisted sessions keep the IRC journal and your pins, notification levels, read state, and last conversation in owner-only sidecars in the local NeoPi profile, not in the transcript. In-memory sessions do not write those files. Resuming in the same profile restores available history without dispatching old messages or showing old notifications; without the sidecar, the client starts with empty history. Session export, forks, and another profile do not carry these files. Deleting a transcript does not erase the profile sidecars.
+
+Settings:
+
+- `irc.operator.viewerEnabled` (default `true`) allows opening the client.
+- `irc.operator.directMessages` (default `true`) lets agents send DMs to you even if you share no room. Turning it off does not prevent room delivery or sending your own DMs.
+- `irc.operator.notifyDefault` (`mentions` by default; `all` or `none` also available) sets the notification level for rooms without an override.
+- `irc.operator.relayToMainTranscript` (default `true`) lets live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript, and IRC Traffic includes them either way.
+- `irc.history.maxEntries` (default `1000`) caps recent IRC history. The oldest messages drop first.
 - `irc.operator.handle` (default `Operator`) is your own IRC id; see below.
 
-The viewer is for the operator only. Agents still receive only messages addressed to them, and no tool exposes this history to them.
+The client is for the operator only. Agents still receive only messages addressed to them, and no tool exposes the operator's history to them.
 
 ### You as a participant
 
 You take part in IRC under your own id, `Operator` unless `irc.operator.handle` names another (it takes effect the next time npi starts). This id is separate from `Main`, the model behind the composer:
 
-- Agents can message you with [`irc`](./tools/irc.md) or `write agent://Operator`. Direct messages from other agents appear in the viewer and can show in the main transcript without waiting for a model turn.
-- `/irc <agent> <message>`, `/irc #<group> <message>`, and `/irc all <message>` send as you, never as `Main`. Use `/irc group list` to see groups and [the other group commands](./tools/irc.md#operator-irc) to manage membership. `/irc` alone opens the viewer, where `r` replies to the selected message.
+- Agents can message you with [`irc`](./tools/irc.md) or `write agent://Operator`. Direct messages from other agents appear in the client and can notify you without waiting for a model turn.
+- `/irc <agent> <message>`, `/irc #<group> <message>`, and `/irc all <message>` send as you, never as `Main`. Use `/irc group list` to see groups and [the other group commands](./tools/irc.md#operator-irc) to manage membership. `/irc` alone opens the client.
 - The composer still talks to `Main`.
 
 You are not listed in the Agent Hub, and collab guests do not get an id of their own.

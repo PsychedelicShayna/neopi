@@ -1,6 +1,6 @@
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Agent, AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
@@ -42,6 +42,8 @@ export class IrcBridge {
 	 *  (no observer would reply to the sender); they resume into a monitored wake once
 	 *  the contract clears or the hold is released. */
 	#deferredWakes: AgentMessage[] = [];
+	/** Passive records received mid-turn. Folded into context without extending or starting a run. */
+	#passive: CustomMessage[] = [];
 	/** In-flight wake-turn relays owed to peers. */
 	readonly #pendingReplies = new Set<Promise<void>>();
 
@@ -145,11 +147,22 @@ export class IrcBridge {
 	 *  contract clear could wake the new transcript with a peer message belonging to the
 	 *  previous session. Pass the snapshot to `restorePending` to undo the clear
 	 *  if the transition is rolled back. */
-	clearPending(): { interrupts: AgentMessage[]; asides: AgentMessage[]; deferredWakes: AgentMessage[] } {
-		const snapshot = { interrupts: this.#interrupts, asides: this.#asides, deferredWakes: this.#deferredWakes };
+	clearPending(): {
+		interrupts: AgentMessage[];
+		asides: AgentMessage[];
+		deferredWakes: AgentMessage[];
+		passive: CustomMessage[];
+	} {
+		const snapshot = {
+			interrupts: this.#interrupts,
+			asides: this.#asides,
+			deferredWakes: this.#deferredWakes,
+			passive: this.#passive,
+		};
 		this.#interrupts = [];
 		this.#asides = [];
 		this.#deferredWakes = [];
+		this.#passive = [];
 		return snapshot;
 	}
 
@@ -162,10 +175,15 @@ export class IrcBridge {
 		interrupts: AgentMessage[];
 		asides: AgentMessage[];
 		deferredWakes: AgentMessage[];
+		passive: CustomMessage[];
 	}): void {
 		this.#interrupts = [...snapshot.interrupts, ...this.#interrupts];
 		this.#asides = [...snapshot.asides, ...this.#asides];
 		this.#deferredWakes = [...snapshot.deferredWakes, ...this.#deferredWakes];
+		if (snapshot.passive.length > 0) {
+			this.#passive = [...snapshot.passive, ...this.#passive];
+			this.#flushPassiveAfterIdle();
+		}
 	}
 
 	/** Queues records for the next step-boundary aside injection: IRC wakes deferred by a
@@ -223,13 +241,14 @@ export class IrcBridge {
 		const relayOnStop =
 			!streaming &&
 			!planModeIdle &&
+			!msg.noWake &&
 			!recipientIsRoot &&
 			msg.wakeRelay !== true &&
 			msg.broadcast !== true &&
 			msg.progress !== true;
 		// A broadcast leg or progress note asks nothing of the recipient, so a
 		// busy one reads it at its next step boundary without being interrupted.
-		const quiet = msg.broadcast === true || msg.progress === true;
+		const quiet = msg.noWake === true || msg.broadcast === true || msg.progress === true;
 		const parentSteer = streaming && fromParent && !peerMessage && !quiet;
 		// The body is agent-authored (a peer's message, or a wake relay's
 		// `<task-result>` around a subagent's output), so it must not close the
@@ -273,8 +292,13 @@ export class IrcBridge {
 			attribution: "agent",
 			timestamp: msg.ts,
 		};
-		if (peerMessage) this.#peerMessages.add(record);
+		if (peerMessage && !msg.noWake) this.#peerMessages.add(record);
 		void this.#host.emitSessionEvent({ type: "irc_message", message: record });
+		if (msg.noWake) {
+			this.#passive.push(record);
+			if (this.#passive.length === 1) this.#flushPassiveAfterIdle();
+			return "injected";
+		}
 		if (streaming) {
 			if (parentSteer) {
 				const steer: AgentMessage = {
@@ -298,24 +322,53 @@ export class IrcBridge {
 			}
 			return "injected";
 		}
+		this.#flushPassive();
 		if (this.#host.planModeEnabled() || this.#host.canWake?.(record) === false) {
-			this.#host.agent.appendMessage(record);
-			setMessageEntryId(
-				record,
-				this.#host.sessionManager.appendCustomMessageEntry(
-					record.customType,
-					record.content,
-					record.display,
-					record.details,
-					record.attribution ?? "agent",
-					// The block shows the send time; a rebuilt transcript must show the same one.
-					record.timestamp,
-				),
-			);
+			this.#appendWithoutTurn(record);
 			return "injected";
 		}
 		this.#host.wakeForIrc([record]);
 		return "woken";
+	}
+
+	#appendWithoutTurn(record: CustomMessage): void {
+		this.#host.agent.appendMessage(record);
+		setMessageEntryId(
+			record,
+			this.#host.sessionManager.appendCustomMessageEntry(
+				record.customType,
+				record.content,
+				record.display,
+				record.details,
+				record.attribution ?? "agent",
+				// The block shows the send time; a rebuilt transcript must show the same one.
+				record.timestamp,
+			),
+		);
+	}
+
+	#flushPassiveAfterIdle(): void {
+		const agent = this.#host.agent;
+		if (!agent.state.isStreaming) {
+			this.#flushPassive();
+			return;
+		}
+		const pending = this.#passive;
+		void agent
+			.waitForIdle()
+			.then(() => {
+				if (this.#passive === pending) this.#flushPassiveAfterIdle();
+			})
+			.catch(error => {
+				logger.warn("Could not fold passive IRC messages into the transcript", { error: String(error) });
+			});
+	}
+
+	#flushPassive(): void {
+		const pending = this.#passive;
+		if (pending.length === 0) return;
+		this.#passive = [];
+		for (const record of pending) this.#appendWithoutTurn(record);
 	}
 
 	/** Emits an IRC relay observation for rendering without persisting it. */
@@ -325,6 +378,7 @@ export class IrcBridge {
 
 	/** Persists queued IRC records that missed their step-boundary injection. */
 	flushPending(): void {
+		this.#flushPassive();
 		for (const record of this.drainPending()) {
 			this.#host.agent.emitExternalEvent({ type: "message_start", message: record });
 			this.#host.agent.emitExternalEvent({ type: "message_end", message: record });

@@ -87,7 +87,7 @@ async function createContext() {
 		"app.local.open": ["alt+g"],
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["alt+m"],
-		"app.retry": ["alt+r"],
+		"app.retry": ["ctrl+alt+r"],
 		"app.clipboard.pasteImage": ["ctrl+v"],
 		"app.tools.toggleVisibility": ["ctrl+shift+o"],
 		"app.tools.expand": ["ctrl+o"],
@@ -455,7 +455,7 @@ describe("InputController keybinding setup", () => {
 
 		controller.setupKeyHandlers();
 
-		expect(spies.setActionKeys).toHaveBeenCalledWith("app.retry", ["alt+r"]);
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.retry", ["ctrl+alt+r"]);
 		expect(editor.onRetry).toBeDefined();
 
 		editor.setText("draft that should survive retry");
@@ -1610,6 +1610,22 @@ describe("InputController global editor actions", () => {
 
 		expect(dispatchInput(listeners, CTRL_T)).toEqual({ consume: true });
 		expect(context.ctx.toggleThinkingBlockVisibility).toHaveBeenCalledTimes(1);
+	});
+
+	it("routes Alt+R to quick reply from the main composer but leaves it to a focused overlay", async () => {
+		const context = await createContext();
+		const showIrcViewer = vi.fn();
+		Object.assign(context.ctx, { showIrcViewer });
+		context.setKeybinding("app.irc.quickReply", ["alt+r"]);
+		new context.InputController(context.ctx).setupKeyHandlers();
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, "\x1br")).toEqual({ consume: true });
+		expect(showIrcViewer).toHaveBeenCalledWith("quickReply");
+
+		context.setOverlayVisible(true);
+		expect(dispatchInput(listeners, "\x1br")).toBeUndefined();
+		expect(showIrcViewer).toHaveBeenCalledTimes(1);
 	});
 
 	it("defers while an overlay owns the active surface", async () => {

@@ -56,8 +56,8 @@ app.history.search: []
 | `app.repl.toggle`            | `Alt+Shift+R`                                                         | Toggle REPL mode between the agent and the last kernel (see `/repl`)                                                                                                                 |
 | `app.repl.execute`           | `Ctrl+Q`, `Ctrl+Enter`                                                | In REPL mode, run the composer in the selected kernel; outside REPL mode these chords stay follow-up                                                                                 |
 | `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | Dequeue a queued message back into the editor                                                                                                                                        |
-| `app.btw.inject` | Unbound | Send a `/btw` answer's steering prompt to the main session (needs `btw.inject`); assign a key in keybindings. NeoPi retains `Alt+I` for the IRC viewer. |
-| `app.retry`                  | `F5`, `Alt+R`                                                         | Retry the last failed assistant turn                                                                                                                                                 |
+| `app.btw.inject` | `Alt+I` in the `/btw` answer sheet | Send a `/btw` answer's steering prompt to the main session (needs `btw.inject`); in the main composer `Alt+I` opens the IRC client. |
+| `app.retry` | `Ctrl+Alt+R` | Retry the last failed assistant turn |
 | `app.display.reset`          | `Alt+L`                                                               | Reset terminal display                                                                                                                                                               |
 | `app.clipboard.copyLine`     | `Alt+Shift+L`                                                         | Copy the current line                                                                                                                                                                |
 | `app.clipboard.copyPrompt`   | `Alt+Shift+C`                                                         | Copy the whole prompt                                                                                                                                                                |
@@ -71,8 +71,10 @@ app.history.search: []
 | `app.live.destination.cycle` | `Ctrl+Alt+L`                                                          | During live voice mode, cycle where Enter sends composer text: main agent (default) → voice agent only → both. Slash, `!`, and `$` commands always go to the harness. The status-line mic shows `voice` or `both` when not sending to the main agent. |
 | `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md); in its roster, `Shift+R` restarts the selected live advisor. |
 | `app.session.delete` | `Backspace`, `Delete` | Ask to delete the selected session in the resume picker; a key that also deletes backward edits a typed search query instead |
-| `app.irc.viewer`             | `Alt+I`                                                               | [Open the IRC communications viewer](./agent-hub.md#irc-viewer)                                                                                                                      |
-| `app.sidebar.toggle`         | `Alt+T`                                                               | [Open and focus the side panel](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                 |
+| `app.irc.viewer` | `Alt+I` | [Open or close the IRC client](./agent-hub.md#irc-client) |
+| `app.irc.traffic` | `Alt+Shift+I` | Open IRC Traffic at the newest message |
+| `app.irc.quickReply` | `Alt+R` | From the main composer, reply to the latest IRC notification, or open the ordinary IRC client if there was none. In IRC, reply to the selected message's room or privately to its sender. Esc closes quick reply without discarding the draft. |
+| `app.sidebar.toggle` | `Alt+T` | [Open and focus the side panel](#side-panel-views); Tab cycles Todo, Agents, and IRC |
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 | `app.links.hint` | Unbound | Tag visible extension links to pick them; press the binding again or `Page Up` to browse all. Assign a binding in keybindings; NeoPi retains `Alt+O` for menu history forward. |
@@ -171,7 +173,7 @@ While the panel has focus:
 | --- | --- |
 | `Tab` / `Shift+Tab` | Next / previous view: Todo → Agents → IRC (right-click cycles too) |
 | `↑` / `↓` | Select the previous / next agent or message (Todo scrolls) |
-| `→` / `Enter` | Open the selection: an agent's transcript, or the IRC viewer |
+| `→` / `Enter` | Open the selection: an agent's transcript, or the selected message in the IRC client |
 | `←` / `Esc` / `Ctrl+C` | Return focus to the transcript; the panel stays open |
 | `q` | Close the panel |
 | `i` | Agents: message the selected agent (fills `/irc <agent> ` in the composer) |
@@ -185,7 +187,7 @@ Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens 
 
 The Agents view starts with running subagents and advisors. Its bottom filter row shows and toggles running, idle, parked, advisors, ended agents, and autoscroll; click a control (`tui.mouse` is required when docked) or press `f`, whose popup also holds the sort direction. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group. Autoscroll pauses while an agent is selected.
 
-Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking an IRC message opens the full IRC viewer.
+Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking an IRC message opens that message in the IRC client.
 
 ### Click to dictate in Tern
 

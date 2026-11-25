@@ -51,7 +51,8 @@ describe("buildHotkeysMarkdown", () => {
 			"app.history.search": "Ctrl+H",
 			"app.thinking.toggle": "Ctrl+T",
 			"app.editor.external": "Ctrl+G",
-			"app.retry": "Alt+R",
+			"app.retry": "Ctrl+Alt+R",
+			"app.irc.quickReply": "Alt+R",
 			"app.clipboard.pasteImage": "Ctrl+V",
 			"app.stt.toggle": "Alt+H",
 			"app.live.toggle": "Ctrl+L",
@@ -72,7 +73,8 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
 		expect(markdown).toContain("| `Alt+L` | Reset terminal display |");
 		expect(markdown).toContain("| `Ctrl+L` | Start/stop live voice mode (/live) |");
-		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
+		expect(markdown).toContain("| `Ctrl+Alt+R` | Retry last failed assistant turn |");
+		expect(markdown).toContain("| `Alt+R` | Quick reply to an IRC message [neopi] |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
 		expect(markdown).toContain("| `Ctrl+Shift+O` | Toggle tool activity visibility |");
 		expect(markdown).toContain("| `Ctrl+C` | Cancel active work without clearing the draft or quitting |");

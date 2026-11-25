@@ -11,10 +11,12 @@
 
 import { type IrcDeliveryReceipt, type IrcLogEntry, type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import groupAddedTemplate from "../prompts/system/irc-group-added.md" with { type: "text" };
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { registerPersistedSubagents } from "../registry/persisted-agents";
-import { isAgentViewSession } from "../session/agent-session-handle";
+import { isCurrentSessionRosterRef, registerPersistedSubagents } from "../registry/persisted-agents";
+import { type AgentSessionHandle, isAgentViewSession } from "../session/agent-session-handle";
 import type { CustomMessage } from "../session/messages";
 import {
 	IRC_GROUPS_CUSTOM_TYPE,
@@ -22,11 +24,16 @@ import {
 	type IrcGroupRequest,
 	type IrcGroupResult,
 	type IrcGroupSnapshot,
+	type IrcInviteNoticeMode,
+	type IrcRoomSnapshot,
 	readIrcGroupSnapshot,
 } from "./groups";
-import { ircHistoryMaxEntries, ircRelayToMainTranscript } from "./policy";
+import { IrcHistoryJournal } from "./history-journal";
 import { agentMesh } from "./mesh";
 import { parsePeerAddress } from "./mesh-protocol";
+import { ircOperatorStatePath } from "./operator-storage";
+import { ircHistoryMaxEntries, ircRelayToMainTranscript } from "./policy";
+import { ircOperatorDirectMessagesEnabled } from "./settings";
 
 interface IrcWaiter {
 	filter: IrcWaitFilter;
@@ -102,6 +109,8 @@ export interface IrcSendOptions {
 	broadcast?: boolean;
 	/** Show the operator's addressed group leg even when it came from her own root. */
 	groupDelivery?: boolean;
+	/** Deliver locally without interrupting or starting a model turn. */
+	noWake?: boolean;
 }
 
 /** Which root's operator a history entry belongs to; see {@link IrcBus.history}. */
@@ -114,11 +123,18 @@ export interface IrcHistoryScope {
 	sessionId: string | undefined;
 }
 
-interface IrcHistoryRecord extends IrcLogEntry {
-	/** Root whose UI observed the sender when it sent (see {@link ircRelayRoot}); undefined when none resolved. */
+interface IrcHistoryRecord {
+	readonly entry: IrcLogEntry;
+	/** Legacy viewer scope, including its default-root relay behavior. */
 	readonly scope: IrcHistoryScope | undefined;
 	/** Send-start order: a slow delivery still lands where it was sent, not where it finished. */
 	readonly seq: number;
+}
+
+interface IrcHistoryJournalScope {
+	readonly session: AgentSessionHandle;
+	readonly journal: IrcHistoryJournal;
+	materializingOrOnDisk: boolean;
 }
 
 interface IrcGroupScope {
@@ -186,7 +202,8 @@ export class IrcBus implements IrcBusApi {
 	static resetGlobalForTests(): void {
 		const bus = IrcBus.#global;
 		if (bus instanceof IrcBus) {
-			bus.#fallbackGroups?.dispose();
+			bus.#unsubscribeDeferredDelivery();
+			for (const groups of bus.#fallbackGroups.values()) groups.dispose();
 			for (const scope of bus.#groupScopes.values()) scope.groups.dispose();
 			bus.#groupScopes.clear();
 		}
@@ -214,6 +231,8 @@ export class IrcBus implements IrcBusApi {
 		bus.#closingGroupRoots.add(root);
 		bus.#groupScopes.get(root)?.groups.dispose();
 		bus.#groupScopes.delete(root);
+		bus.#fallbackGroups.get(root)?.dispose();
+		bus.#fallbackGroups.delete(root);
 	}
 
 	/**
@@ -230,8 +249,12 @@ export class IrcBus implements IrcBusApi {
 	readonly #lifecycle: () => AgentLifecycleApi;
 	readonly #groupScopes = new Map<AgentRef, IrcGroupScope>();
 	readonly #closingGroupRoots = new WeakSet<AgentRef>();
-	#fallbackGroups?: IrcGroups;
+	readonly #fallbackGroups = new Map<AgentRef | undefined, IrcGroups>();
 	readonly #mailboxes = new Map<string, IrcMessage[]>();
+	/** Kept against the exact parked ref, never handed to a waiter or a replacement agent. */
+	readonly #drainingDeferred = new WeakMap<AgentRef, Promise<void>>();
+	readonly #deferredDelivery = new WeakMap<AgentRef, IrcMessage[]>();
+	readonly #unsubscribeDeferredDelivery: () => void;
 	readonly #waiters = new Map<string, IrcWaiter[]>();
 	/** The latest successful non-progress send per `from` → `to`; see {@link sentSince}. */
 	readonly #lastSent = new Map<string, Map<string, SendMark>>();
@@ -247,21 +270,52 @@ export class IrcBus implements IrcBusApi {
 	#sendSeq = 0;
 	/** Operator-only log of every delivery attempt; agents never read it. */
 	readonly #history: IrcHistoryRecord[] = [];
+	readonly #historyJournals = new WeakMap<AgentRef, IrcHistoryJournalScope>();
+	readonly #historyAgentDir?: string;
 	readonly #historyListeners = new Set<() => void>();
+	readonly #roomsListeners = new Set<() => void>();
 	#nextHistorySeq = 0;
 
-	constructor(registry: AgentRegistryApi = AgentRegistry.global(), lifecycle?: AgentLifecycleApi) {
+	constructor(
+		registry: AgentRegistryApi = AgentRegistry.global(),
+		lifecycle?: AgentLifecycleApi,
+		historyAgentDir?: string,
+	) {
 		this.#registry = registry;
+		this.#historyAgentDir = historyAgentDir;
 		// Lazy: the lifecycle global self-constructs against the global registry,
 		// so only touch it when a parked recipient actually needs reviving.
 		this.#lifecycle = () => lifecycle ?? AgentLifecycleManager.global();
+		this.#unsubscribeDeferredDelivery = registry.onChange(({ type, ref }) => {
+			if (type === "removed" || ref.status === "aborted") this.#deferredDelivery.delete(ref);
+			if (type === "removed" && ref.kind === "main") {
+				this.#fallbackGroups.get(ref)?.dispose();
+				this.#fallbackGroups.delete(ref);
+			}
+			// Revival can attach before initialization finishes, but only publishes
+			// idle once it is safe to deliver to the rebuilt session.
+			if (type === "status_changed" && ref.status === "idle" && ref.session) {
+				void this.#deliverDeferred(ref, ref.session);
+			}
+		});
 	}
 
 	async group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult> {
-		const root = ircRelayRoot(this.#registry, sender);
+		const root = this.#registry.rootOf(sender);
 		if (root && this.#closingGroupRoots.has(root)) return { text: "The IRC session is closing.", isError: true };
 		const scope = root && this.#groupScope(root);
-		if (!scope) return (this.#fallbackGroups ??= new IrcGroups(this.#registry, this)).execute(sender, request);
+		if (!scope) {
+			let groups = this.#fallbackGroups.get(root);
+			if (!groups) {
+				groups = new IrcGroups(this.#registry, this, undefined, undefined, {
+					includes: ref => this.#registry.rootOf(ref.id) === root,
+					deliverInvite: this.deliverInvite.bind(this),
+				});
+				this.#fallbackGroups.set(root, groups);
+				groups.onChange(() => this.#emitRooms());
+			}
+			return groups.execute(sender, request);
+		}
 		if (scope.ready && !(await scope.ready)) {
 			return { text: "Could not restore IRC groups for this session.", isError: true };
 		}
@@ -269,10 +323,53 @@ export class IrcBus implements IrcBusApi {
 		return scope.groups.execute(sender, request);
 	}
 
+	/** Read the actor's room view only from its current root/session. */
+	async roomsForRoot(root: AgentRef, actor: string): Promise<readonly IrcRoomSnapshot[]> {
+		if (this.#registry.rootOf(actor) !== root) return [];
+		const scope = this.#groupScope(root);
+		if (!scope || (scope.ready && !(await scope.ready))) return [];
+		if (!scope.isCurrent() || this.#registry.rootOf(actor) !== root) return [];
+		return scope.groups.snapshot(actor);
+	}
+
+	onRooms(listener: () => void): () => void {
+		this.#roomsListeners.add(listener);
+		return () => this.#roomsListeners.delete(listener);
+	}
+
+	#emitRooms(): void {
+		for (const listener of this.#roomsListeners) {
+			try {
+				listener();
+			} catch (error) {
+				logger.debug("IrcBus: rooms listener failed", { error: String(error) });
+			}
+		}
+	}
+
+	/** The namespace commits membership before sending notices; silent has no delivery leg. */
+	async deliverInvite(
+		from: string,
+		to: string,
+		group: string,
+		mode: IrcInviteNoticeMode,
+		fanoutId?: string,
+	): Promise<IrcDeliveryReceipt | undefined> {
+		if (mode === "silent") return undefined;
+		const body = renderPromptAsset("system/irc-group-added.md", groupAddedTemplate, {
+			group,
+			verbose: mode === "verbose",
+		}).trimEnd();
+		return this.send(
+			{ from, to, group, body, ...(fanoutId ? { fanoutId } : {}), broadcast: true, localOnly: true },
+			{ suppressRelay: true, broadcast: true, groupDelivery: true, noWake: mode !== "wake-now" },
+		);
+	}
+
 	filterBroadcastTargets(sender: string, targets: string[]): string[] {
-		const root = ircRelayRoot(this.#registry, sender);
-		const groups = (root && this.#groupScope(root)?.groups) ?? this.#fallbackGroups;
-		return groups?.filterBroadcastTargets(targets) ?? targets;
+		const root = this.#registry.rootOf(sender);
+		const groups = (root && this.#groupScope(root)?.groups) ?? this.#fallbackGroups.get(root);
+		return groups?.filterBroadcastTargets(sender, targets) ?? targets;
 	}
 
 	/**
@@ -280,9 +377,9 @@ export class IrcBus implements IrcBusApi {
 	 * roster that already exists: stamping a message must not create or restore one.
 	 */
 	#sharedGroups(from: string, to: string, exclude: string | undefined): string[] {
-		const root = ircRelayRoot(this.#registry, from);
+		const root = this.#registry.rootOf(from);
 		const scope = root && this.#groupScopes.get(root);
-		const groups = scope?.isCurrent() ? scope.groups : this.#fallbackGroups;
+		const groups = scope?.isCurrent() ? scope.groups : this.#fallbackGroups.get(root);
 		return groups?.shared(from, to, exclude) ?? [];
 	}
 
@@ -310,20 +407,30 @@ export class IrcBus implements IrcBusApi {
 			!this.#closingGroupRoots.has(root) &&
 			manager.getSessionId() === sessionId;
 		let materialized = snapshot !== undefined;
-		const groups = new IrcGroups(this.#registry, this, snapshot, {
-			isCurrent,
-			save: state => {
-				manager.appendCustomEntry(IRC_GROUPS_CUSTOM_TYPE, state);
-				if (!materialized) {
-					// Operator IRC can change groups before the first assistant turn.
-					materialized = true;
-					void manager.ensureOnDisk().catch(error => {
-						materialized = false;
-						logger.warn("Could not materialize IRC group session", { sessionId, error: String(error) });
-					});
-				}
+		const groups = new IrcGroups(
+			this.#registry,
+			this,
+			snapshot,
+			{
+				isCurrent,
+				save: state => {
+					manager.appendCustomEntry(IRC_GROUPS_CUSTOM_TYPE, state);
+					if (!materialized) {
+						// Operator IRC can change groups before the first assistant turn.
+						materialized = true;
+						void manager.ensureOnDisk().catch(error => {
+							materialized = false;
+							logger.warn("Could not materialize IRC group session", { sessionId, error: String(error) });
+						});
+					}
+				},
 			},
-		});
+			{
+				includes: ref => this.#registry.rootOf(ref.id) === root && isCurrentSessionRosterRef(ref, sessionFile),
+				deliverInvite: this.deliverInvite.bind(this),
+			},
+		);
+		groups.onChange(() => this.#emitRooms());
 		const scope: IrcGroupScope = { isCurrent, groups };
 		this.#groupScopes.set(root, scope);
 		if (snapshot && sessionFile && snapshot.groups.length) {
@@ -374,25 +481,69 @@ export class IrcBus implements IrcBusApi {
 	 * ({@link history}); that never changes delivery or unread counts.
 	 */
 	async send({ localOnly, ...msg }: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
-		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
+		const message: IrcMessage = {
+			...msg,
+			...(opts?.noWake ? { noWake: true } : {}),
+			id: Snowflake.next(),
+			ts: Date.now(),
+		};
 		// Membership as it is now travels with the message: the transcript shows it
 		// as sent, whatever the groups look like when the session is next opened.
 		const sharedGroups = this.#sharedGroups(message.from, message.to, message.group);
 		if (sharedGroups.length > 0) message.sharedGroups = sharedGroups;
 		const seq = this.#nextHistorySeq++;
-		const scope = this.#historyScope(message.from);
+		const senderRoot = this.#registry.rootOf(message.from);
+		const legacyRoot = senderRoot ?? this.#registry.get(MAIN_AGENT_ID);
+		const scope = legacyRoot && { rootId: legacyRoot.id, sessionId: ircHistorySessionId(legacyRoot) };
+		// Unlike the legacy display relay, a journal must have an actual owner.
+		// Incoming mesh sends have no local sender ref; use their local recipient's root.
+		const root =
+			senderRoot ?? (localOnly && parsePeerAddress(message.from) ? this.#registry.rootOf(message.to) : undefined);
+		const sessionId = root === legacyRoot ? scope?.sessionId : root && ircHistorySessionId(root);
+		const journalScope = root && sessionId ? this.#historyJournal(root, sessionId) : undefined;
+		const order = journalScope?.journal.reserveOrder();
 		// Taken before delivery: a reply sent while this message is still being
 		// delivered must still order after it.
 		const mark: SendMark = { ts: message.ts, seq: ++this.#sendSeq, excerpt: excerptOf(message.body) };
-		const receipt = await this.#deliver(message, { ...opts, localOnly });
-		this.#recordHistory({
+		const relaySession = legacyRoot?.session;
+		const receipt = await this.#deliver(message, { ...opts, localOnly }, () => {
+			if (
+				legacyRoot &&
+				this.#registry.get(legacyRoot.id) === legacyRoot &&
+				legacyRoot.session === relaySession &&
+				ircHistorySessionId(legacyRoot) === scope?.sessionId
+			) {
+				this.#relayToMainUi(legacyRoot, message);
+			}
+		});
+		const entry: IrcLogEntry = {
 			message,
 			outcome: receipt.outcome,
-			error: receipt.error,
+			...(receipt.error === undefined ? {} : { error: receipt.error }),
 			broadcast: opts?.broadcast === true,
-			scope,
-			seq,
-		});
+		};
+		const cap = ircHistoryMaxEntries();
+		if (
+			root &&
+			journalScope &&
+			order !== undefined &&
+			this.#registry.get(root.id) === root &&
+			root.session === journalScope.session &&
+			ircHistorySessionId(root) === sessionId &&
+			this.#historyJournals.get(root) === journalScope
+		) {
+			journalScope.journal.record(order, entry, cap);
+			const session = journalScope.session;
+			if (journalScope.journal.filePath && !journalScope.materializingOrOnDisk && isAgentViewSession(session)) {
+				// Operator IRC can precede the first turn that would otherwise materialize the session.
+				journalScope.materializingOrOnDisk = true;
+				void session.sessionManager.ensureOnDisk().catch(error => {
+					journalScope.materializingOrOnDisk = false;
+					logger.warn("Could not materialize operator IRC session", { sessionId, error: String(error) });
+				});
+			}
+		}
+		this.#recordHistory({ entry, scope, seq }, cap);
 		if (receipt.outcome !== "failed") {
 			if (message.progress) {
 				this.#record(this.#lastProgress, message.from, message.to, mark);
@@ -487,7 +638,15 @@ export class IrcBus implements IrcBusApi {
 						(entry.scope.rootId === scope.rootId && entry.scope.sessionId === scope.sessionId),
 				)
 			: this.#history;
-		return entries.map(({ scope: _scope, seq: _seq, ...entry }) => entry);
+		return entries.map(record => record.entry);
+	}
+
+	/** Strict root/session history for the operator client; initial hydration is silent. */
+	historyForRoot(root: AgentRef): IrcLogEntry[] {
+		if (root.kind !== "main" || this.#registry.get(root.id) !== root) return [];
+		const sessionId = ircHistorySessionId(root);
+		if (!sessionId) return [];
+		return this.#historyJournal(root, sessionId)?.journal.entries() ?? [];
 	}
 
 	/** Calls `listener` after each history entry; returns the unsubscribe. */
@@ -496,17 +655,30 @@ export class IrcBus implements IrcBusApi {
 		return () => this.#historyListeners.delete(listener);
 	}
 
-	#historyScope(senderId: string): IrcHistoryScope | undefined {
-		const root = ircRelayRoot(this.#registry, senderId);
-		return root ? { rootId: root.id, sessionId: ircHistorySessionId(root) } : undefined;
+	#historyJournal(root: AgentRef, sessionId: string): IrcHistoryJournalScope | undefined {
+		const session = root.session;
+		if (!session) return undefined;
+		const cached = this.#historyJournals.get(root);
+		if (cached?.session === session && cached.journal.sessionId === sessionId) return cached;
+		const manager = session.sessionManager;
+		const filePath = manager?.getSessionFile?.()
+			? ircOperatorStatePath(sessionId, "history.jsonl", this.#historyAgentDir)
+			: undefined;
+		const scope = {
+			session,
+			journal: new IrcHistoryJournal(sessionId, filePath, ircHistoryMaxEntries()),
+			materializingOrOnDisk: false,
+		};
+		this.#historyJournals.set(root, scope);
+		return scope;
 	}
 
-	#recordHistory(record: IrcHistoryRecord): void {
+	#recordHistory(record: IrcHistoryRecord, cap: number): void {
 		// Concurrent sends finish out of order; keep the history in the order they started.
 		let index = this.#history.length;
 		while (index > 0 && this.#history[index - 1]!.seq > record.seq) index--;
 		this.#history.splice(index, 0, record);
-		const excess = this.#history.length - ircHistoryMaxEntries();
+		const excess = this.#history.length - cap;
 		if (excess > 0) this.#history.splice(0, excess);
 		for (const listener of this.#historyListeners) {
 			try {
@@ -528,10 +700,11 @@ export class IrcBus implements IrcBusApi {
 
 	async #deliver(
 		message: IrcMessage,
-		opts: IrcSendOptions & { localOnly?: boolean } = {},
+		opts: IrcSendOptions & { localOnly?: boolean },
+		relay: () => void,
 	): Promise<IrcDeliveryReceipt> {
 		const ref = this.#registry.get(message.to);
-		const mesh = ref || opts.localOnly ? undefined : agentMesh();
+		const mesh = ref || opts.localOnly || message.noWake ? undefined : agentMesh();
 		const peer = mesh && parsePeerAddress(message.to);
 		if (mesh && peer && peer.pid !== process.pid) {
 			// Another omp instance in this project: the mesh forwards it, and the
@@ -554,7 +727,7 @@ export class IrcBus implements IrcBusApi {
 		}
 		// A control mailbox has no session. Buffer the message for a later wait/inbox.
 		if (ref.kind === "mailbox") {
-			const waiter = this.#takeMatchingWaiter(message);
+			const waiter = message.noWake ? undefined : this.#takeMatchingWaiter(message);
 			if (waiter) {
 				waiter.resolve(message);
 				return { to: message.to, outcome: "injected" };
@@ -564,10 +737,13 @@ export class IrcBus implements IrcBusApi {
 		}
 		// The operator reads IRC on her UI, not in a session: the history entry is
 		// the record and a card on her root's transcript the notification, so it
-		// arrives without waiting on any model's turn. A message from that root's
-		// own model already shows as its hub tool call.
+		// arrives without waiting on any model's turn.
 		if (ref.kind === "operator") {
 			const root = ircRelayRoot(this.#registry, ref.id);
+			const direct = message.group === undefined && !message.broadcast && !opts.broadcast;
+			if (direct && root && !ircOperatorDirectMessagesEnabled(root)) {
+				return { to: message.to, outcome: "failed", error: "The operator has disabled direct IRC messages." };
+			}
 			if (root && (opts.groupDelivery || message.from !== root.id)) this.#showOnUi(root, message);
 			return { to: message.to, outcome: "injected" };
 		}
@@ -590,13 +766,28 @@ export class IrcBus implements IrcBusApi {
 		// peers skip the gate, and pending waiters still win without a session.
 		const lifecycle = this.#lifecycle();
 		const lifecycleOwnsRegistry = lifecycle.manages(this.#registry);
+		if (message.noWake) {
+			// A pre-detach park settles its decision in a microtask. Let it do so
+			// without canceling it or reviving the session.
+			if (ref.status !== "parked" && lifecycleOwnsRegistry && lifecycle.isParking(message.to, ref)) {
+				await Promise.resolve();
+				const current = this.#registry.get(message.to);
+				if (current !== ref || current.status === "aborted") {
+					return { to: message.to, outcome: "failed", error: `Agent "${message.to}" changed during delivery.` };
+				}
+			}
+			if (ref.status === "parked") {
+				this.#deferDelivery(ref, message);
+				return { to: message.to, outcome: "queued" };
+			}
+		}
 		const needsLifecycleGate =
 			ref.status === "parked" ||
 			(lifecycleOwnsRegistry && (lifecycle.isParking(message.to) || lifecycle.has(message.to)));
 
 		const priorSession = ref.session;
 		let revived = false;
-		if (needsLifecycleGate) {
+		if (!message.noWake && needsLifecycleGate) {
 			try {
 				const liveSession = await lifecycle.ensureLive(message.to);
 				// Revival = we did not keep the same live instance (parked start, or
@@ -612,27 +803,47 @@ export class IrcBus implements IrcBusApi {
 				};
 			}
 		}
+		const liveRef = this.#registry.get(message.to);
+		const session = liveRef?.session;
+		if (liveRef && session && !message.noWake) {
+			const pending = this.#deliverDeferred(liveRef, session);
+			if (pending) await pending;
+			if (this.#registry.get(message.to) !== liveRef || liveRef.session !== session) {
+				return { to: message.to, outcome: "failed", error: `Agent "${message.to}" changed during delivery.` };
+			}
+		}
 
 		// A pending bus wait from the recipient consumes the message directly
 		// and never hits the inbox; the `wait` tool hands it to its own session,
 		// which injects it as a user turn.
-		const waiter = this.#takeMatchingWaiter(message);
+		const waiter = message.noWake ? undefined : this.#takeMatchingWaiter(message);
 		if (waiter) {
 			waiter.resolve(message);
-			if (!opts?.suppressRelay) this.#relayToMainUi(message);
+			if (!opts.suppressRelay) relay();
 			return { to: message.to, outcome: revived ? "revived" : "injected" };
 		}
 
-		const session = this.#registry.get(message.to)?.session;
 		if (!session) {
 			return { to: message.to, outcome: "failed", error: `Agent "${message.to}" has no live session.` };
 		}
 
 		try {
 			const delivery = await session.deliverIrcMessage(message);
-			if (!opts?.suppressRelay) this.#relayToMainUi(message);
+			if (!opts.suppressRelay) relay();
 			return { to: message.to, outcome: revived ? "revived" : delivery };
 		} catch (error) {
+			if (message.noWake) {
+				const current = this.#registry.get(message.to);
+				if (current === ref && current.status === "parked") {
+					this.#deferDelivery(ref, message);
+					return { to: message.to, outcome: "queued" };
+				}
+				return {
+					to: message.to,
+					outcome: "failed",
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
 			// Live hand-off failed (e.g. recipient disposed mid-shutdown): buffer
 			// the message so a later `wait`/`inbox` from the recipient can still
 			// pick it up. The receipt stays "failed" — the recipient has not
@@ -644,6 +855,41 @@ export class IrcBus implements IrcBusApi {
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
+	}
+
+	#deferDelivery(ref: AgentRef, message: IrcMessage): void {
+		let queue = this.#deferredDelivery.get(ref);
+		if (!queue) {
+			queue = [];
+			this.#deferredDelivery.set(ref, queue);
+		}
+		queue.push(message);
+		if (queue.length > MAILBOX_CAP) queue.shift();
+	}
+
+	/** Claim once before invoking the session; lifecycle and normal sends may both observe revival. */
+	#deliverDeferred(ref: AgentRef, session: AgentSessionHandle): Promise<void> | undefined {
+		const draining = this.#drainingDeferred.get(ref);
+		if (draining) return draining;
+		const queue = this.#deferredDelivery.get(ref);
+		if (!queue || this.#registry.get(ref.id) !== ref || ref.session !== session || ref.status === "aborted") return;
+		this.#deferredDelivery.delete(ref);
+		const delivery = Promise.all(
+			queue.map(async message => {
+				try {
+					await session.deliverIrcMessage(message);
+				} catch (error) {
+					if (this.#registry.get(ref.id) === ref && ref.status !== "aborted") {
+						if (ref.status === "parked" && ref.session !== session) this.#deferDelivery(ref, message);
+						else logger.warn("Could not deliver deferred IRC message", { to: ref.id, error: String(error) });
+					}
+				}
+			}),
+		).then(() => {
+			this.#drainingDeferred.delete(ref);
+		});
+		this.#drainingDeferred.set(ref, delivery);
+		return delivery;
 	}
 
 	/**
@@ -799,10 +1045,9 @@ export class IrcBus implements IrcBusApi {
 	 * message, and as sender the irc send tool call already rendered the
 	 * outbound body.
 	 */
-	#relayToMainUi(message: IrcMessage): void {
+	#relayToMainUi(root: AgentRef, message: IrcMessage): void {
 		if (!ircRelayToMainTranscript()) return;
-		const root = ircRelayRoot(this.#registry, message.from);
-		if (!root || message.to === root.id || message.from === root.id) return;
+		if (message.to === root.id || message.from === root.id) return;
 		this.#showOnUi(root, message, false);
 	}
 
@@ -819,6 +1064,7 @@ export class IrcBus implements IrcBusApi {
 			content: `[IRC \`${message.from}\` → \`${message.to}\`]\n\n${message.body}`,
 			display,
 			details: {
+				messageId: message.id,
 				from: message.from,
 				to: message.to,
 				body: message.body,

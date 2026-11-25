@@ -175,7 +175,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["alt+p"],
 	"app.message.dequeue": ["alt+up", "shift+up"],
-	"app.retry": ["f5", "alt+r"],
+	"app.retry": ["ctrl+alt+r"],
 	"app.clipboard.pasteImage": ["ctrl+v"],
 	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
@@ -2127,10 +2127,7 @@ export class CustomEditor extends Editor {
 				return;
 			}
 
-			// Intercept configured retry shortcut. Later user/custom handlers keep
-			// precedence so adding the default Alt+R binding does not steal existing
-			// shortcuts such as app.plan.toggle or extension commands; copy-prompt is
-			// checked above for the same reason.
+			// Intercept retry without overriding user/custom handlers or copy-prompt.
 			if (this.#matchesAction(canonical, "app.retry") && this.onRetry) {
 				const customHandler = this.#customMatchKeys.get(canonical);
 				if (customHandler) {

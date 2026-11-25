@@ -1495,12 +1495,16 @@ export class EventController {
 	 */
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
 		if (!event.message.display) return;
-		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
+		const operatorId = this.ctx.ircOperatorId;
+		const operatorCopy = operatorId !== undefined && isOperatorIrcNotice(event.message, operatorId);
+		if (operatorCopy && !this.ctx.ircClient?.relayNotifies(event.message.details)) return;
+		const details: unknown = event.message.details;
+		const messageId = isRecord(details) && typeof details.messageId === "string" ? details.messageId : undefined;
+		const signature = `${event.message.role}:${event.message.customType}:${messageId ?? event.message.timestamp}`;
 		if (this.#renderedCustomMessages.has(signature)) {
 			return;
 		}
 		this.#renderedCustomMessages.add(signature);
-		const details: unknown = event.message.details;
 		const fanoutId = isRecord(details) && typeof details.fanoutId === "string" ? details.fanoutId : undefined;
 		// The leg delivered to this session is the one its transcript stores; legs
 		// observed on their way to others are display-only copies of the same send.
@@ -1517,7 +1521,7 @@ export class EventController {
 		const components = this.ctx.addMessageToChat(event.message);
 		const [block] = components;
 		if (fanoutId !== undefined) this.#shownIrcFanouts.set(fanoutId, delivered ? undefined : block);
-		if (isOperatorIrcNotice(event.message, this.ctx.ircOperatorId)) {
+		if (operatorCopy) {
 			// Left under any running block: there its rows cannot reach scrollback,
 			// so the card can still be taken away when it retires.
 			this.#scheduleIrcNoticeExpiry(signature, components);
@@ -2705,7 +2709,7 @@ export class EventController {
 		this.ctx.flushPendingCommandOutput();
 		this.#lastAssistantComponent = undefined;
 		// When the interrupted/failed turn died on a tool call, this replaces the
-		// torn-down "Working…" row with the "F5 to Retry" affordance.
+		// torn-down "Working…" row with the retry affordance.
 		this.ctx.syncRetryHintRow();
 		this.ctx.ui.requestRender();
 		// The run yielded: a `/compact` queued behind it runs now. A run the user stopped (Esc, including
