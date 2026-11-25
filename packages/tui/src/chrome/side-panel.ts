@@ -32,6 +32,13 @@ export interface SidePanelSection {
 	readonly footer?: LayoutContent;
 	/** Latest entry to reveal after rendering, with a key that changes on a new lifecycle event. */
 	followTarget?(): PanelFollowTarget | undefined;
+	/**
+	 * Body rows of the keyboard selection. A new revision scrolls them into
+	 * view; while a selection exists the follow target does not move the view.
+	 */
+	selectionTarget?(): PanelSelectionTarget | undefined;
+	/** Stable menu item id covering a rendered body row, if the section supports selection. */
+	itemIdAtRow?(row: number): string | undefined;
 	/** Rendered as a title-only row when true. */
 	collapsed?: boolean;
 	/** Section order; lower first. Ties keep registration order. */
@@ -94,6 +101,13 @@ interface PanelFollowTarget {
 	revision: string;
 }
 
+/** Body rows `[start, end)` of a section's keyboard selection. */
+export interface PanelSelectionTarget {
+	start: number;
+	end: number;
+	revision: string;
+}
+
 /**
  * Docked side-panel content: registered sections laid out as one logical
  * document (title row, natural-height body, blank separator per section) and
@@ -114,6 +128,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	#footerTags: readonly DocumentRowTag[] = [];
 	#followRevision: string | undefined;
 	#followOffset: number | undefined;
+	#selectionRevision: string | undefined;
 	#scrollOffset = 0;
 	#documentRows = 0;
 	#rowTags: readonly DocumentRowTag[] = [];
@@ -191,6 +206,27 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		return this.#viewportHeight;
 	}
 
+	/** Count items that intersect the viewport, including partially visible entries. */
+	visibleItems(section: SidePanelSection): number {
+		const range = viewportRange(this.#documentRows, this.#viewportHeight, this.#scrollOffset);
+		let count = 0;
+		let previous: string | undefined;
+		for (let row = range.start; row < range.end; row++) {
+			const tag = this.#rowTags[row];
+			if (tag?.kind !== "body" || tag.sectionId !== section.id) continue;
+			const id = section.itemIdAtRow?.(tag.bodyRow);
+			if (id !== undefined && id !== previous) count++;
+			previous = id;
+		}
+		return Math.max(1, count);
+	}
+
+	/** Reveal on the next layout even if a motion clamped at the current selection. */
+	revealSelection(): void {
+		this.#selectionRevision = undefined;
+		this.#onChange();
+	}
+
 	scrollToPercent(percent: number): void {
 		this.scrollTo(Math.round((maxScrollOffset(this.#documentRows, this.#viewportHeight) * percent) / 100));
 	}
@@ -231,6 +267,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		const footer = [...(this.#hints?.() ?? [])];
 		const footerTags: DocumentRowTag[] = footer.map(() => PLACEHOLDER_TAG);
 		let follow: PanelFollowTarget | undefined;
+		let selection: PanelSelectionTarget | undefined;
 		for (const entry of this.#ordered()) {
 			const { section } = entry;
 			if (section.footer && contentWidth > 0) {
@@ -253,6 +290,14 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			tags.push({ sectionId: section.id, kind: "title", bodyRow: 0 });
 			const target = section.collapsed ? undefined : section.followTarget?.();
 			if (target) follow = { ...target, row: document.length + target.row };
+			const chosen = section.collapsed ? undefined : section.selectionTarget?.();
+			if (chosen) {
+				selection = {
+					start: document.length + chosen.start,
+					end: document.length + chosen.end,
+					revision: chosen.revision,
+				};
+			}
 			for (let row = 0; row < body.length; row++) {
 				document.push(body[row]!);
 				tags.push({ sectionId: section.id, kind: "body", bodyRow: row });
@@ -274,7 +319,19 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		const bodyHeight = Math.max(0, height - footer.length);
 		this.#viewportHeight = bodyHeight;
 		this.#footerTags = footerTags.slice(footerStart);
-		if (follow) {
+		if (selection) {
+			// The keyboard selection owns the view: reveal it when it moves, and let
+			// autoscroll wait until the selection is cleared.
+			if (selection.revision !== this.#selectionRevision) {
+				const last = Math.max(selection.start, selection.end - 1);
+				let offset = scrollOffsetForRow(this.#scrollOffset, last, document.length, bodyHeight);
+				offset = scrollOffsetForRow(offset, selection.start, document.length, bodyHeight);
+				this.#scrollOffset = offset;
+			}
+			this.#selectionRevision = selection.revision;
+			this.#followOffset = undefined;
+			this.#followRevision = follow?.revision;
+		} else if (follow) {
 			const offset = scrollOffsetForRow(this.#scrollOffset, follow.row, document.length, bodyHeight, follow.edge);
 			if (follow.revision !== this.#followRevision || this.#scrollOffset === this.#followOffset) {
 				this.#scrollOffset = offset;
@@ -285,6 +342,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			this.#followOffset = undefined;
 			this.#followRevision = undefined;
 		}
+		if (!selection) this.#selectionRevision = undefined;
 		this.#scrollOffset = clampScrollOffset(this.#scrollOffset, document.length, bodyHeight);
 		const range = viewportRange(document.length, bodyHeight, this.#scrollOffset);
 		const thumb =

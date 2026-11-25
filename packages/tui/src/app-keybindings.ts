@@ -373,7 +373,7 @@ export const KEYBINDINGS = {
 	},
 	"app.sidebar.toggle": {
 		defaultKeys: "alt+t",
-		description: "Open and focus the side panel; then t Todo, a Agents, or i IRC",
+		description: "Open the side panel, or move focus between it and the transcript",
 	},
 	"app.sidebar.scrollUp": {
 		defaultKeys: "alt+shift+up",

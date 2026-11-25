@@ -136,7 +136,7 @@
 "settings.setting.sidebar.enabled.label" = "Side Panel"
 "settings.setting.sidebar.enabled.description" = "Dock a panel beside the chat showing the todo list, the agent roster, or IRC traffic"
 "settings.setting.sidebar.view.label" = "View"
-"settings.setting.sidebar.view.description" = "What the panel shows; Alt+T opens it, then t, a or i switches views"
+"settings.setting.sidebar.view.description" = "What the panel shows; Alt+T opens it, then Tab switches views"
 "settings.setting.sidebar.agents.order.label" = "Agent order"
 "settings.setting.sidebar.agents.order.description" = "Where the latest agent state changes appear in the Agents view"
 "settings.setting.sidebar.side.label" = "Side"

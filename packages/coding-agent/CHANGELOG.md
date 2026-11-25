@@ -357,6 +357,8 @@
 
 ### Changed
 
+- The Alt+T side panel is usable from the keyboard: `Alt+T` opens it with focus and then switches focus between it and the transcript, arrows select agents or IRC messages, `→` opens the selection, `←`/`Esc` return to the transcript, `Tab` switches views, and `q` closes it. The `Alt+T` `t`/`a`/`i` chords are gone.
+- In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` edits the filter row; navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
 - Drag the docked side panel's divider (with `tui.mouse` on) to resize it; the width is remembered, and right-clicking the divider returns to the automatic width.
 - IRC messages delivered to an agent stay in its transcript in full instead of showing a three-line card that disappeared after ten seconds: each sits between two rules in the sender's Agent Hub colour, with the group it was sent to, the groups you share, and the time sent. A group send appears once, and the group shown is the one it had when sent, also after `/resume`. A message addressed to you still shows as a three-line notification card that leaves after ten seconds; read it in the IRC viewer.
 - Messages between two other agents no longer show in the main transcript; read them in the IRC viewer. **IRC Cards in Transcript** is now **Announce Agent-to-Agent IRC** and only decides whether live voice, event sounds and connected clients hear that traffic.

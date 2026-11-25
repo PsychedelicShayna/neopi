@@ -375,7 +375,7 @@ describe("SidePanelController", () => {
 		}
 	});
 
-	it("opens a narrow terminal's fullscreen form on the chosen view and closes it on that view's chord", async () => {
+	it("opens a narrow terminal's fullscreen form on the chosen view and closes it with close()", async () => {
 		const h = await harness(100);
 		try {
 			h.controller.registerView("todo", { id: "todo", title: "TODO", content: () => ["task one"] });
@@ -392,7 +392,7 @@ describe("SidePanelController", () => {
 			expect(h.controller.fullscreenOpen).toBe(true);
 			expect(h.term.getViewport().join("\n")).toContain("task one");
 
-			h.controller.showView("todo");
+			h.controller.close();
 			await h.settle();
 			expect(h.controller.fullscreenOpen).toBe(false);
 		} finally {

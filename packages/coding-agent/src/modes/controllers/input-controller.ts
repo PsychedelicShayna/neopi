@@ -502,17 +502,15 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
-				const panel = this.ctx.sidePanel;
-				if (panel?.active && panel.handleChordInput(data)) return { consume: true };
 				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
 					// The inline tree selector binds Alt+T to its no-tools filter; its
 					// own binding stays authoritative, as for Alt+L above.
 					if (this.ctx.ui.getFocused() instanceof TreeSelectorComponent) return undefined;
-					// The prefix also works while the fullscreen form is the active
+					// The key also works while the fullscreen form is the active
 					// overlay; under any other overlay, including a dialog stacked above
 					// the form, the focused component keeps the key.
 					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenActive) return undefined;
-					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.ctx.sidePanel.openWithChord();
+					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.ctx.sidePanel.toggleFocus();
 					return { consume: true };
 				}
 				if (
@@ -1017,7 +1015,7 @@ export class InputController {
 				void this.ctx.handleLiveDestinationCycle();
 				return true;
 			case "app.sidebar.toggle":
-				this.ctx.sidePanel.toggle();
+				this.ctx.sidePanel.toggleFocus();
 				return true;
 			case "app.sidebar.scrollUp":
 				this.ctx.sidePanel.scrollBy(-3);

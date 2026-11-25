@@ -913,7 +913,7 @@ export const cfgSidebarView = register({
 });
 
 const SIDEBAR_AGENT_FILTERS = ["running", "idle", "parked", "advisors", "aborted"] as const;
-const DEFAULT_SIDEBAR_AGENT_FILTERS: (typeof SIDEBAR_AGENT_FILTERS)[number][] = ["running"];
+const DEFAULT_SIDEBAR_AGENT_FILTERS: (typeof SIDEBAR_AGENT_FILTERS)[number][] = ["running", "advisors"];
 
 export const cfgSidebarAgentFilters = register({
 	id: "sidebar.agents.filters",
