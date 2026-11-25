@@ -73,6 +73,7 @@ export interface IrcClientSnapshot {
 
 export interface IrcClientModelOptions {
 	operatorId?: string;
+	rootId?: string;
 	snapshot?: IrcClientSnapshot;
 	onStateChange?: (state: IrcClientSnapshot) => void;
 	roomNotificationDefault?: () => IrcNotificationLevel;
@@ -244,7 +245,7 @@ export class IrcClientModel {
 		const operatorId = this.options.operatorId;
 		const { from, to, group } = message;
 		if (!operatorId || !from || from === operatorId || to !== operatorId || outcome === "failed") return false;
-		if (group === undefined && (broadcast || message.broadcast)) return false;
+		if (group === undefined && (broadcast || message.broadcast || from === this.options.rootId)) return false;
 		const id = group === undefined ? ircDmId(from, operatorId) : ircRoomId(group);
 		const level = this.notificationLevel(id);
 		if (level !== "mentions") return level === "all";

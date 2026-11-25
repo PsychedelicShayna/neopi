@@ -404,6 +404,10 @@ describe("EventController IRC notifications to the operator", () => {
 			});
 			await controller.handleEvent({
 				type: "irc_message",
+				message: createOperatorNotice(8, { from: "irc-notification-test-root", body: "already shown in the main tool call" }),
+			});
+			await controller.handleEvent({
+				type: "irc_message",
 				message: createOperatorNotice(3, { body, broadcast: true, group: "council", groupText: text, fanoutId: "f3" }),
 			});
 			ircClient.model.setNotificationLevel(room, "none");
@@ -425,6 +429,7 @@ describe("EventController IRC notifications to the operator", () => {
 			controller.dispose();
 		}
 		expect(rendered().join("\n")).not.toContain("passive room chat");
+		expect(rendered().join("\n")).not.toContain("already shown in the main tool call");
 		expect(rendered().join("\n")).toContain("a direct decision");
 		expect(rendered().join("\n")).toContain("all room activity");
 		expect(rendered().join("\n")).not.toContain("quiet room");

@@ -744,7 +744,7 @@ export class IrcBus implements IrcBusApi {
 			if (direct && root && !ircOperatorDirectMessagesEnabled(root)) {
 				return { to: message.to, outcome: "failed", error: "The operator has disabled direct IRC messages." };
 			}
-			if (root && (direct || opts.groupDelivery || message.from !== root.id)) this.#showOnUi(root, message);
+			if (root && (opts.groupDelivery || message.from !== root.id)) this.#showOnUi(root, message);
 			return { to: message.to, outcome: "injected" };
 		}
 		// Advisor/read-only refs are observability-only transcripts, never messageable peers.

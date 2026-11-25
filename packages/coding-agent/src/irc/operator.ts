@@ -166,6 +166,7 @@ export class OperatorIrcClient {
 			},
 			{
 				operatorId,
+				rootId: root.id,
 				snapshot: readSnapshot(this.#snapshotFile()),
 				onStateChange: snapshot => this.#save(snapshot),
 				roomNotificationDefault: () => session.settings ? cfgIrcOperatorNotifyDefault.get(session.settings) : "mentions",

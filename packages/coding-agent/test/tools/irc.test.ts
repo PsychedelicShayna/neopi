@@ -144,7 +144,7 @@ describe("IRC", () => {
 			await bus.send({ from: "0-A", to: "0-B", body: "sibling note" });
 
 			expect(main.relayed).toHaveLength(1);
-			expect(main.relayed[0]?.details).toMatchObject({ from: "0-A", to: "0-B", body: "sibling note" });
+			expect(main.relayed[0]?.details).toEqual({ messageId: expect.any(String), from: "0-A", to: "0-B", body: "sibling note" });
 		});
 
 		it("puts only the operator's own copy on the main screen, never traffic between two other agents", async () => {
@@ -937,8 +937,8 @@ describe("IRC", () => {
 				expect(receipt).toEqual({ to: "Captain", outcome: "injected" });
 				expect(main.delivered).toHaveLength(0);
 				// Addressed to her: shown even with peer relay cards turned off.
-				expect(main.relayed.map(record => record.details)).toMatchObject([
-					{ from: "0-Sub", to: "Captain", body: "need a decision" },
+				expect(main.relayed.map(record => record.details)).toEqual([
+					{ messageId: bus.history()[0]?.message.id, from: "0-Sub", to: "Captain", body: "need a decision" },
 				]);
 				expect(bus.history().map(entry => [entry.message.from, entry.message.to, entry.outcome])).toEqual([
 					["0-Sub", "Captain", "injected"],
@@ -946,12 +946,10 @@ describe("IRC", () => {
 				expect(bus.unreadCount("Captain")).toBe(0);
 			});
 
-			it("makes the main model's direct message to her eligible for an operator notification", async () => {
+			it("records the main model's DM without echoing its tool call as a second card", async () => {
 				const { main } = setup();
 				await bus.send({ from: "Main", to: "Captain", body: "from the composer model" });
-				expect(main.relayed).toMatchObject([
-					{ display: true, details: { from: "Main", to: "Captain", body: "from the composer model" } },
-				]);
+				expect(main.relayed).toHaveLength(0);
 				expect(bus.history()).toHaveLength(1);
 			});
 
