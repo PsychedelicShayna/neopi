@@ -295,6 +295,12 @@ describe("SidePanelController", () => {
 				await h.settle();
 				expect(cfgSidebarWidthColumns.get(h.settings)).toBe(before.panelRect.width + 10);
 				expect(h.composer.sidePanelGeometry()?.panelRect.width).toBe(before.panelRect.width + 10);
+				// If release happened outside the terminal, plain hover must not keep resizing.
+				const movedBar = h.composer.sidePanelGeometry()!.dividerCol + 1;
+				report(0, movedBar);
+				report(35, movedBar + toward);
+				await h.settle();
+				expect(h.composer.sidePanelGeometry()?.panelRect.width).toBe(before.panelRect.width + 10);
 				// The chat keeps its minimum however far the pointer goes.
 				const after = h.composer.sidePanelGeometry()!;
 				report(0, after.dividerCol + 1);

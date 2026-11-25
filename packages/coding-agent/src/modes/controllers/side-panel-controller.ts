@@ -462,7 +462,7 @@ export class SidePanelController {
 	#continueDrag(event: SgrMouseEvent): boolean {
 		const drag = this.#drag!;
 		const geometry = this.#host.composer.sidePanelGeometry();
-		if (!event.motion || geometry === undefined) {
+		if (!event.motion || event.release || (event.button & 3) !== 0 || geometry === undefined) {
 			this.#drag = undefined;
 			if (drag.moved && geometry !== undefined) cfgSidebarWidthColumns.set(this.#host.settings, drag.width);
 			if (drag.moved) this.applySettings();
