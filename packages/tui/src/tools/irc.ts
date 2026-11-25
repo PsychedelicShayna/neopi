@@ -33,6 +33,17 @@ export interface IrcMessage {
 	 * so the recipient's `wait` keeps waiting for the actual reply.
 	 */
 	progress?: boolean;
+	/**
+	 * Group this message names: where a group send went, or what a group notice is
+	 * about. Recorded when sent, so the transcript shows the group as it was.
+	 */
+	group?: string;
+	/** The sender's own text of a group send; `body` opens with the heading its recipients' models read. */
+	groupText?: string;
+	/** Other named groups sender and recipient shared when it was sent. */
+	sharedGroups?: string[];
+	/** Shared by every leg of one group send or `all` broadcast, so one UI shows that send once. */
+	fanoutId?: string;
 }
 
 /** Delivery outcome for one peer recipient. */

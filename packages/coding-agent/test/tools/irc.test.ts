@@ -147,6 +147,26 @@ describe("IRC", () => {
 			expect(main.relayed[0]?.details).toEqual({ from: "0-A", to: "0-B", body: "sibling note" });
 		});
 
+		it("puts only the operator's own copy on the main screen, never traffic between two other agents", async () => {
+			const main = makeFakeSession();
+			registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });
+			const a = makeFakeSession();
+			registry.register({ id: "0-A", displayName: "task", kind: "sub", parentId: "Main", session: a.session });
+			const b = makeFakeSession();
+			registry.register({ id: "0-B", displayName: "task", kind: "sub", parentId: "Main", session: b.session });
+			registerIrcOperator(registry, "Captain", "Main");
+
+			await bus.send({ from: "0-A", to: "0-B", body: "sibling note" });
+			await bus.send({ from: "0-A", to: "Captain", body: "need a decision" });
+
+			expect(main.relayed.map(record => [Reflect.get(record.details ?? {}, "to"), record.display])).toEqual([
+				["0-B", false],
+				["Captain", true],
+			]);
+			// The viewer's history has both, whatever the main screen shows.
+			expect(bus.history().map(entry => entry.message.body)).toEqual(["sibling note", "need a decision"]);
+		});
+
 		it("send to an unknown agent or a killed one without a transcript fails", async () => {
 			const unknown = await bus.send({ from: "0-Main", to: "0-Ghost", body: "hello?" });
 			expect(unknown.outcome).toBe("failed");

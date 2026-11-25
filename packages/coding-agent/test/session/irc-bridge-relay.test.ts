@@ -57,6 +57,39 @@ describe("IrcBridge wake-relay marking", () => {
 		expect(record.details).not.toHaveProperty("wakeRelay");
 		expect(record.content).toContain("is delivered to");
 	});
+
+	it("keeps a group send's identity in the stored details and leaves the model-facing envelope alone", async () => {
+		const body = "B sent this to group council, which you are part of.\n\nCompare findings.";
+		const plain = makeBridge();
+		await plain.bridge.deliver({ id: "irc-3", from: "B", to: "A", body, ts: 5, broadcast: true });
+		const grouped = makeBridge();
+		await grouped.bridge.deliver({
+			id: "irc-3",
+			from: "B",
+			to: "A",
+			body,
+			ts: 5,
+			broadcast: true,
+			group: "council",
+			groupText: "Compare findings.",
+			sharedGroups: ["review"],
+			fanoutId: "f1",
+		});
+
+		const record = grouped.woken[0][0] as CustomMessage;
+		expect(record.details).toMatchObject({
+			from: "B",
+			message: body,
+			broadcast: true,
+			group: "council",
+			groupText: "Compare findings.",
+			sharedGroups: ["review"],
+			fanoutId: "f1",
+		});
+		// What the model reads is byte-for-byte what it read before the group was recorded.
+		expect(record.content).toBe((plain.woken[0][0] as CustomMessage).content);
+		expect(record.timestamp).toBe(5);
+	});
 });
 
 describe("IrcBridge broadcast legs reaching a streaming recipient", () => {

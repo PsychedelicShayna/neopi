@@ -42,9 +42,9 @@ export const cfgIrcRelayToMainTranscript = register({
 	ui: {
 		tab: "tasks",
 		group: "Messaging",
-		label: "IRC Cards in Transcript",
+		label: "Announce Agent-to-Agent IRC",
 		description:
-			"Show agent-to-agent messages as short-lived cards in the main transcript. The IRC viewer keeps them either way",
+			"Let live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript; the IRC viewer keeps every message either way",
 	},
 });
 effect(cfgIrcRelayToMainTranscript, setIrcRelayToMainTranscript);

@@ -7012,6 +7012,43 @@ describe("advisor", () => {
 			expect(text).toContain("watch the empty case");
 		});
 
+		it("outlines the bubble in the colour of its worst note: nit grey, concern yellow, blocker red", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			const outline = (notes: { note: string; severity?: "nit" | "concern" | "blocker" }[]) => {
+				const rows = createAdvisorMessageCard({ notes }, () => true, uiTheme).render(60);
+				return { top: rows[0]!, bottom: rows[rows.length - 1]!, rows };
+			};
+			const box = uiTheme.boxRound;
+			const rule = box.horizontal.repeat(58);
+			const cases = [
+				{ notes: [{ note: "style", severity: "nit" as const }], color: "muted" as const },
+				{ notes: [{ note: "unrated" }], color: "muted" as const },
+				{ notes: [{ note: "check this", severity: "concern" as const }], color: "warning" as const },
+				{ notes: [{ note: "stop", severity: "blocker" as const }], color: "error" as const },
+				// A mixed card wears its worst note.
+				{
+					notes: [
+						{ note: "style", severity: "nit" as const },
+						{ note: "stop", severity: "blocker" as const },
+						{ note: "check this", severity: "concern" as const },
+					],
+					color: "error" as const,
+				},
+			];
+			for (const { notes, color } of cases) {
+				const { top, bottom, rows } = outline(notes);
+				expect(top).toBe(uiTheme.fg(color, `${box.topLeft}${rule}${box.topRight}`));
+				expect(bottom).toBe(uiTheme.fg(color, `${box.bottomLeft}${rule}${box.bottomRight}`));
+				for (const row of rows) expect(Bun.stringWidth(Bun.stripANSI(row))).toBe(60);
+				expect(rows[1]).toContain(
+					uiTheme.fg(color, uiTheme.bold(`${Bun.stripANSI(rows[1]!).split(" ")[1]} Advisor`)),
+				);
+			}
+			// The three severities are three different colours.
+			expect(new Set(["muted", "warning", "error"].map(c => uiTheme.fg(c as "muted", "x"))).size).toBe(3);
+		});
+
 		it("prefixes the note with a named-advisor label, but not for the default advisor", async () => {
 			const uiTheme = await getThemeByName("dark");
 			if (!uiTheme) throw new Error("theme unavailable");
@@ -7072,7 +7109,8 @@ describe("advisor", () => {
 			try {
 				setChatTranscriptDisplayPreferences({ advisorCollapsedLines: 1 });
 				const rows = createAdvisorMessageCard(details, () => false, uiTheme).render(30);
-				expect(rows.length).toBe(2);
+				// The bubble's top and bottom outline, the header, and one note row.
+				expect(rows.length).toBe(4);
 				expect(strip(rows)).not.toContain("truncated.");
 				const expanded = createAdvisorMessageCard(details, () => true, uiTheme);
 				expect(strip(expanded.render(30))).toContain("truncated.");

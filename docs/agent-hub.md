@@ -114,7 +114,7 @@ Collab does not replicate advisor rows or serve their transcripts to guests; the
 
 ## IRC viewer
 
-`Alt+I` (`app.irc.viewer`) opens a fullscreen history of the agent-to-agent messages in this session. The live IRC cards in the main transcript retire after a few seconds and only four show at once; the viewer keeps every message.
+`Alt+I` (`app.irc.viewer`) opens a fullscreen history of the agent-to-agent messages in this session. The main transcript shows a message delivered to the agent you are viewing in full, between two rules in the sender's Agent Hub colour: the opening rule names the sender, the group or recipient, and the time; the closing rule repeats the sender. Those messages stay in the transcript. A message addressed to you shows as a three-line notification card that leaves after ten seconds, at most four at once, and you read it in the viewer. Messages between two other agents never show in the main transcript; they are only in the viewer. The transcript keeps only messages delivered to the main agent across `/resume`; the viewer keeps every message of the running process.
 
 Each row shows the time, sender `➤` recipient, and the message body. Broadcasts appear as one row per recipient, marked `broadcast`. Replies are marked `reply`, wake-turn relays `relay`, and failed deliveries show the error. Long bodies are collapsed to two lines.
 
@@ -129,7 +129,7 @@ Each row shows the time, sender `➤` recipient, and the message body. Broadcast
 The history belongs to this UI's root session and its current conversation: `/new` or resuming another session shows that conversation's messages, with or without a session file. It lives in memory and is lost when the process exits. Settings:
 
 - `irc.operator.viewerEnabled` (default `true`) lets the key open the viewer.
-- `irc.operator.relayToMainTranscript` (default `true`) controls the live cards in the main transcript; the viewer keeps messages either way.
+- `irc.operator.relayToMainTranscript` (default `true`) lets live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript, and the viewer keeps messages either way.
 - `irc.history.maxEntries` (default `1000`) caps the history per process; the oldest messages drop first.
 - `irc.operator.handle` (default `Operator`) is your own IRC id; see below.
 

@@ -177,32 +177,35 @@ function createIrcMessage(timestamp: number): CustomMessage<{ from: string; mess
 function createIrcContext(options: { liveBlockAbove?: boolean } = {}) {
 	const ctx = createInteractiveModeContext();
 	const { chatContainer } = ctx;
+	let runningTool: Component | undefined;
 	if (options.liveBlockAbove) {
-		// A still-running tool above the cards: they sit in the live region,
-		// where their rows cannot have committed to native scrollback.
-		chatContainer.addChild({
+		// A still-running tool: blocks under it stay in the live region, where
+		// their rows cannot commit to native scrollback.
+		runningTool = {
 			render: () => ["running tool"],
 			invalidate: () => {},
 			isTranscriptBlockFinalized: () => false,
-		} as Component);
+		} as Component;
+		chatContainer.addChild(runningTool);
 	}
 	const helpers = new UiHelpers(ctx);
 	ctx.addMessageToChat = vi.fn((message, options) => helpers.addMessageToChat(message, options));
 	return {
 		ctx,
 		chatContainer,
+		runningTool,
 		requestRender: ctx.ui.requestRender,
 		addMessageToChat: ctx.addMessageToChat,
 	};
 }
 
-describe("EventController IRC expiry", () => {
+describe("EventController IRC messages", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
-	it("renders IRC messages immediately and removes live-region cards after the TTL", async () => {
+	it("renders an IRC message immediately and keeps it: nothing expires it", async () => {
 		vi.useFakeTimers();
 		const message = createIrcMessage(1);
 		const { ctx, chatContainer, requestRender } = createIrcContext({ liveBlockAbove: true });
@@ -211,37 +214,33 @@ describe("EventController IRC expiry", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 
 		expect(chatContainer.children).toHaveLength(2);
-		// One requestRender from the IRC handler mounting the card. The blanket
+		// One requestRender from the IRC handler mounting the block. The blanket
 		// pre-render that `handleEvent` used to fire before every dispatch was
 		// removed in #4353 (it doubled the paint rate during streaming and did no
 		// visible work beyond what the handlers already trigger).
 		expect(requestRender).toHaveBeenCalledTimes(1);
 
-		vi.advanceTimersByTime(9_999);
+		vi.advanceTimersByTime(60_000);
 		expect(chatContainer.children).toHaveLength(2);
-
-		vi.advanceTimersByTime(1);
-		expect(chatContainer.children).toHaveLength(1);
-		expect(requestRender).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalledTimes(1);
+		expect(Bun.stripANSI(chatContainer.children[0]!.render(80).join("\n"))).toContain("Ready 1");
 	});
 
-	it("evicts the oldest live-region card beyond the cap", async () => {
-		vi.useFakeTimers();
-		const { ctx, chatContainer } = createIrcContext({ liveBlockAbove: true });
+	it("keeps every message of a burst, in arrival order, above the running block they arrived under", async () => {
+		const { ctx, chatContainer, runningTool } = createIrcContext({ liveBlockAbove: true });
 		const controller = new EventController(ctx);
 
-		for (let i = 0; i < 5; i++) {
+		for (let i = 0; i < 6; i++) {
 			await controller.handleEvent({ type: "irc_message", message: createIrcMessage(100 + i) });
 		}
-		// live block + MAX_LIVE_IRC_CARDS (4): the 5th card evicted the 1st.
-		expect(chatContainer.children).toHaveLength(5);
-		const rendered = chatContainer.children.map(child => child.render(80).join("\n"));
-		expect(rendered.some(text => text.includes("100"))).toBe(false);
-		expect(rendered.some(text => text.includes("104"))).toBe(true);
+		expect(chatContainer.children).toHaveLength(7);
+		// The running block stays last: everything above it can scroll into history.
+		expect(chatContainer.children[6]).toBe(runningTool!);
+		const rendered = chatContainer.children.slice(0, 6).map(child => Bun.stripANSI(child.render(80).join("\n")));
+		for (let i = 0; i < 6; i++) expect(rendered[i]).toContain(`Ready ${100 + i}`);
 	});
 
-	it("does not schedule duplicate expiry for duplicate IRC events", async () => {
-		vi.useFakeTimers();
+	it("renders a duplicate IRC event once", async () => {
 		const message = createIrcMessage(2);
 		const { ctx, chatContainer, addMessageToChat } = createIrcContext({ liveBlockAbove: true });
 		const controller = new EventController(ctx);
@@ -251,21 +250,175 @@ describe("EventController IRC expiry", () => {
 
 		expect(addMessageToChat).toHaveBeenCalledTimes(1);
 		expect(chatContainer.children).toHaveLength(2);
+	});
+
+	it("shows one group send once, keeping the leg delivered to this session over a leg observed on its way to another member", async () => {
+		const text = "Compare findings.";
+		const body = `Scout sent this to group council, which you are part of.\n\n${text}`;
+		const group = { broadcast: true, group: "council", groupText: text, fanoutId: "f1" };
+		const observed: CustomMessage = {
+			role: "custom",
+			customType: "irc:relay",
+			content: body,
+			display: true,
+			details: { from: "Scout", to: "Operator", body, ...group },
+			timestamp: 10,
+		};
+		const delivered: CustomMessage = {
+			role: "custom",
+			customType: "irc:incoming",
+			content: body,
+			display: true,
+			details: { from: "Scout", message: body, ...group },
+			timestamp: 11,
+		};
+		for (const order of [
+			[observed, delivered],
+			[delivered, observed],
+		]) {
+			const { ctx, chatContainer } = createIrcContext();
+			const controller = new EventController(ctx);
+			for (const message of order) await controller.handleEvent({ type: "irc_message", message });
+
+			expect(chatContainer.children).toHaveLength(1);
+			const rendered = Bun.stripANSI(chatContainer.children[0]!.render(80).join("\n"));
+			expect(rendered).toContain("#council");
+			expect(rendered).toContain(text);
+			// The delivered leg has no recipient to name; the observed one named the operator.
+			expect(rendered).not.toContain("Operator");
+		}
+	});
+});
+
+/** The operator's own copy of a message, as the bus shows it on her UI: a DM to her, or her leg of a group send. */
+function createOperatorNotice(
+	timestamp: number,
+	extra: Record<string, unknown> = {},
+): CustomMessage<Record<string, unknown>> {
+	const body = `Decision ${timestamp}`;
+	return {
+		role: "custom",
+		customType: "irc:relay",
+		content: body,
+		display: true,
+		details: { from: "Scout", to: "Operator", body, ...extra },
+		timestamp,
+	};
+}
+
+function createOperatorContext() {
+	const ctx = createInteractiveModeContext({ ircOperatorId: "Operator" });
+	const { chatContainer } = ctx;
+	// A still-running tool, as in createIrcContext: cards under it stay in the live region.
+	const runningTool = {
+		render: () => ["running tool"],
+		invalidate: () => {},
+		isTranscriptBlockFinalized: () => false,
+	} as Component;
+	chatContainer.addChild(runningTool);
+	const helpers = new UiHelpers(ctx);
+	ctx.addMessageToChat = vi.fn((message, options) => helpers.addMessageToChat(message, options));
+	const rendered = () => chatContainer.children.map(child => Bun.stripANSI(child.render(80).join("\n")));
+	return { ctx, chatContainer, runningTool, rendered, requestRender: ctx.ui.requestRender };
+}
+
+describe("EventController IRC notifications to the operator", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("shows a message addressed to her as a short card that retires after ten seconds, while a message delivered to the agent stays", async () => {
+		vi.useFakeTimers();
+		const { ctx, chatContainer, rendered, requestRender } = createOperatorContext();
+		const controller = new EventController(ctx);
+		const lines = Array.from({ length: 6 }, (_, index) => `line ${index + 1}`).join("\n");
+		const notice = createOperatorNotice(1, { body: lines });
+
+		await controller.handleEvent({ type: "irc_message", message: createIrcMessage(2) });
+		await controller.handleEvent({ type: "irc_message", message: notice });
+
+		expect(chatContainer.children).toHaveLength(3);
+		const card = rendered().find(text => text.includes("line 1"));
+		// A preview, not the message: she reads the whole of it in the IRC viewer.
+		expect(card).toContain("Scout");
+		expect(card).toContain("Operator");
+		expect(card).not.toContain("line 6");
+		expect(requestRender).toHaveBeenCalledTimes(2);
+
+		vi.advanceTimersByTime(9_999);
+		expect(chatContainer.children).toHaveLength(3);
+
+		vi.advanceTimersByTime(1);
+		expect(chatContainer.children).toHaveLength(2);
+		expect(rendered().some(text => text.includes("line 1"))).toBe(false);
+		expect(rendered().some(text => text.includes("Ready 2"))).toBe(true);
+		expect(requestRender).toHaveBeenCalledTimes(3);
+
+		vi.advanceTimersByTime(60_000);
+		expect(chatContainer.children).toHaveLength(2);
+	});
+
+	it("names the group on the card for her leg of a group send, without the heading her agents' models read", async () => {
+		const { ctx, rendered } = createOperatorContext();
+		const controller = new EventController(ctx);
+		const text = "Compare findings.";
+		const body = `Scout sent this to group council, which you are part of.\n\n${text}`;
+
+		await controller.handleEvent({
+			type: "irc_message",
+			message: createOperatorNotice(3, { body, broadcast: true, group: "council", groupText: text, fanoutId: "f3" }),
+		});
+
+		const card = rendered().find(row => row.includes(text));
+		expect(card).toContain("#council");
+		expect(card).not.toContain("sent this to group");
+	});
+
+	it("evicts the oldest notification beyond four at once", async () => {
+		vi.useFakeTimers();
+		const { ctx, chatContainer, rendered } = createOperatorContext();
+		const controller = new EventController(ctx);
+
+		for (let i = 0; i < 5; i++) {
+			await controller.handleEvent({ type: "irc_message", message: createOperatorNotice(100 + i) });
+		}
+
+		// The running block and four cards: the fifth notification evicted the first.
+		expect(chatContainer.children).toHaveLength(5);
+		const text = rendered().join("\n");
+		expect(text).not.toContain("Decision 100");
+		for (let i = 1; i < 5; i++) expect(text).toContain(`Decision ${100 + i}`);
+
+		// The evicted card's timer is gone with it: the other four retire together, once.
 		vi.advanceTimersByTime(10_000);
 		expect(chatContainer.children).toHaveLength(1);
 	});
 
-	it("clears pending IRC expiry timers on dispose", async () => {
-		vi.useFakeTimers();
-		const message = createIrcMessage(3);
-		const { ctx, chatContainer, requestRender } = createIrcContext();
+	it("never shows a message between two other agents on the main screen", async () => {
+		const { ctx, chatContainer, requestRender } = createOperatorContext();
 		const controller = new EventController(ctx);
 
-		await controller.handleEvent({ type: "irc_message", message });
+		// As the bus reports traffic she is not part of: an observation, not a display record.
+		await controller.handleEvent({
+			type: "irc_message",
+			message: { ...createOperatorNotice(200, { to: "Builder" }), display: false },
+		});
+
+		expect(chatContainer.children).toHaveLength(1);
+		expect(requestRender).not.toHaveBeenCalled();
+	});
+
+	it("clears pending notification timers on dispose", async () => {
+		vi.useFakeTimers();
+		const { ctx, chatContainer, requestRender } = createOperatorContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "irc_message", message: createOperatorNotice(4) });
 		controller.dispose();
 		vi.advanceTimersByTime(10_000);
 
-		expect(chatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(2);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });

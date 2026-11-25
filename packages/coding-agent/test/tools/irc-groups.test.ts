@@ -360,6 +360,45 @@ describe("IRC namespaces", () => {
 		expect((await main.call({ op: "groups" })).content).toEqual([{ type: "text", text: "everyone (0)" }]);
 	});
 
+	it("stamps each group leg with the group as it is when sent, and one id for the whole send", async () => {
+		peer("Main", "main");
+		const a = peer("A");
+		const b = peer("B");
+		const c = peer("C");
+		await a.call({ op: "create", group: "council", members: ["A", "B", "C"] });
+		await a.call({ op: "create", group: "review", members: ["A", "B"] });
+		// The notice of being added names its group, without being a message sent to it.
+		expect(b.messages.map(message => [message.group, message.groupText])).toEqual([
+			["council", undefined],
+			["review", undefined],
+		]);
+		for (const member of [a, b, c]) member.messages.length = 0;
+
+		await a.call({ op: "send", group: "council", message: "Compare findings." });
+		const toB = b.messages[0]!;
+		const toC = c.messages[0]!;
+		// The model-facing body keeps its heading; the sender's own text travels beside it.
+		expect(toB.body).toBe("A sent this to group council, which you are part of.\n\nCompare findings.");
+		expect(toB).toMatchObject({ group: "council", groupText: "Compare findings.", sharedGroups: ["review"] });
+		expect(toC).toMatchObject({ group: "council", groupText: "Compare findings." });
+		expect(toC.sharedGroups).toBeUndefined();
+		expect(toB.fanoutId).toBeTruthy();
+		expect(toC.fanoutId).toBe(toB.fanoutId);
+
+		// A later send is its own fan-out, and membership changes show only from then on.
+		await b.call({ op: "leave", group: "review" });
+		await a.call({ op: "send", group: "council", message: "Second round." });
+		expect(b.messages[1]!.sharedGroups).toBeUndefined();
+		expect(b.messages[1]!.fanoutId).not.toBe(toB.fanoutId);
+		expect(toB.sharedGroups).toEqual(["review"]);
+
+		// A direct message names no group, only the ones both ends share.
+		await a.call({ op: "send", to: "C", message: "Just you." });
+		expect(c.messages[2]).toMatchObject({ body: "Just you.", sharedGroups: ["council"] });
+		expect(c.messages[2]!.group).toBeUndefined();
+		expect(c.messages[2]!.fanoutId).toBeUndefined();
+	});
+
 	it("rejects empty creation and removes a non-fixed group when the last member leaves", async () => {
 		const a = peer("A");
 		expect((await a.call({ op: "create", group: "empty", members: [] })).isError).toBe(true);

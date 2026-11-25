@@ -20,6 +20,7 @@ import {
 	shouldRenderAbortReason,
 } from "./messages";
 import { createIrcMessageCard } from "../tools/wait";
+import { IrcMessageBlock, type IrcMessageDetails, ircMessageView, isOperatorIrcNotice } from "./irc-message";
 import {
 	formatArtifactErrorNotice,
 	formatMinimizedMeta,
@@ -273,37 +274,58 @@ export function buildAsyncNotifyBlock(message: CustomOrHookMessage): ToolActivit
 }
 
 /**
- * Render an IRC coordination custom message (`irc:incoming` / `irc:autoreply` /
- * `irc:relay` / `irc:workpool`) as a tool-activity card. `getExpanded` supplies
- * the live expanded-state getter for the cached card.
+ * Render an IRC coordination custom message. A peer's message (`irc:incoming`)
+ * and one observed between two others (`irc:relay`) show whole, as an
+ * {@link IrcMessageBlock}; `irc:autoreply` and `irc:workpool` stay status cards,
+ * for which `getExpanded` supplies the live expanded-state getter. A message
+ * addressed to the operator `operatorId` is a notification: a short preview
+ * card, since she reads the message itself in the IRC viewer.
  */
-export function buildIrcMessageCard(message: CustomOrHookMessage, getExpanded: () => boolean): Component {
+export function buildIrcMessageCard(
+	message: CustomOrHookMessage,
+	getExpanded: () => boolean,
+	operatorId?: string,
+): Component {
+	if (isOperatorIrcNotice(message, operatorId)) {
+		const details = (message as CustomMessage<IrcMessageDetails>).details;
+		const group = typeof details?.groupText === "string" ? details.group?.trim() : undefined;
+		return new ToolActivityContainer(
+			createIrcMessageCard(
+				{
+					kind: "relay",
+					from: details?.from,
+					to: group ? `#${group}` : details?.to,
+					body: details?.groupText ?? details?.body,
+					replyTo: details?.replyTo,
+					timestamp: message.timestamp,
+				},
+				getExpanded,
+				theme,
+			),
+		);
+	}
+	if (message.customType === "irc:incoming" || message.customType === "irc:relay") {
+		const details = (message as CustomMessage<IrcMessageDetails>).details;
+		const kind = message.customType === "irc:incoming" ? "incoming" : "relay";
+		return new ToolActivityContainer(new IrcMessageBlock(ircMessageView(kind, details, message.timestamp)));
+	}
 	const details = (
 		message as CustomMessage<{
 			from?: string;
 			to?: string;
-			message?: string;
 			body?: string;
 			replyTo?: string;
 			pool?: string;
 			mode?: string;
 		}>
 	).details;
-	const kind =
-		message.customType === "irc:incoming"
-			? ("incoming" as const)
-			: message.customType === "irc:autoreply"
-				? ("autoreply" as const)
-				: message.customType === "irc:workpool"
-					? ("workpool" as const)
-					: ("relay" as const);
 	return new ToolActivityContainer(
 		createIrcMessageCard(
 			{
-				kind,
+				kind: message.customType === "irc:workpool" ? "workpool" : "autoreply",
 				from: details?.from,
 				to: details?.to,
-				body: kind === "incoming" ? details?.message : details?.body,
+				body: details?.body,
 				replyTo: details?.replyTo,
 				timestamp: message.timestamp,
 				pool: details?.pool,
@@ -315,17 +337,9 @@ export function buildIrcMessageCard(message: CustomOrHookMessage, getExpanded: (
 	);
 }
 
-/** Present a consumed parent steer as an IRC card without interpreting its model-facing envelope. */
-export function buildParentIrcMessageCard(
-	parentIrc: { from: string; body: string },
-	timestamp: number,
-	getExpanded: () => boolean,
-): Component {
-	return createIrcMessageCard(
-		{ kind: "incoming", from: parentIrc.from, body: parentIrc.body, timestamp },
-		getExpanded,
-		theme,
-	);
+/** Present a consumed parent steer as an IRC message without interpreting its model-facing envelope. */
+export function buildParentIrcMessageCard(parentIrc: { from: string; body: string }, timestamp: number): Component {
+	return new IrcMessageBlock({ kind: "incoming", from: parentIrc.from, body: parentIrc.body, timestamp });
 }
 
 /**

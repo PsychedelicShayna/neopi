@@ -264,6 +264,11 @@ export class IrcBridge {
 				...(msg.broadcast ? { broadcast: true } : {}),
 				...(msg.progress ? { progress: true } : {}),
 				...(fromParent ? { fromParent: true } : {}),
+				// Group identity as it was when sent; the transcript never re-derives it.
+				...(msg.group ? { group: msg.group } : {}),
+				...(msg.groupText !== undefined ? { groupText: msg.groupText } : {}),
+				...(msg.sharedGroups ? { sharedGroups: msg.sharedGroups } : {}),
+				...(msg.fanoutId ? { fanoutId: msg.fanoutId } : {}),
 			},
 			attribution: "agent",
 			timestamp: msg.ts,
@@ -303,6 +308,8 @@ export class IrcBridge {
 					record.display,
 					record.details,
 					record.attribution ?? "agent",
+					// The block shows the send time; a rebuilt transcript must show the same one.
+					record.timestamp,
 				),
 			);
 			return "injected";

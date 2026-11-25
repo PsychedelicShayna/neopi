@@ -541,9 +541,7 @@ export class ChatTranscriptBuilder {
 				if (message.role === "user") this.#resolveWaitingPoll();
 				if (message.role === "user") this.#resolveTodoSnapshot();
 				if (message.role === "user" && message.parentIrc) {
-					this.container.addChild(
-						buildParentIrcMessageCard(message.parentIrc, message.timestamp, () => this.#expanded),
-					);
+					this.container.addChild(buildParentIrcMessageCard(message.parentIrc, message.timestamp));
 					break;
 				}
 				const userText = message.role === "user" ? textContent(message.content) : "";

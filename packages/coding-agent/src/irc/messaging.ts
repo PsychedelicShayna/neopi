@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { IrcBus, ircRelayRoot } from "./bus";
 import type { AgentRegistryApi } from "../registry/agent-registry";
@@ -51,6 +52,7 @@ export async function executeSend(
 	// display-only relay to that root would duplicate it.
 	const relayRootId = ircRelayRoot(registry, senderId)?.id;
 	const suppressRelay = isBroadcast && relayRootId !== undefined && targets.includes(relayRootId);
+	const fanoutId = isBroadcast ? Snowflake.next() : undefined;
 	const receipts = await Promise.all(
 		targets.map(target =>
 			bus.send(
@@ -60,7 +62,7 @@ export async function executeSend(
 					body: message,
 					replyTo,
 					localOnly: !params.remote,
-					...(isBroadcast ? { broadcast: true } : {}),
+					...(fanoutId ? { broadcast: true, fanoutId } : {}),
 					...(params.progress === true ? { progress: true } : {}),
 				},
 				{ suppressRelay, broadcast: isBroadcast },
