@@ -41,6 +41,7 @@ import {
 	buildAsyncNotifyBlock,
 	buildAsyncResultComponent,
 	buildFileMentionBlock,
+	type IrcTranscriptOptions,
 	buildIrcMessageCard,
 	buildParentIrcMessageCard,
 	buildLaunchCompletionBlock,
@@ -139,6 +140,7 @@ export class ChatTranscriptBuilder {
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
 	#entryComponents = new Map<string, Component[]>();
+	readonly #ircCards: NonNullable<IrcTranscriptOptions["fanouts"]> = new Map();
 	/**
 	 * Live tail: owner state not persisted yet, rendered after {@link container}.
 	 * It never enters the transcript container, so persisted rows keep their
@@ -248,6 +250,7 @@ export class ChatTranscriptBuilder {
 		this.#todoSnapshot = null;
 		this.#expandables = [];
 		this.#entryComponents.clear();
+		this.#ircCards.clear();
 		this.#persistedAssistants.clear();
 		this.#persistedToolResults.clear();
 		this.#clearLiveTail();
@@ -874,7 +877,8 @@ export class ChatTranscriptBuilder {
 			message.customType === "irc:relay" ||
 			message.customType === "irc:workpool"
 		) {
-			this.container.addChild(buildIrcMessageCard(message, () => this.#expanded));
+			const card = buildIrcMessageCard(message, () => this.#expanded, { fanouts: this.#ircCards });
+			if (card) this.container.addChild(card);
 			return;
 		}
 		if (message.customType === "chronicler") {

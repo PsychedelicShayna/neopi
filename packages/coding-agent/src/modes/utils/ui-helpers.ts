@@ -60,6 +60,7 @@ import {
 	toolRenderName,
 } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import type { IrcMessageBlock } from "@oh-my-pi/pi-tui/chat/irc-message";
 import { TranscriptNotice } from "@oh-my-pi/pi-tui/chrome/transcript-notice";
 import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
@@ -255,6 +256,7 @@ export class UiHelpers {
 	#textRendererSetVersion = 0;
 	/** The text renderer set changed while a replay was in flight; the commit retires stale scrollback. */
 	#textRendererSetChangedDuringReplay = false;
+	readonly #ircCards = new WeakMap<TranscriptContainer, Map<string, WeakRef<IrcMessageBlock>>>();
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -394,7 +396,14 @@ export class UiHelpers {
 						message.customType === "irc:relay" ||
 						message.customType === "irc:workpool"
 					) {
-						const card = buildIrcMessageCard(message, () => this.ctx.toolOutputExpanded, this.ctx.ircOperatorId);
+						let cards = this.#ircCards.get(this.ctx.chatContainer);
+						if (!cards) this.#ircCards.set(this.ctx.chatContainer, (cards = new Map()));
+						const card = buildIrcMessageCard(message, () => this.ctx.toolOutputExpanded, {
+							operatorId: this.ctx.ircOperatorId,
+							agentId: this.ctx.focusedAgentId ?? this.ctx.session.getAgentId?.(),
+							fanouts: cards,
+						});
+						if (!card) return [];
 						this.ctx.chatContainer.addChild(card);
 						return [card];
 					}
@@ -464,7 +473,13 @@ export class UiHelpers {
 			case "user":
 			case "developer": {
 				if (message.role === "user" && message.parentIrc) {
-					this.ctx.chatContainer.addChild(buildParentIrcMessageCard(message.parentIrc, message.timestamp));
+					this.ctx.chatContainer.addChild(
+						buildParentIrcMessageCard(
+							message.parentIrc,
+							message.timestamp,
+							this.ctx.focusedAgentId ?? this.ctx.session.getAgentId?.(),
+						),
+					);
 					break;
 				}
 				const rawText = message.role === "user" ? textContent(message.content) : "";
@@ -564,6 +579,7 @@ export class UiHelpers {
 		sessionContext: SessionContext,
 		options: RenderSessionContextOptions = {},
 	): Generator<void, void, void> {
+		this.#ircCards.delete(this.ctx.chatContainer);
 		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
 		const activeToolExecutionUpdates = this.ctx.viewSession.activeToolExecutionUpdates?.() ?? [];

@@ -100,8 +100,14 @@ export interface IrcSendOptions {
 	suppressRelay?: boolean;
 	/** This leg is one recipient of a `to: "all"` fan-out. */
 	broadcast?: boolean;
-	/** Show the operator's addressed group leg even when it came from her own root. */
+	/** Group deliveries also report a root's own group posts to its observers. */
 	groupDelivery?: boolean;
+}
+
+interface IrcFanout {
+	timestamp: number;
+	operators: Map<string, { root: AgentRef; message: IrcMessage; display: boolean }[]>;
+	attached: Map<string, IrcMessage>;
 }
 
 /** Which root's operator a history entry belongs to; see {@link IrcBus.history}. */
@@ -131,6 +137,8 @@ interface IrcGroupScope {
 export interface IrcBusApi {
 	/** Fire-and-forget delivery; the receipt reports how the message reached the recipient. */
 	send(msg: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt>;
+	/** Deliver one broadcast/group send as a batch, retaining its visible endpoints per transcript. */
+	sendFanout(messages: readonly IrcSend[], opts?: IrcSendOptions): Promise<IrcDeliveryReceipt[]>;
 	/** Execute a namespace operation on the IRC host. */
 	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult>;
 	/** Apply explicit everyone removals to the legacy live-peer broadcast roster. */
@@ -373,8 +381,37 @@ export class IrcBus implements IrcBusApi {
 	 * Every attempt, failed ones included, is appended to the operator history
 	 * ({@link history}); that never changes delivery or unread counts.
 	 */
-	async send({ localOnly, ...msg }: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
-		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
+	send(msg: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
+		return this.#send(msg, opts);
+	}
+
+	async sendFanout(messages: readonly IrcSend[], opts?: IrcSendOptions): Promise<IrcDeliveryReceipt[]> {
+		const fanout: IrcFanout = { timestamp: Date.now(), operators: new Map(), attached: new Map() };
+		const pending = new Map<string, Promise<IrcDeliveryReceipt>>();
+		// The operator delivery path has no await. Capture those accepted legs first so
+		// the agent can file an already-combined card before it enters scrollback.
+		for (const msg of messages) {
+			if (this.#registry.get(msg.to)?.kind === "operator") pending.set(msg.to, this.#send(msg, opts, fanout));
+		}
+		for (const msg of messages) {
+			if (!pending.has(msg.to)) pending.set(msg.to, this.#send(msg, opts, fanout));
+		}
+		const observations = [...fanout.operators].map(async ([rootId, legs]) => {
+			// The operator still gets her own card if the other leg failed. Never
+			// make either endpoint wait for an unrelated peer's delivery.
+			await pending.get(rootId);
+			const attached = fanout.attached.get(rootId);
+			for (const { root, message, display } of legs) {
+				if (display) this.#showOnUi(root, message, true, attached);
+			}
+		});
+		const receipts = await Promise.all(messages.map(msg => pending.get(msg.to)!));
+		await Promise.all(observations);
+		return receipts;
+	}
+
+	async #send({ localOnly, ...msg }: IrcSend, opts?: IrcSendOptions, fanout?: IrcFanout): Promise<IrcDeliveryReceipt> {
+		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: fanout?.timestamp ?? Date.now() };
 		// Membership as it is now travels with the message: the transcript shows it
 		// as sent, whatever the groups look like when the session is next opened.
 		const sharedGroups = this.#sharedGroups(message.from, message.to, message.group);
@@ -384,7 +421,7 @@ export class IrcBus implements IrcBusApi {
 		// Taken before delivery: a reply sent while this message is still being
 		// delivered must still order after it.
 		const mark: SendMark = { ts: message.ts, seq: ++this.#sendSeq, excerpt: excerptOf(message.body) };
-		const receipt = await this.#deliver(message, { ...opts, localOnly });
+		const receipt = await this.#deliver(message, { ...opts, localOnly }, fanout);
 		this.#recordHistory({
 			message,
 			outcome: receipt.outcome,
@@ -529,6 +566,7 @@ export class IrcBus implements IrcBusApi {
 	async #deliver(
 		message: IrcMessage,
 		opts: IrcSendOptions & { localOnly?: boolean } = {},
+		fanout?: IrcFanout,
 	): Promise<IrcDeliveryReceipt> {
 		const ref = this.#registry.get(message.to);
 		const mesh = ref || opts.localOnly ? undefined : agentMesh();
@@ -562,13 +600,25 @@ export class IrcBus implements IrcBusApi {
 			this.#enqueue(message);
 			return { to: message.to, outcome: "queued" };
 		}
-		// The operator reads IRC on her UI, not in a session: the history entry is
-		// the record and a card on her root's transcript the notification, so it
-		// arrives without waiting on any model's turn. A message from that root's
-		// own model already shows as its hub tool call.
+		// The operator's delivery belongs to the root transcript, never its model.
 		if (ref.kind === "operator") {
-			const root = ircRelayRoot(this.#registry, ref.id);
-			if (root && (opts.groupDelivery || message.from !== root.id)) this.#showOnUi(root, message);
+			const owner = this.#registry.rootOf(ref.id);
+			const root = owner ?? this.#registry.get(MAIN_AGENT_ID);
+			if (root) {
+				const ownGroupPost = opts.groupDelivery === true && message.from === root.id && message.groupText !== undefined;
+				const display = !ownGroupPost && (opts.groupDelivery === true || message.from !== root.id);
+				if (fanout && owner?.session) {
+					let legs = fanout.operators.get(owner.id);
+					if (!legs) fanout.operators.set(owner.id, (legs = []));
+					legs.push({ root: owner, message, display });
+				} else if (display) {
+					this.#showOnUi(root, message);
+				}
+				if (ownGroupPost) {
+					// The send result owns the outbound card, including its operator recipient.
+					this.#showOnUi(root, message, false);
+				}
+			}
 			return { to: message.to, outcome: "injected" };
 		}
 		// Advisor/read-only refs are observability-only transcripts, never messageable peers.
@@ -613,11 +663,17 @@ export class IrcBus implements IrcBusApi {
 			}
 		}
 
+		const root = fanout?.operators.size ? this.#registry.rootOf(message.to) : undefined;
+		const operatorLegs = root && fanout?.operators.get(root.id);
+		// A child's model receives only its own leg; the shared endpoints are display metadata.
+		if (operatorLegs) message.deliveredRecipientIds = [message.to, ...operatorLegs.map(leg => leg.message.to)];
+
 		// A pending bus wait from the recipient consumes the message directly
 		// and never hits the inbox; the `wait` tool hands it to its own session,
 		// which injects it as a user turn.
 		const waiter = this.#takeMatchingWaiter(message);
 		if (waiter) {
+			if (operatorLegs && root?.id === message.to) fanout?.attached.set(message.to, message);
 			waiter.resolve(message);
 			if (!opts?.suppressRelay) this.#relayToMainUi(message);
 			return { to: message.to, outcome: revived ? "revived" : "injected" };
@@ -630,6 +686,7 @@ export class IrcBus implements IrcBusApi {
 
 		try {
 			const delivery = await session.deliverIrcMessage(message);
+			if (operatorLegs && root?.id === message.to) fanout?.attached.set(message.to, message);
 			if (!opts?.suppressRelay) this.#relayToMainUi(message);
 			return { to: message.to, outcome: revived ? "revived" : delivery };
 		} catch (error) {
@@ -807,25 +864,31 @@ export class IrcBus implements IrcBusApi {
 	}
 
 	/**
-	 * `irc:relay` observation of `message` on `root`'s UI; never persisted.
-	 * `display` puts it on the main screen: only the operator's own copy is.
+	 * `irc:relay` observation of `message` on `root`'s UI. Only the operator's
+	 * own inbound copy is displayed and persisted.
 	 */
-	#showOnUi(root: AgentRef, message: IrcMessage, display = true): void {
+	#showOnUi(root: AgentRef, message: IrcMessage, display = true, attached?: IrcMessage): void {
 		const session = root.session;
 		if (!session) return;
+		const delivery = attached ?? message;
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:relay",
 			content: `[IRC \`${message.from}\` → \`${message.to}\`]\n\n${message.body}`,
+			excludeFromContext: true,
 			display,
 			details: {
 				from: message.from,
 				to: message.to,
+				id: message.id,
 				body: message.body,
+				...(message.replyTo ? { replyTo: message.replyTo } : {}),
+				...(message.progress ? { progress: true } : {}),
 				...(message.broadcast ? { broadcast: true } : {}),
 				...(message.group ? { group: message.group } : {}),
 				...(message.groupText !== undefined ? { groupText: message.groupText } : {}),
-				...(message.sharedGroups ? { sharedGroups: message.sharedGroups } : {}),
+				...(delivery.sharedGroups ? { sharedGroups: delivery.sharedGroups } : {}),
+				...(delivery.deliveredRecipientIds ? { deliveredRecipientIds: delivery.deliveredRecipientIds } : {}),
 				...(message.fanoutId ? { fanoutId: message.fanoutId } : {}),
 			},
 			attribution: "agent",

@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -163,13 +163,13 @@ describe("EventController message_start (user role)", () => {
 	});
 });
 
-function createIrcMessage(timestamp: number): CustomMessage<{ from: string; message: string }> {
+function createIrcMessage(timestamp: number): CustomMessage {
 	return {
 		role: "custom",
 		customType: "irc:incoming",
 		content: "Ready",
 		display: true,
-		details: { from: "0-Main", message: `Ready ${timestamp}` },
+		details: { from: "0-Main", to: "Attached", message: `Ready ${timestamp}` },
 		timestamp,
 	};
 }
@@ -214,6 +214,9 @@ describe("EventController IRC messages", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 
 		expect(chatContainer.children).toHaveLength(2);
+		expect(Bun.stripANSI(chatContainer.children[0]!.render(80)[0]!)).toContain(
+			`⇠ Agent 0-Main ${theme.nav.selected} Attached`,
+		);
 		// One requestRender from the IRC handler mounting the block. The blanket
 		// pre-render that `handleEvent` used to fire before every dispatch was
 		// removed in #4353 (it doubled the paint rate during streaming and did no
@@ -252,7 +255,7 @@ describe("EventController IRC messages", () => {
 		expect(chatContainer.children).toHaveLength(2);
 	});
 
-	it("shows one group send once, keeping the leg delivered to this session over a leg observed on its way to another member", async () => {
+	it("names both actual recipients exactly once regardless of which fanout leg arrives first", async () => {
 		const text = "Compare findings.";
 		const body = `Scout sent this to group council, which you are part of.\n\n${text}`;
 		const group = { broadcast: true, group: "council", groupText: text, fanoutId: "f1" };
@@ -261,6 +264,7 @@ describe("EventController IRC messages", () => {
 			customType: "irc:relay",
 			content: body,
 			display: true,
+			excludeFromContext: true,
 			details: { from: "Scout", to: "Operator", body, ...group },
 			timestamp: 10,
 		};
@@ -269,7 +273,7 @@ describe("EventController IRC messages", () => {
 			customType: "irc:incoming",
 			content: body,
 			display: true,
-			details: { from: "Scout", message: body, ...group },
+			details: { from: "Scout", to: "Attached", message: body, ...group },
 			timestamp: 11,
 		};
 		for (const order of [
@@ -284,8 +288,8 @@ describe("EventController IRC messages", () => {
 			const rendered = Bun.stripANSI(chatContainer.children[0]!.render(80).join("\n"));
 			expect(rendered).toContain("#council");
 			expect(rendered).toContain(text);
-			// The delivered leg has no recipient to name; the observed one named the operator.
-			expect(rendered).not.toContain("Operator");
+			expect(rendered).toContain(`⇠ Both Scout ${theme.nav.selected} Attached, Operator`);
+			expect(rendered.split(text)).toHaveLength(2);
 		}
 	});
 });
@@ -309,7 +313,7 @@ function createOperatorNotice(
 function createOperatorContext() {
 	const ctx = createInteractiveModeContext({ ircOperatorId: "Operator" });
 	const { chatContainer } = ctx;
-	// A still-running tool, as in createIrcContext: cards under it stay in the live region.
+	// Operator deliveries must file above a still-running tool just like agent deliveries.
 	const runningTool = {
 		render: () => ["running tool"],
 		invalidate: () => {},
@@ -322,17 +326,17 @@ function createOperatorContext() {
 	return { ctx, chatContainer, runningTool, rendered, requestRender: ctx.ui.requestRender };
 }
 
-describe("EventController IRC notifications to the operator", () => {
+describe("EventController IRC deliveries to the operator", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
-	it("shows a message addressed to her as a short card that retires after ten seconds, while a message delivered to the agent stays", async () => {
+	it("shows the full operator delivery and keeps both addressed messages above ongoing work", async () => {
 		vi.useFakeTimers();
-		const { ctx, chatContainer, rendered, requestRender } = createOperatorContext();
+		const { ctx, chatContainer, rendered, requestRender, runningTool } = createOperatorContext();
 		const controller = new EventController(ctx);
-		const lines = Array.from({ length: 6 }, (_, index) => `line ${index + 1}`).join("\n");
+		const lines = Array.from({ length: 6 }, (_, index) => `line ${index + 1}`).join("\n\n");
 		const notice = createOperatorNotice(1, { body: lines });
 
 		await controller.handleEvent({ type: "irc_message", message: createIrcMessage(2) });
@@ -340,23 +344,16 @@ describe("EventController IRC notifications to the operator", () => {
 
 		expect(chatContainer.children).toHaveLength(3);
 		const card = rendered().find(text => text.includes("line 1"));
-		// A preview, not the message: she reads the whole of it in the IRC viewer.
-		expect(card).toContain("Scout");
-		expect(card).toContain("Operator");
-		expect(card).not.toContain("line 6");
+		expect(card).toContain(`⇠ You Scout ${theme.nav.selected} Operator`);
+		expect(card).toContain("line 6");
+		expect(chatContainer.children[2]).toBe(runningTool);
 		expect(requestRender).toHaveBeenCalledTimes(2);
 
-		vi.advanceTimersByTime(9_999);
-		expect(chatContainer.children).toHaveLength(3);
-
-		vi.advanceTimersByTime(1);
-		expect(chatContainer.children).toHaveLength(2);
-		expect(rendered().some(text => text.includes("line 1"))).toBe(false);
-		expect(rendered().some(text => text.includes("Ready 2"))).toBe(true);
-		expect(requestRender).toHaveBeenCalledTimes(3);
-
 		vi.advanceTimersByTime(60_000);
-		expect(chatContainer.children).toHaveLength(2);
+		expect(chatContainer.children).toHaveLength(3);
+		expect(rendered().some(text => text.includes("line 1"))).toBe(true);
+		expect(rendered().some(text => text.includes("Ready 2"))).toBe(true);
+		expect(requestRender).toHaveBeenCalledTimes(2);
 	});
 
 	it("names the group on the card for her leg of a group send, without the heading her agents' models read", async () => {
@@ -371,11 +368,12 @@ describe("EventController IRC notifications to the operator", () => {
 		});
 
 		const card = rendered().find(row => row.includes(text));
+		expect(card).toContain(`⇠ You Scout ${theme.nav.selected} Operator`);
 		expect(card).toContain("#council");
 		expect(card).not.toContain("sent this to group");
 	});
 
-	it("evicts the oldest notification beyond four at once", async () => {
+	it("keeps all operator deliveries in a burst, without a cap", async () => {
 		vi.useFakeTimers();
 		const { ctx, chatContainer, rendered } = createOperatorContext();
 		const controller = new EventController(ctx);
@@ -384,15 +382,11 @@ describe("EventController IRC notifications to the operator", () => {
 			await controller.handleEvent({ type: "irc_message", message: createOperatorNotice(100 + i) });
 		}
 
-		// The running block and four cards: the fifth notification evicted the first.
-		expect(chatContainer.children).toHaveLength(5);
+		expect(chatContainer.children).toHaveLength(6);
 		const text = rendered().join("\n");
-		expect(text).not.toContain("Decision 100");
-		for (let i = 1; i < 5; i++) expect(text).toContain(`Decision ${100 + i}`);
-
-		// The evicted card's timer is gone with it: the other four retire together, once.
-		vi.advanceTimersByTime(10_000);
-		expect(chatContainer.children).toHaveLength(1);
+		for (let i = 0; i < 5; i++) expect(text).toContain(`Decision ${100 + i}`);
+		vi.advanceTimersByTime(60_000);
+		expect(chatContainer.children).toHaveLength(6);
 	});
 
 	it("never shows a message between two other agents on the main screen", async () => {
@@ -407,18 +401,5 @@ describe("EventController IRC notifications to the operator", () => {
 
 		expect(chatContainer.children).toHaveLength(1);
 		expect(requestRender).not.toHaveBeenCalled();
-	});
-
-	it("clears pending notification timers on dispose", async () => {
-		vi.useFakeTimers();
-		const { ctx, chatContainer, requestRender } = createOperatorContext();
-		const controller = new EventController(ctx);
-
-		await controller.handleEvent({ type: "irc_message", message: createOperatorNotice(4) });
-		controller.dispose();
-		vi.advanceTimersByTime(10_000);
-
-		expect(chatContainer.children).toHaveLength(2);
-		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 });

@@ -1,6 +1,6 @@
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Agent, AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
@@ -252,12 +252,13 @@ export class IrcBridge {
 				},
 				{ cwd: this.#host.sessionManager.getCwd() },
 			),
-			// The parent steer becomes the transcript card when consumed; keep this
-			// observation available to listeners without also painting a live card.
-			display: !parentSteer,
+			// Parent steers render when consumed; a self-addressed group post is shown by the send tool.
+			display: !parentSteer && !(msg.from === msg.to && msg.groupText !== undefined),
 			details: {
 				id: msg.id,
 				from: msg.from,
+				to: msg.to,
+				deliveredRecipientIds: msg.deliveredRecipientIds ?? [msg.to],
 				message: msg.body,
 				...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
 				...(msg.wakeRelay ? { wakeRelay: true } : {}),
@@ -318,8 +319,25 @@ export class IrcBridge {
 		return "woken";
 	}
 
-	/** Emits an IRC relay observation for rendering without persisting it. */
+	/** Record an operator delivery without giving it to the agent or scheduling a turn. */
 	emitRelayObservation(record: CustomMessage): void {
+		if (record.customType === "irc:relay" && record.display && record.excludeFromContext) {
+			const manager = this.#host.sessionManager;
+			setMessageEntryId(
+				record,
+				manager.appendCustomMessageEntry(
+					record.customType,
+					record.content,
+					record.display,
+					record.details,
+					record.attribution,
+					record.timestamp,
+					true,
+				),
+			);
+			// A DM can be the very first transcript entry, before any assistant turn.
+			void manager.ensureOnDisk().catch(error => logger.warn("Could not persist operator IRC delivery", { error }));
+		}
 		void this.#host.emitSessionEvent({ type: "irc_message", message: record });
 	}
 

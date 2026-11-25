@@ -84,7 +84,7 @@ export class IrcGroups {
 
 	constructor(
 		private readonly registry: AgentRegistryApi,
-		private readonly bus: Pick<IrcBusApi, "send">,
+		private readonly bus: Pick<IrcBusApi, "sendFanout">,
 		snapshot?: IrcGroupSnapshot,
 		private readonly persistence?: GroupPersistence,
 	) {
@@ -228,22 +228,18 @@ export class IrcGroups {
 				}).trimEnd();
 				const body = `${heading}\n\n${request.message}`;
 				const fanoutId = Snowflake.next();
-				const receipts = await Promise.all(
-					[...group.members].map(to =>
-						this.bus.send(
-							{
-								from: sender,
-								to,
-								body,
-								localOnly: true,
-								broadcast: true,
-								group: name,
-								groupText: request.message,
-								fanoutId,
-							},
-							{ suppressRelay: true, broadcast: true, groupDelivery: true },
-						),
-					),
+				const receipts = await this.bus.sendFanout(
+					[...group.members].map(to => ({
+						from: sender,
+						to,
+						body,
+						localOnly: true,
+						broadcast: true,
+						group: name,
+						groupText: request.message,
+						fanoutId,
+					})),
+					{ suppressRelay: true, broadcast: true, groupDelivery: true },
 				);
 				const failed = receipts.filter(receipt => receipt.outcome === "failed");
 				const delivered = receipts.length - failed.length;
@@ -315,12 +311,10 @@ export class IrcGroups {
 		if (!added.length) return { text: `No new members added to IRC group ${name}.` };
 		if (create) this.#groups.set(name, group);
 		const notice = renderPromptAsset("system/irc-group-added.md", addedTemplate, { group: name }).trimEnd();
-		// One notice per added member; a UI that sees several of them shows it once.
-		const fanoutId = added.length > 1 ? Snowflake.next() : undefined;
-		const notices = added.map(to => this.#notice(sender, to, name, notice, fanoutId));
+		const notices = this.#notices(sender, added, name, notice);
 		this.#resize(name, group);
 		this.#save();
-		await Promise.all(notices);
+		await notices;
 		return { text: `${create ? "Created" : "Updated"} IRC group ${name}; added ${added.join(", ")}.` };
 	}
 
@@ -338,7 +332,7 @@ export class IrcGroups {
 				group: name,
 				minutes: IRC_SINGLE_MEMBER_MINUTES,
 			}).trimEnd();
-			void this.#notice(member!, member!, name, notice);
+			void this.#notices(member!, [member!], name, notice);
 		}
 	}
 
@@ -351,15 +345,18 @@ export class IrcGroups {
 		group.timer.unref?.();
 	}
 
-	async #notice(from: string, to: string, group: string, body: string, fanoutId?: string): Promise<void> {
+	async #notices(from: string, recipients: string[], group: string, body: string): Promise<void> {
+		const fanoutId = recipients.length > 1 ? Snowflake.next() : undefined;
 		try {
-			const receipt = await this.bus.send(
-				{ from, to, body, localOnly: true, broadcast: true, group, ...(fanoutId ? { fanoutId } : {}) },
+			const receipts = await this.bus.sendFanout(
+				recipients.map(to => ({ from, to, body, localOnly: true, broadcast: true, group, fanoutId })),
 				{ suppressRelay: true, groupDelivery: true },
 			);
-			if (receipt.outcome === "failed") logger.debug("IRC group notice not delivered", { to, error: receipt.error });
+			for (const { to, outcome, error } of receipts) {
+				if (outcome === "failed") logger.debug("IRC group notice not delivered", { to, error });
+			}
 		} catch (error) {
-			logger.debug("IRC group notice not delivered", { to, error: String(error) });
+			logger.debug("IRC group notices not delivered", { recipients, error: String(error) });
 		}
 	}
 }

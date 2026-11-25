@@ -69,6 +69,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		const reason = params.reason?.trim() || undefined;
 		const replyTo = params.replyTo?.trim() ? params.replyTo : undefined;
 		const progress = params.progress === true || undefined;
+		const timestamp = Date.now();
 		const result = (text: string, isError = false, receipts?: IrcDeliveryReceipt[]): AgentToolResult<IrcDetails> => ({
 			content: [{ type: "text", text }],
 			details: { op, receipts },
@@ -98,20 +99,13 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 					[...targets].map(id => executeSend(deps, { to: id, message, replyTo, progress })),
 				);
 				const receipts = sends.flatMap(send => send.details?.receipts ?? []);
-				const peerRecipients =
-					registry.get(senderId)?.kind === "main"
-						? receipts
-								.filter(
-									receipt => receipt.outcome !== "failed" && registry.get(receipt.to)?.kind !== "operator",
-								)
-								.map(receipt => receipt.to)
-						: [];
+				const recipients = receipts.filter(receipt => receipt.outcome !== "failed").map(receipt => receipt.to);
 				return {
 					content: sends.flatMap(send => send.content),
 					details: {
 						op,
 						receipts,
-						...(peerRecipients.length > 0 ? { outgoing: { from: senderId, to: peerRecipients } } : {}),
+						...(recipients.length > 0 ? { outgoing: { from: senderId, to: recipients, timestamp } } : {}),
 					},
 					isError: sends.every(send => send.isError === true),
 				};
@@ -141,6 +135,22 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 				break;
 		}
 		const response = await IrcBus.global().group(senderId, request);
+		if (request.op === "send" && !response.isError) {
+			const recipients = response.receipts
+				?.filter(receipt => receipt.outcome !== "failed")
+				.map(receipt => receipt.to);
+			if (recipients?.length) {
+				return {
+					content: [{ type: "text", text: response.text }],
+					details: {
+						op,
+						receipts: response.receipts,
+						outgoing: { from: senderId, to: recipients, group: request.group, timestamp },
+					},
+					isError: false,
+				};
+			}
+		}
 		return result(response.text, response.isError, response.receipts);
 	}
 }

@@ -7,7 +7,7 @@ import { Text, TUI } from "@oh-my-pi/pi-tui";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
 import type { CustomMessage } from "@oh-my-pi/pi-tui/chat/messages";
 import type { TranscriptEntryLike } from "@oh-my-pi/pi-tui/chat/transcript-entry";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { VirtualTerminal } from "../../../../tui/test/virtual-terminal";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
@@ -109,7 +109,10 @@ describe("IRC tool activity visibility", () => {
 		}
 	});
 	it("shows a parent steer as an IRC card in the live transcript even when tool activity is hidden", () => {
-		const ctx = createInteractiveModeContext({ settings: Settings.isolated() });
+		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated(),
+			session: { getAgentId: () => "Builder" },
+		});
 		const helpers = new UiHelpers(ctx);
 		const body = "Please check the build";
 		const steer: UserMessage = {
@@ -132,7 +135,16 @@ describe("IRC tool activity visibility", () => {
 			});
 			expect(card).toMatchObject({
 				k: "card",
-				p: { role: "omp.irc.incoming", head: [{ t: expect.stringContaining("Main") }] },
+				p: {
+					role: "omp.irc.incoming",
+					head: [
+						{ t: "⇠ Agent " },
+						{ t: "Main" },
+						{ t: ` ${theme.nav.selected} ` },
+						{ t: "Builder" },
+						{ t: expect.stringMatching(/\d{2}:\d{2}:\d{2}/) },
+					],
+				},
 			});
 			expect(card?.c).toContainEqual(expect.objectContaining({ k: "md", p: { text: body } }));
 		} finally {

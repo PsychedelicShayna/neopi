@@ -53,22 +53,22 @@ export async function executeSend(
 	const relayRootId = ircRelayRoot(registry, senderId)?.id;
 	const suppressRelay = isBroadcast && relayRootId !== undefined && targets.includes(relayRootId);
 	const fanoutId = isBroadcast ? Snowflake.next() : undefined;
-	const receipts = await Promise.all(
-		targets.map(target =>
-			bus.send(
+	const send = {
+		from: senderId,
+		body: message,
+		replyTo,
+		localOnly: !params.remote,
+		...(params.progress === true ? { progress: true } : {}),
+	};
+	const receipts = isBroadcast
+		? await bus.sendFanout(
+				targets.map(to => ({ ...send, to, broadcast: true, fanoutId })),
 				{
-					from: senderId,
-					to: target,
-					body: message,
-					replyTo,
-					localOnly: !params.remote,
-					...(fanoutId ? { broadcast: true, fanoutId } : {}),
-					...(params.progress === true ? { progress: true } : {}),
+					suppressRelay,
+					broadcast: true,
 				},
-				{ suppressRelay, broadcast: isBroadcast },
-			),
-		),
-	);
+			)
+		: [await bus.send({ ...send, to })];
 	const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
 	let text: string;
 	if (isBroadcast) {

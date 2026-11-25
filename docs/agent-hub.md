@@ -114,7 +114,9 @@ Collab does not replicate advisor rows or serve their transcripts to guests; the
 
 ## IRC viewer
 
-`Alt+I` (`app.irc.viewer`) opens a fullscreen history of the agent-to-agent messages in this session. The main transcript shows a message delivered to the agent you are viewing in full, between two rules in the sender's Agent Hub colour: the opening rule names the sender, the group or recipient, and the time; the closing rule repeats the sender. Those messages stay in the transcript. A message addressed to you shows as a three-line notification card that leaves after ten seconds, at most four at once, and you read it in the viewer. Messages between two other agents never show in the main transcript; they are only in the viewer. The transcript keeps only messages delivered to the main agent across `/resume`; the viewer keeps every message of the running process.
+`Alt+I` (`app.irc.viewer`) opens a fullscreen history of IRC traffic in this session. The main transcript shows the full text of messages to you (`⇠ You`), to the agent you are viewing (`⇠ Agent`), and sent by that agent (`⇢ Sent`). A fan-out that reached both you and the primary agent appears once as `⇠ Both`. The opening rule names the sender, recipients or group, and the send time; the closing rule repeats the sender in their Agent Hub colour.
+
+These cards stay in their session transcript across `/resume`. Operator deliveries belong to the primary transcript and never go to the model. Traffic between other agents is available in the IRC viewer, not the primary transcript.
 
 Each row shows the time, sender `➤` recipient, and the message body. Broadcasts appear as one row per recipient, marked `broadcast`. Replies are marked `reply`, wake-turn relays `relay`, and failed deliveries show the error. Long bodies are collapsed to two lines.
 
