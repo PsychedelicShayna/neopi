@@ -32,14 +32,14 @@ app.history.search: []
 | `app.navigation.dismiss` | `Esc` | Leave the current view or Vim mode; does not cancel active work |
 | `app.agent.menu` | `Ctrl+D` | Open the Agent Menu from an empty composer, or force exit once teardown is committed |
 | `tui.editor.deleteCharForward` | `Delete`, `Ctrl+D` | Delete the character forward (`Ctrl+D` opens the Agent Menu from an empty composer) |
-| `tui.editor.redo` | `Alt+U` | Redo an undone edit in Vim Normal mode |
+| `tui.editor.redo` | `Ctrl+R`, `Alt+U` | Redo an undone edit in Vim Normal mode |
 | `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
 | `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
 | `app.model.selectTemporary`  | `Alt+P`                                                               | Open the session-only model picker (`/model`): Big Pickle by default, or Small picker via `models.sessionPicker` |
 | `app.model.select`           | `Alt+M`                                                               | Open the role-management hub (`/roles`)                                                                                                                                                |
 | `app.settings.open`          | `Alt+S`                                                               | Open Settings without changing the draft |
 | `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
-| `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
+| `app.history.search` | `Ctrl+H` | Search prompt history. Kitty and xterm modifyOtherKeys can distinguish `Ctrl+H` from Backspace. If your terminal sends the same byte for both, Backspace keeps editing the draft; remap this action to an unused key. |
 | `app.navigation.back`        | `Ctrl+O`                                                              | Return to the previously visited menu (with its state) or the conversation; see [Menu navigation](#menu-navigation)                                                                 |
 | `app.navigation.forward`     | `Ctrl+I`, `Alt+O`                                                     | Go forward in the menu history. `Ctrl+I` arrives distinct from `Tab` only under the Kitty keyboard protocol or xterm modifyOtherKeys; `Alt+O` works everywhere                       |
 | `app.tools.expand`           | `Alt+E`                                                               | Toggle tool-output expansion                                                                                                                                                         |
@@ -116,7 +116,7 @@ Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focu
 
 While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Search fields consume navigation keys while editing: arrows and page keys do not move the list. Enter confirms the pattern and returns to navigation without activating a result; Esc clears the search and returns to the unfiltered list. Press `/` again to edit the retained pattern. Rename and form fields keep their own submit/cancel behavior. Esc on a nested page returns to its parent; Esc at the root closes.
 
-The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
+The prompt-history search (`Ctrl+H` by default) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
 
 With Vim mode enabled, advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing in either mode. Inside nested configuration pages, Vim `h` returns to the parent and `l` opens a navigable child, never an action; ordinary arrow/context keys and Esc remain available without Vim mode.
 
@@ -197,7 +197,7 @@ For live English transcription, select **Nemotron 0.6B (live streaming, English)
 
 Press `Ctrl+C` to clear an unsent composer draft, then `Up` to recall it. Older drafts and submitted prompts share the existing Up/Down navigation. Recalled drafts remain editable and are never sent until you submit them.
 
-Cleared drafts preserve whitespace, collapsed pastes, and image attachments in the current editor's bounded history (100 entries). They are not written to persistent prompt history and do not appear in `Ctrl+R` search. Closing the process discards these canceled drafts; the separate save-on-exit behavior still applies to text currently in the composer. This is not a per-agent stash: history follows the editor, including when Agent Hub changes focus.
+Cleared drafts preserve whitespace, collapsed pastes, and image attachments in the current editor's bounded history (100 entries). They are not written to persistent prompt history and do not appear in prompt-history search. Closing the process discards these canceled drafts; the separate save-on-exit behavior still applies to text currently in the composer. This is not a per-agent stash: history follows the editor, including when Agent Hub changes focus.
 
 The existing double-`Ctrl+C` exit behavior is unchanged. Empty clears do not add history entries.
 
@@ -282,6 +282,6 @@ A selection that would cut through an attachment placeholder such as `[Image #1,
 - **Replace mode** (`R`) → switch to Normal mode, stepping back onto the last overwritten character.
 - **Normal mode with nothing pending** → dismiss autocomplete or a view, or run the configured double-Escape navigation with an empty editor. The draft is preserved.
 
-`Ctrl+C` cancels active work in either mode without clearing the draft. `u` undoes an edit and `Alt+U` redoes it in Normal mode.
+`Ctrl+C` cancels active work in either mode without clearing the draft. In Normal mode, `u` undoes an edit and `Ctrl+R` or `Alt+U` redoes it. Neither redo chord is bound by default in Insert mode or with Vim mode off.
 
-Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Such a key also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.
+Vim keys do not shadow app chords: `Enter` still submits from Normal mode, and `Tab` and app shortcuts keep their normal behavior. A shortcut also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.

@@ -1636,7 +1636,7 @@ export class SelectorController {
 	showHistorySearch(): void {
 		const historyStorage = this.ctx.historyStorage;
 		if (!historyStorage) return;
-		// Ctrl+R also opens over hook/ask prompts that replace the composer in the
+		// History search also opens over hook/ask prompts that replace the composer in the
 		// editor slot; the pick belongs to that prompt, not the hidden composer.
 		const focused = this.ctx.ui.getFocused();
 		const target = focused instanceof HookEditorComponent ? focused : this.ctx.editor;
