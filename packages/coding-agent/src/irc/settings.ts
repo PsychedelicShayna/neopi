@@ -68,7 +68,7 @@ export const cfgIrcOperatorNotifyDefault = register({
 		tab: "tasks",
 		group: "Messaging",
 		label: "Default IRC Room Notifications",
-		description: "Choose which room messages show a card and can become the next Alt+I destination unless overridden in the room",
+		description: "Choose which room messages can become the next Alt+I destination or Alt+R quick-reply target unless overridden in the room",
 		options: [
 			{ value: "all", label: "Every message" },
 			{ value: "mentions", label: "Mentions only" },

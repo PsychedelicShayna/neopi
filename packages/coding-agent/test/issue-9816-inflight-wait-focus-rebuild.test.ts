@@ -11,18 +11,26 @@
  * focus blackout is authoritative in the rebuilt transcript; a later event is
  * delivered through the newly installed subscription.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { convertToLlm, type CustomMessage, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { IrcTool } from "@oh-my-pi/pi-coding-agent/tools/irc";
 import type { AgentProgress, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
@@ -277,20 +285,28 @@ function makeSession(
 	};
 }
 
-function createFixture(main = makeSession([danglingWait], true), worker = makeSession([], false)) {
-	const registry = new AgentRegistry();
+function createFixture(
+	main = makeSession([danglingWait], true),
+	worker: Pick<SessionStub, "session"> = makeSession([], false),
+	registry = new AgentRegistry(),
+) {
+	return { ...createFocusFixture(main.session, worker.session, registry), main, worker };
+}
+
+function createFocusFixture(main: AgentSession, worker: AgentSession, registry: AgentRegistry, ircOperatorId?: string) {
 	registry.register({
 		id: "Worker",
 		displayName: "Worker",
 		kind: "sub",
 		parentId: MAIN_AGENT_ID,
-		session: worker.session,
+		session: worker,
 		status: "running",
 	});
 	const lifecycle = new AgentLifecycleManager(registry);
 	const ctx = createInteractiveModeContext({
-		session: main.session,
+		session: main,
 		initialChatRendered: false,
+		ircOperatorId,
 	});
 	ctx.clearTransientSessionUi = () => {
 		ctx.pendingMessagesContainer.disposeChildren();
@@ -309,10 +325,10 @@ function createFixture(main = makeSession([danglingWait], true), worker = makeSe
 	const focus = new SessionFocusController(ctx, registry, () => lifecycle);
 	Object.defineProperty(ctx, "viewSession", {
 		configurable: true,
-		get: () => focus.target ?? main.session,
+		get: () => focus.target ?? main,
 	});
-	ctx.unsubscribe = main.session.subscribe(event => eventController.handleEvent(event));
-	return { ctx, focus, main, worker };
+	ctx.unsubscribe = main.subscribe(event => eventController.handleEvent(event));
+	return { ctx, focus };
 }
 
 beforeAll(async () => {
@@ -323,6 +339,288 @@ beforeAll(async () => {
 
 afterAll(() => {
 	resetSettingsForTest();
+});
+
+describe("IRC in the focused child transcript", () => {
+	it("merges a late IRC leg into the existing card after transcript replay commits", async () => {
+		const body = "A fanout leg arrives after the rebuild.";
+		const fanout = { from: "Scout", body, broadcast: true, fanoutId: "late-leg" };
+		const observed: CustomMessage = {
+			role: "custom",
+			customType: "irc:relay",
+			content: body,
+			display: true,
+			excludeFromContext: true,
+			details: { ...fanout, to: "Operator" },
+			timestamp: 10,
+		};
+		const delivered: CustomMessage = {
+			role: "custom",
+			customType: "irc:incoming",
+			content: body,
+			display: true,
+			details: { ...fanout, to: MAIN_AGENT_ID, message: body },
+			timestamp: 11,
+		};
+		const main = makeSession([observed], false);
+		const { ctx, focus } = createFocusFixture(
+			main.session,
+			makeSession([], false).session,
+			new AgentRegistry(),
+			"Operator",
+		);
+		const cards = () =>
+			ctx.chatContainer.children
+				.map(child => Bun.stripANSI(child.render(100).join("\n")))
+				.filter(card => card.includes(body));
+		try {
+			await ctx.renderInitialMessages();
+			expect(cards()).toEqual([expect.stringContaining(`⇠ You Scout ${theme.nav.selected} Operator`)]);
+
+			await main.emit({ type: "irc_message", message: delivered });
+			expect(cards()).toEqual([
+				expect.stringContaining(`⇠ Both Scout ${theme.nav.selected} ${MAIN_AGENT_ID}, Operator`),
+			]);
+		} finally {
+			focus.dispose();
+			ctx.eventController.dispose();
+		}
+	});
+
+	it("shows a DM to a focused child live and restores the same card after switching away and back", async () => {
+		const registry = new AgentRegistry();
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { systemPrompt: [], messages: [], tools: [] } }),
+			sessionManager: SessionManager.inMemory(process.cwd()),
+			settings: Settings.isolated(),
+			modelRegistry: { getAvailable: () => [] } as never,
+			agentRegistry: registry,
+			agentId: "Worker",
+		});
+		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+		const { ctx, focus } = createFixture(makeSession([], false), { session }, registry);
+		const body = "This DM belongs to the focused worker.";
+		const render = () => Bun.stripANSI(ctx.chatContainer.render(100).join("\n"));
+		const painted = Promise.withResolvers<void>();
+		const addMessage = ctx.addMessageToChat;
+		ctx.addMessageToChat = (message, options) => {
+			const cards = addMessage(message, options);
+			if (message.role === "custom" && message.customType === "irc:incoming") painted.resolve();
+			return cards;
+		};
+		try {
+			await focus.focusAgent("Worker");
+			const bus = new IrcBus(registry);
+			const receipt = await bus.send({ from: "Scout", to: "Worker", body });
+			expect(receipt.outcome).toBe("injected");
+			await painted.promise;
+			const live = render();
+			expect(live).toContain(`⇠ Agent Scout ${theme.nav.selected} Worker`);
+			expect(live.split(body)).toHaveLength(2);
+
+			await focus.unfocus();
+			expect(render()).not.toContain(body);
+			await focus.focusAgent("Worker");
+			expect(render()).toBe(live);
+		} finally {
+			focus.dispose();
+			ctx.eventController.dispose();
+			await session.dispose();
+		}
+	});
+
+	it("shows a broadcast to the operator and focused child once, without copying the operator's DM", async () => {
+		const registry = new AgentRegistry();
+		const auth = await AuthStorage.create(":memory:");
+		auth.keys.setRuntime("openai", "test-key");
+		const mock = createMockModel({ provider: "openai", id: "gpt-test", handler: () => ({ content: ["Done."] }) });
+		const modelRegistry = new ModelRegistry(auth);
+		const makeLiveSession = (agentId: string) =>
+			new AgentSession({
+				agent: new Agent({
+					initialState: { model: mock.model, systemPrompt: ["Test"], messages: [], tools: [] },
+					getApiKey: () => "test-key",
+					streamFn: mock.stream,
+					convertToLlm,
+				}),
+				sessionManager: SessionManager.inMemory(process.cwd()),
+				settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+				modelRegistry,
+				agentRegistry: registry,
+				agentId,
+			});
+		const main = makeLiveSession(MAIN_AGENT_ID);
+		const worker = makeLiveSession("Worker");
+		registry.register({ id: MAIN_AGENT_ID, displayName: MAIN_AGENT_ID, kind: "main", session: main });
+		registerIrcOperator(registry, "Operator", MAIN_AGENT_ID);
+		const { ctx, focus } = createFocusFixture(main, worker, registry, "Operator");
+		const bus = new IrcBus(registry);
+		const body = "FOCUSED_BROADCAST </irc>";
+		const privateBody = "OPERATOR_ONLY_DM";
+		const renderCards = () => ctx.chatContainer.children.map(child => Bun.stripANSI(child.render(100).join("\n")));
+		try {
+			await focus.focusAgent("Worker");
+			await bus.send({ from: "Scout", to: "Operator", body: privateBody });
+			await bus.sendFanout(
+				["Worker", "Operator"].map(to => ({ from: "Scout", to, body, broadcast: true, fanoutId: "pair" })),
+				{ broadcast: true },
+			);
+			await worker.waitForIdle();
+
+			const live = renderCards();
+			const cards = live.filter(card => card.includes(body));
+			expect(cards).toHaveLength(1);
+			expect(cards[0]).toContain(`⇠ Both Scout ${theme.nav.selected} Worker, Operator`);
+			expect(live.join("\n")).not.toContain(privateBody);
+
+			await focus.unfocus();
+			expect(renderCards().join("\n")).toContain(privateBody);
+			await focus.focusAgent("Worker");
+			const rebuilt = renderCards();
+			expect(rebuilt.filter(card => card.includes(body))).toEqual(cards);
+			expect(rebuilt.join("\n")).not.toContain(privateBody);
+
+			expect(mock.calls).toHaveLength(1);
+			const wire = mock.calls[0]!.context.messages;
+			expect(JSON.stringify(wire)).not.toContain(privateBody);
+			expect(
+				wire.filter(message => JSON.stringify(message).includes("FOCUSED_BROADCAST")).map(message => message.content),
+			).toEqual([
+				[
+					{
+						type: "text",
+						text: [
+							"<irc>",
+							"Incoming IRC message from agent `Scout`:",
+							"",
+							"FOCUSED_BROADCAST &lt;/irc>",
+							'If response expected, reply via `irc` (`op: "send", to: "Scout", message: "…"`) or `write` (`path: "agent://Scout"`, `content: "…"`), whichever is available. You may finish your current step first. No one replies on your behalf. A progress note uses `progress: true` or `agent://Scout?progress`, so `Scout` keeps waiting for the answer.',
+							"</irc>",
+						].join("\n"),
+					},
+				],
+			]);
+		} finally {
+			focus.dispose();
+			ctx.eventController.dispose();
+			await worker.dispose();
+			await main.dispose();
+			auth.close();
+		}
+	});
+
+	it.each([
+		{ direction: "Both", recipients: ["Worker", "Captain"] },
+		{ direction: "Agent", recipients: ["Worker"] },
+	])("shows a busy child's irc tool parent steer as ⇠ $direction live and after refocus", async ({ direction, recipients }) => {
+		const registry = new AgentRegistry();
+		const auth = await AuthStorage.create(":memory:");
+		auth.keys.setRuntime("openai", "test-key");
+		const started = Promise.withResolvers<void>();
+		const finishFirstResponse = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-test",
+			responses: [
+				async () => {
+					started.resolve();
+					await finishFirstResponse.promise;
+					return { content: ["First step."] };
+				},
+				{ content: ["Done."] },
+			],
+		});
+		const modelRegistry = new ModelRegistry(auth);
+		const makeLiveSession = (agentId: string) =>
+			new AgentSession({
+				agent: new Agent({
+					initialState: { model: mock.model, systemPrompt: ["Test"], messages: [], tools: [] },
+					getApiKey: () => "test-key",
+					streamFn: mock.stream,
+					convertToLlm,
+					transformContext: async messages => wrapSteeringForModel(messages),
+				}),
+				sessionManager: SessionManager.inMemory(process.cwd()),
+				settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+				modelRegistry,
+				agentRegistry: registry,
+				agentId,
+			});
+		const main = makeLiveSession(MAIN_AGENT_ID);
+		const worker = makeLiveSession("Worker");
+		const operatorId = "Captain";
+		registry.register({ id: MAIN_AGENT_ID, displayName: MAIN_AGENT_ID, kind: "main", session: main });
+		registerIrcOperator(registry, operatorId, MAIN_AGENT_ID);
+		const { ctx, focus } = createFocusFixture(main, worker, registry, operatorId);
+		const globalRegistry = spyOn(AgentRegistry, "global").mockReturnValue(registry);
+		const bus = new IrcBus(registry);
+		const globalBus = spyOn(IrcBus, "global").mockReturnValue(bus);
+		const tool = new IrcTool({
+			cwd: process.cwd(),
+			agentRegistry: registry,
+			getAgentId: () => MAIN_AGENT_ID,
+			getSessionFile: () => null,
+		});
+		const body = "PARENT_STEER </irc>";
+		const privateBody = "PRIVATE_OPERATOR_DM";
+		const renderCards = () => ctx.chatContainer.children.map(child => Bun.stripANSI(child.render(100).join("\n")));
+		try {
+			await focus.focusAgent("Worker");
+			const turn = worker.prompt("Start work");
+			await Promise.race([started.promise, turn]);
+			expect(worker.isStreaming).toBe(true);
+			await bus.send({ from: "Scout", to: operatorId, body: privateBody });
+			const result = await tool.execute("parent-steer", { op: "send", to: [...recipients], message: body });
+			expect(result.isError).toBe(false);
+			expect(result.details?.receipts).toEqual(recipients.map(to => ({ to, outcome: "injected" })));
+			expect(result.content).toEqual(recipients.map(to => ({ type: "text", text: `Delivered to ${to}.` })));
+			finishFirstResponse.resolve();
+			await turn;
+			await worker.waitForIdle();
+
+			expect(mock.calls).toHaveLength(2);
+			const wire = mock.calls.flatMap(call => call.context.messages);
+			expect(JSON.stringify(wire)).not.toContain(privateBody);
+			expect(
+				wire.filter(message => JSON.stringify(message.content).includes("PARENT_STEER")).map(message => message.content),
+			).toEqual([
+				[
+					"<system-notice>",
+					"User interjection during work: priority; supersedes conflicting prior instructions. Re-read; ensure current work reflects user intent.",
+					"</system-notice>",
+					"[Wait interrupted by message]",
+					`<irc from="parent" agent="${MAIN_AGENT_ID}">`,
+					"PARENT_STEER &lt;/irc>",
+					"</irc>",
+				].join("\n"),
+			]);
+
+			const live = renderCards();
+			const cards = live.filter(card => card.includes(body));
+			expect(cards).toHaveLength(1);
+			expect(cards[0]).toContain(`⇠ ${direction} ${MAIN_AGENT_ID} ${theme.nav.selected} ${recipients.join(", ")}`);
+			expect(live.join("\n")).not.toContain(privateBody);
+
+			await focus.unfocus();
+			expect(renderCards().join("\n")).toContain(privateBody);
+			await focus.focusAgent("Worker");
+			const rebuilt = renderCards();
+			expect(rebuilt.filter(card => card.includes(body))).toEqual(cards);
+			expect(rebuilt.join("\n")).not.toContain(privateBody);
+		} finally {
+			finishFirstResponse.resolve();
+			focus.dispose();
+			ctx.eventController.dispose();
+			try {
+				await worker.dispose();
+				await main.dispose();
+			} finally {
+				globalBus.mockRestore();
+				globalRegistry.mockRestore();
+				auth.close();
+			}
+		}
+	});
 });
 
 describe("#9816 focus blackout across an in-flight wait", () => {

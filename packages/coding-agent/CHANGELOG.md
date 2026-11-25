@@ -16,7 +16,7 @@
 ### Added
 
 - Alt+I opens the IRC client for rooms, DMs and pinned conversations; Alt+Shift+I jumps to Traffic. Persisted sessions resume their recent IRC history in the same NeoPi profile ([#926](https://github.com/PsychedelicShayna/neopi/issues/926)).
-- Choose which messages in each IRC room or DM show a card and draw Alt+I there, without losing unread counts. You can also turn off incoming DMs in Settings ([#930](https://github.com/PsychedelicShayna/neopi/issues/930)).
+- Choose which IRC room messages and DMs draw Alt+I there or become the Alt+R quick-reply target, without hiding delivered messages from the transcript or losing unread counts. You can also turn off incoming DMs in Settings ([#930](https://github.com/PsychedelicShayna/neopi/issues/930)).
 - Alt+R opens the IRC reply composer for the latest message that notified you or the selected IRC message; retrying the last failed turn now uses Ctrl+Alt+R.
 - Open the exact IRC message in the client by clicking its row in the Alt+T side panel or pressing Enter on it.
 - Parents can set a running subagent's priority tier to fast, ultra, or off over ctl/RPC ([#915](https://github.com/PsychedelicShayna/neopi/issues/915)).
@@ -206,6 +206,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- The `irc` tool shows a direct message sent to both a busy child and the operator as one `⇠ Both` card; late deliveries still join the existing card after a transcript rebuild.
 - Main’s outgoing IRC DMs show their full text in the transcript, including after `--continue` ([#926](https://github.com/PsychedelicShayna/neopi/issues/926)).
 - Sending `/irc` to a subagent while Main is idle no longer freezes the terminal ([#898](https://github.com/PsychedelicShayna/neopi/issues/898)).
 - IRC direct and group messages no longer fail when unused fields contain empty values ([#883](https://github.com/PsychedelicShayna/neopi/issues/883)).
@@ -367,7 +368,7 @@
 - In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` opens a filter popup that also holds the sort direction; `?` shows help, and navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
 - In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` edits the filter row; navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
 - Drag the docked side panel's divider (with `tui.mouse` on) to resize it; the width is remembered, and right-clicking the divider returns to the automatic width.
-- IRC messages delivered to an agent stay in its transcript in full instead of showing a three-line card that disappeared after ten seconds: each sits between two rules in the sender's Agent Hub colour, with the group it was sent to, the groups you share, and the time sent. A group send appears once, and the group shown is the one it had when sent, also after `/resume`. A message addressed to you still shows as a three-line notification card that leaves after ten seconds; read it in the IRC viewer.
+- The IRC transcript keeps full messages to you or your attached agent across `/resume`, shows a shared delivery once with both names even when focused on a child agent, and presents your agent's sent DMs and group posts as outgoing cards.
 - Messages between two other agents no longer show in the main transcript; read them in the IRC viewer. **IRC Cards in Transcript** is now **Announce Agent-to-Agent IRC** and only decides whether live voice, event sounds and connected clients hear that traffic.
 - Read `model://astra` or another partial model name to list matching available models and variants while still seeing the best match in `selected`. Exact IDs still return one result ([#923](https://github.com/PsychedelicShayna/neopi/issues/923)).
 - Run `/notice`, `/goal`, `/todo`, `/tree`, `/branch`, and other session commands against the focused subagent. Shared, destructive, or unknown actions ask first with Cancel selected; commands that still run on Main or affect the whole harness name their target ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).

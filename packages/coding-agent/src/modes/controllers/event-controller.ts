@@ -75,7 +75,6 @@ import {
 	assistantUsageIsBilled,
 	splitAssistantMessageToolTimeline,
 } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
-import { isOperatorIrcNotice } from "@oh-my-pi/pi-tui/chat/irc-message";
 import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { ComposerPredictionController } from "./composer-prediction-controller";
 import { StreamingRevealController } from "./streaming-reveal";
@@ -96,15 +95,6 @@ import { cfgReadToolResultPreview } from "../../tools/settings";
 import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
-
-/** How long a notification card for a message addressed to the operator stays in the transcript. */
-const OPERATOR_IRC_NOTICE_TTL_MS = 10_000;
-/**
- * Notification cards allowed at once. They sit below a still-running block,
- * where rows cannot commit to scrollback, so each one inflates the live region:
- * the oldest retires as soon as a new one would exceed the cap.
- */
-const MAX_OPERATOR_IRC_NOTICES = 4;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
@@ -228,13 +218,6 @@ export class EventController {
 	// reads collapses into one group even across completion boundaries.
 	#lastVisibleBlockCount = 0;
 	#renderedCustomMessages = new Set<string>();
-	/**
-	 * Fan-outs (a group send, an `all` broadcast) already shown, by fan-out id. One
-	 * send reaches this UI once per recipient it observes; it shows once. The
-	 * value is the block of an observed leg, which the leg delivered to this
-	 * session replaces when it arrives: that leg is the one the transcript keeps.
-	 */
-	#shownIrcFanouts = new Map<string, Component | undefined>();
 	#lastIntent: string | undefined = undefined;
 	/** Returned calls parked for their background job's frames ({@link parksAsBackground}). */
 	#backgroundCallIds = new Set<string>();
@@ -313,9 +296,6 @@ export class EventController {
 	#retryPending = false;
 	/** Next-message prediction offered as composer ghost text after a completed turn. */
 	readonly composerPrediction: ComposerPredictionController;
-	#ircNoticeTimers = new Map<string, NodeJS.Timeout>();
-	/** Notification cards not yet retired, oldest first, with the transcript components each one added. */
-	#liveIrcNotices = new Map<string, Component[]>();
 	// Most recent `wait` tool block whose result still had every watched job
 	// running. Kept un-finalized (live) so the next `wait` call displaces it —
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
@@ -573,7 +553,6 @@ export class EventController {
 		this.#toolArgsReveal.stop();
 		this.composerPrediction.cancel();
 		this.#setTerminalProgress(false);
-		this.#clearIrcNotices();
 	}
 
 	#resetReadGroup(): void {
@@ -1129,7 +1108,6 @@ export class EventController {
 		this.#resetReadGroup();
 		this.#lastVisibleBlockCount = 0;
 		this.#renderedCustomMessages.clear();
-		this.#shownIrcFanouts.clear();
 		this.#lastIntent = undefined;
 		this.#toolTimelineComponents.clear();
 		this.#streamedToolCallIdByIndex.clear();
@@ -1153,7 +1131,6 @@ export class EventController {
 		this.#restorePinnedErrorInline = true;
 		this.#retryPending = this.ctx.viewSession.isRetrying;
 		this.composerPrediction.cancel();
-		this.#clearIrcNotices();
 		this.#displaceablePollComponent = undefined;
 		this.#displaceableTodoComponent = undefined;
 		this.#lastTtsrNotification = undefined;
@@ -1341,7 +1318,7 @@ export class EventController {
 				// Streaming is excluded so live-turn rendering is unchanged.
 				return;
 			}
-			const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
+			const signature = this.#customMessageKey(event.message);
 			if (this.#renderedCustomMessages.has(signature)) {
 				return;
 			}
@@ -1487,108 +1464,27 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	/**
-	 * A peer's message stays in the transcript whole: nothing retires or caps it.
-	 * A message addressed to the operator is the exception. It is a notification
-	 * that she reads in the IRC viewer, so it shows as a short card that retires
-	 * (see {@link #scheduleIrcNoticeExpiry}).
-	 */
+	#customMessageKey(message: { role: string; customType?: string; timestamp: number; details?: unknown }): string {
+		const { role, customType, timestamp, details } = message;
+		const id =
+			(customType === "irc:incoming" || customType === "irc:relay") && isRecord(details) ? details.id : undefined;
+		return `${role}:${customType}:${typeof id === "string" ? id : timestamp}`;
+	}
+
+	/** File actual deliveries as permanent transcript rows. */
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
 		if (!event.message.display) return;
-		const operatorId = this.ctx.ircOperatorId;
-		const operatorCopy = operatorId !== undefined && isOperatorIrcNotice(event.message, operatorId);
-		if (operatorCopy && !this.ctx.ircClient?.relayNotifies(event.message.details)) return;
-		const details: unknown = event.message.details;
-		const messageId = isRecord(details) && typeof details.messageId === "string" ? details.messageId : undefined;
-		const signature = `${event.message.role}:${event.message.customType}:${messageId ?? event.message.timestamp}`;
-		if (this.#renderedCustomMessages.has(signature)) {
+		if (event.message.excludeFromContext && !this.ctx.initialChatRendered && !this.ctx.viewSession.isStreaming) {
+			// The operator leg was persisted before the event; the initial replay owns its paint.
 			return;
 		}
+		const signature = this.#customMessageKey(event.message);
+		if (this.#renderedCustomMessages.has(signature)) return;
 		this.#renderedCustomMessages.add(signature);
-		const fanoutId = isRecord(details) && typeof details.fanoutId === "string" ? details.fanoutId : undefined;
-		// The leg delivered to this session is the one its transcript stores; legs
-		// observed on their way to others are display-only copies of the same send.
-		const delivered = event.message.customType === "irc:incoming";
-		if (fanoutId !== undefined && this.#shownIrcFanouts.has(fanoutId)) {
-			const observed = this.#shownIrcFanouts.get(fanoutId);
-			// Shown already. Only the delivered leg takes the place of an observed
-			// copy, and only while that copy can still leave the transcript.
-			if (!delivered || observed === undefined || !this.ctx.chatContainer.canRemoveBlock(observed)) return;
-			this.ctx.chatContainer.removeChild(observed);
-			this.#forgetIrcNotice(observed);
-		}
 		this.#resetReadGroup();
-		const components = this.ctx.addMessageToChat(event.message);
-		const [block] = components;
-		if (fanoutId !== undefined) this.#shownIrcFanouts.set(fanoutId, delivered ? undefined : block);
-		if (operatorCopy) {
-			// Left under any running block: there its rows cannot reach scrollback,
-			// so the card can still be taken away when it retires.
-			this.#scheduleIrcNoticeExpiry(signature, components);
-			this.#enforceIrcNoticeCap(signature);
-		} else if (block) {
-			this.#fileAboveRunningBlocks(block);
-		}
+		const [block] = this.ctx.addMessageToChat(event.message);
+		if (block) this.#fileAboveRunningBlocks(block);
 		this.ctx.ui.requestRender();
-	}
-
-	#scheduleIrcNoticeExpiry(signature: string, components: Component[]): void {
-		if (components.length === 0 || this.#ircNoticeTimers.has(signature)) return;
-		const timer = setTimeout(() => {
-			this.#ircNoticeTimers.delete(signature);
-			this.#retireIrcNotice(signature);
-		}, OPERATOR_IRC_NOTICE_TTL_MS);
-		timer.unref?.();
-		this.#ircNoticeTimers.set(signature, timer);
-		this.#liveIrcNotices.set(signature, components);
-	}
-
-	/**
-	 * Remove an expired or evicted notification card only while its transcript
-	 * entry can still leave. Rows already in scrollback stay as history.
-	 */
-	#retireIrcNotice(signature: string): void {
-		const components = this.#liveIrcNotices.get(signature);
-		this.#liveIrcNotices.delete(signature);
-		if (!components) return;
-		let removed = false;
-		for (const component of components) {
-			if (!this.ctx.chatContainer.canRemoveBlock(component)) continue;
-			this.ctx.chatContainer.removeChild(component);
-			removed = true;
-		}
-		if (removed) this.ctx.ui.requestRender();
-	}
-
-	/** Evict the oldest notification cards beyond {@link MAX_OPERATOR_IRC_NOTICES}. */
-	#enforceIrcNoticeCap(latestSignature: string): void {
-		while (this.#liveIrcNotices.size > MAX_OPERATOR_IRC_NOTICES) {
-			const oldest = this.#liveIrcNotices.keys().next().value;
-			if (oldest === undefined || oldest === latestSignature) return;
-			this.#clearIrcNoticeTimer(oldest);
-			this.#retireIrcNotice(oldest);
-		}
-	}
-
-	/** Stop tracking a notification card that something else already removed. */
-	#forgetIrcNotice(component: Component): void {
-		for (const [signature, components] of this.#liveIrcNotices) {
-			if (!components.includes(component)) continue;
-			this.#clearIrcNoticeTimer(signature);
-			this.#liveIrcNotices.delete(signature);
-			return;
-		}
-	}
-
-	#clearIrcNoticeTimer(signature: string): void {
-		clearTimeout(this.#ircNoticeTimers.get(signature));
-		this.#ircNoticeTimers.delete(signature);
-	}
-
-	#clearIrcNotices(): void {
-		for (const timer of this.#ircNoticeTimers.values()) clearTimeout(timer);
-		this.#ircNoticeTimers.clear();
-		this.#liveIrcNotices.clear();
 	}
 
 	/**

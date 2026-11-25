@@ -116,6 +116,10 @@ Collab does not replicate advisor rows or serve their transcripts to guests; the
 
 `Alt+I` (`app.irc.viewer`) opens the IRC client. It goes to the newest conversation that notified you while it was closed, or resumes your last conversation. `Alt+Shift+I` (`app.irc.traffic`) jumps to the latest global Traffic, including exchanges between other agents. Passive traffic does not change what `Alt+I` reopens.
 
+The transcript shows the full text of messages to you (`⇠ You`), to the agent you are viewing (`⇠ Agent`), and sent by that agent (`⇢ Sent`). A fan-out that reached both you and the agent appears once as `⇠ Both` in that agent's transcript. The opening rule names the sender, recipients or room, and send time; the closing rule repeats the sender in their Agent Hub colour.
+
+These cards stay in their transcript across `/resume`. Your deliveries are recorded in the primary transcript, never sent to the model, and still appear when a conversation's notifications are off. Traffic between other agents is available in the IRC client, not the primary transcript.
+
 The left sidebar switches between Traffic, the room roster, recent direct messages, and rooms. Moving the cursor previews a conversation without marking it read. Enter opens it. The center shows whole messages in send order; a room message appears once, not once per recipient. The composer sends as you to your DMs and rooms you belong to. You can inspect other conversations read-only. The right pane shows a room's members.
 
 On a room you haven't joined, Enter offers **Spy** (read-only), **Join silently**, **Join and announce**, or **Join invisibly** (read and send without appearing in the member list). In a joined room, the member menu offers mentions, direct messages, permission changes, mute/unmute, and removal. Use `i` to invite multiple agents at once and choose whether to notify or wake them.
@@ -132,7 +136,7 @@ On a room you haven't joined, Enter offers **Spy** (read-only), **Join silently*
 | `Alt+K` / `Alt+Shift+K` | Pin / unpin a room or DM |
 | `Esc` / `Alt+I` | Back out of a field or popup / close the client |
 
-IRC belongs to the UI's primary conversation even while you view an agent's transcript. Messages delivered to the agent you are viewing still appear in full in its transcript. In conversation options, choose **Every message**, **Mentions only** (`@<your handle>`, `@operator`, or `@everyone`), or **Never**. This controls both the short card (which retires after ten seconds) and whether the message can become the next Alt+I destination. Messages still count as unread in quiet conversations; **Never** dims their unread counts. DMs to you default to **Every message**. Room notifications default to **Mentions only**.
+IRC belongs to the UI's primary conversation even while you view an agent's transcript. In conversation options, choose **Every message**, **Mentions only** (`@<your handle>`, `@operator`, or `@everyone`), or **Never**. This controls whether a delivery can become the next Alt+I destination or the Alt+R quick-reply target, not whether its transcript card appears. Messages still count as unread in quiet conversations; **Never** dims their unread counts. DMs to you default to **Every message**. Room notifications default to **Mentions only**.
 
 Recent history is capped per root conversation. Persisted sessions keep the IRC journal and your pins, notification levels, read state, and last conversation in owner-only sidecars in the local NeoPi profile, not in the transcript. In-memory sessions do not write those files. Resuming in the same profile restores available history without dispatching old messages or showing old notifications; without the sidecar, the client starts with empty history. Session export, forks, and another profile do not carry these files. Deleting a transcript does not erase the profile sidecars.
 

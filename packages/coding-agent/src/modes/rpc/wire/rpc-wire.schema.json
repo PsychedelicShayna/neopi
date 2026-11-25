@@ -1587,6 +1587,17 @@
 				"body": {
 					"type": "string",
 					"description": "Message body as the parent wrote it."
+				},
+				"to": {
+					"type": "string",
+					"description": "Receiving child agent id."
+				},
+				"deliveredRecipientIds": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Delivered endpoints visible in the child's transcript."
 				}
 			},
 			"required": [

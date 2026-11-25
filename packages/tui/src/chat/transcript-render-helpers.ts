@@ -6,6 +6,7 @@
  */
 import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { UserMessage } from "@oh-my-pi/pi-ai";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type Component } from "../tui";
 import { formatBytes, formatCount, formatDuration } from "@oh-my-pi/pi-utils";
@@ -20,7 +21,7 @@ import {
 	shouldRenderAbortReason,
 } from "./messages";
 import { createIrcMessageCard } from "../tools/wait";
-import { IrcMessageBlock, type IrcMessageDetails, ircMessageView, isOperatorIrcNotice } from "./irc-message";
+import { IrcMessageBlock, type IrcMessageDetails, ircMessageView } from "./irc-message";
 import {
 	formatArtifactErrorNotice,
 	formatMinimizedMeta,
@@ -273,41 +274,51 @@ export function buildAsyncNotifyBlock(message: CustomOrHookMessage): ToolActivit
 	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
 }
 
-/**
- * Render an IRC coordination custom message. A peer's message (`irc:incoming`)
- * and one observed between two others (`irc:relay`) show whole, as an
- * {@link IrcMessageBlock}; `irc:autoreply` and `irc:workpool` stay status cards,
- * for which `getExpanded` supplies the live expanded-state getter. A message
- * addressed to the operator `operatorId` is a notification: a short preview
- * card, since she reads the message itself in the IRC viewer.
- */
+export interface IrcTranscriptOptions {
+	operatorId?: string;
+	agentId?: string;
+	fanouts?: Map<string, WeakRef<IrcMessageBlock>>;
+}
+
+/** An actual delivery is a full message; autoreplies and workpool events stay status cards. */
 export function buildIrcMessageCard(
 	message: CustomOrHookMessage,
 	getExpanded: () => boolean,
-	operatorId?: string,
-): Component {
-	if (isOperatorIrcNotice(message, operatorId)) {
-		const details = (message as CustomMessage<IrcMessageDetails>).details;
-		const group = typeof details?.groupText === "string" ? details.group?.trim() : undefined;
-		return new ToolActivityContainer(
-			createIrcMessageCard(
-				{
-					kind: "relay",
-					from: details?.from,
-					to: group ? `#${group}` : details?.to,
-					body: details?.groupText ?? details?.body,
-					replyTo: details?.replyTo,
-					timestamp: message.timestamp,
-				},
-				getExpanded,
-				theme,
-			),
-		);
-	}
+	{ operatorId, agentId, fanouts }: IrcTranscriptOptions = {},
+): Component | undefined {
 	if (message.customType === "irc:incoming" || message.customType === "irc:relay") {
 		const details = (message as CustomMessage<IrcMessageDetails>).details;
-		const kind = message.customType === "irc:incoming" ? "incoming" : "relay";
-		return new ToolActivityContainer(new IrcMessageBlock(ircMessageView(kind, details, message.timestamp)));
+		const recipientIds = Array.isArray(details?.deliveredRecipientIds) ? details.deliveredRecipientIds : undefined;
+		const inbound = message.customType === "irc:incoming";
+		const operator =
+			(message.role === "custom" && message.excludeFromContext === true) ||
+			(operatorId !== undefined && details?.to === operatorId);
+		const kind =
+			(inbound || operator) && (recipientIds?.length ?? 0) > 1
+				? "both"
+				: inbound
+					? "incoming"
+					: operator
+						? "operator"
+						: "relay";
+		const view = ircMessageView(kind, details, message.timestamp);
+		if (inbound) view.to ??= agentId;
+		const id =
+			kind === "relay"
+				? undefined
+				: typeof details?.fanoutId === "string"
+					? `fanout:${details.fanoutId}`
+					: typeof details?.id === "string"
+						? `message:${details.id}`
+						: undefined;
+		const existing = id === undefined ? undefined : fanouts?.get(id);
+		if (existing) {
+			existing.deref()?.mergeDelivery(view);
+			return undefined;
+		}
+		const block = new IrcMessageBlock(view);
+		if (id !== undefined) fanouts?.set(id, new WeakRef(block));
+		return new ToolActivityContainer(block);
 	}
 	const details = (
 		message as CustomMessage<{
@@ -338,8 +349,15 @@ export function buildIrcMessageCard(
 }
 
 /** Present a consumed parent steer as an IRC message without interpreting its model-facing envelope. */
-export function buildParentIrcMessageCard(parentIrc: { from: string; body: string }, timestamp: number): Component {
-	return new IrcMessageBlock({ kind: "incoming", from: parentIrc.from, body: parentIrc.body, timestamp });
+export function buildParentIrcMessageCard(
+	parentIrc: NonNullable<UserMessage["parentIrc"]>,
+	timestamp: number,
+	to?: string,
+): Component {
+	const view = ircMessageView("incoming", parentIrc, timestamp);
+	if (Array.isArray(view.to) && view.to.length > 1) view.kind = "both";
+	view.to ??= to;
+	return new IrcMessageBlock(view);
 }
 
 /**

@@ -783,6 +783,10 @@ pub struct ParentIrc {
 	pub from: Option<String>,
 	/// Message body as the parent wrote it.
 	pub body: Option<String>,
+	/// Receiving child agent id.
+	pub to: Option<String>,
+	/// Delivered endpoints visible in the child's transcript.
+	pub delivered_recipient_ids: Option<Vec<String>>,
 	/// Every key not decoded into a declared field.
 	pub extra: Map<String, Value>,
 }
@@ -796,10 +800,18 @@ impl Serialize for ParentIrc {
 		if let Some(value) = &self.body {
 			map.serialize_entry("body", value)?;
 		}
+		if let Some(value) = &self.to {
+			map.serialize_entry("to", value)?;
+		}
+		if let Some(value) = &self.delivered_recipient_ids {
+			map.serialize_entry("deliveredRecipientIds", value)?;
+		}
 		for (key, value) in &self.extra {
 			match key.as_str() {
 				"from" if self.from.is_some() => continue,
 				"body" if self.body.is_some() => continue,
+				"to" if self.to.is_some() => continue,
+				"deliveredRecipientIds" if self.delivered_recipient_ids.is_some() => continue,
 				_ => {}
 			}
 			map.serialize_entry(key, value)?;
@@ -814,6 +826,8 @@ impl<'de> Deserialize<'de> for ParentIrc {
 		Ok(Self {
 			from: take(&mut extra, "from"),
 			body: take(&mut extra, "body"),
+			to: take(&mut extra, "to"),
+			delivered_recipient_ids: take(&mut extra, "deliveredRecipientIds"),
 			extra,
 		})
 	}

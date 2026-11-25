@@ -366,7 +366,7 @@ class Usage(TypedDict):
     credits: NotRequired[JsonObject]
 
 
-ParentIrc = TypedDict("ParentIrc", {"from": "str", "body": "str"})
+ParentIrc = TypedDict("ParentIrc", {"from": "str", "body": "str", "to": "NotRequired[str]", "deliveredRecipientIds": "NotRequired[list[str]]"})
 """Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope."""
 
 

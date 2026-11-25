@@ -301,6 +301,7 @@ function serveLifecycle(bridge: MainSessionBridge): RpcServe<AgentLifecycleManag
 function serveBus(bridge: MainSessionBridge): RpcServe<IrcBus, IrcBusProtocol> {
 	return {
 		send: (bus, msg, opts) => bus.send(msg, opts),
+		sendFanout: (bus, messages, opts) => bus.sendFanout(messages, opts),
 		group: (bus, sender, request) => bus.group(sender, request),
 		filterBroadcastTargets: (bus, sender, targets) => bus.filterBroadcastTargets(sender, targets),
 		sentSince: (bus, from, to, sinceTs) => bus.sentSince(from, to, sinceTs),

@@ -39,20 +39,23 @@ describe("IrcMessageBlock", () => {
 		const block = new IrcMessageBlock({
 			kind: "incoming",
 			from: "IrcBlockScout",
+			to: "IrcBlockBuilder",
 			body: "first paragraph\n\nsecond paragraph",
 			timestamp: SENT_AT,
 		});
 		const rows = block.render(60);
 		const text = plain(rows);
 		const box = theme.boxRound;
-		expect(text[0]!.startsWith(`${box.topLeft}${box.horizontal} ${theme.symbol("tool.irc")} IrcBlockScout `)).toBe(
-			true,
-		);
+		expect(
+			text[0]!.startsWith(
+				`${box.topLeft}${box.horizontal} ⇠ Agent IrcBlockScout ${theme.nav.selected} IrcBlockBuilder `,
+			),
+		).toBe(true);
 		// Only the opening rule carries the envelope and the time sent.
 		expect(text[0]!.endsWith(" 14:02:11")).toBe(true);
 		const last = text[text.length - 1]!;
 		expect(last.startsWith(`${box.bottomLeft}${box.horizontal} IrcBlockScout `)).toBe(true);
-		expect(last).not.toContain(theme.symbol("tool.irc"));
+		expect(last).not.toContain("⇠ Agent");
 		expect(last).not.toContain("14:02:11");
 		for (const row of [text[0]!, last]) expect(Bun.stringWidth(row)).toBe(60);
 		// Every row between them, blank ones included, starts with the sender's rail.
@@ -199,7 +202,7 @@ describe("IRC messages in a rebuilt transcript", () => {
 				builder.rebuild(entries);
 				expect(builder.container.children).toHaveLength(2);
 				stored.forEach((message, index) => {
-					const live = buildIrcMessageCard(message, () => false).render(90);
+					const live = buildIrcMessageCard(message, () => false)!.render(90);
 					expect(builder.container.children[index]!.render(90)).toEqual(live);
 				});
 			}

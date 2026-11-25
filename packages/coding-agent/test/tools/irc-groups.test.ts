@@ -341,9 +341,16 @@ describe("IRC namespaces", () => {
 		const c = peer("C");
 		const broadcast = await main.call({ op: "broadcast", message: "First" });
 		expect(broadcast.details?.receipts?.map(receipt => receipt.to)).toEqual(["Main", "A", "B", "Operator", "C"]);
+		expect(broadcast.details?.outgoing).toEqual({
+			from: "Main",
+			to: ["Main", "A", "B", "Operator", "C"],
+			group: "everyone",
+			timestamp: expect.any(Number),
+		});
 		expect(main.observations.map(message => message.content)).toEqual([
 			expect.stringContaining("Main sent this to group everyone"),
 		]);
+		expect(main.observations.map(message => message.display)).toEqual([false]);
 		await main.call({ op: "remove", group: "everyone", members: ["B", "C"] });
 		expect((await b.call({ op: "my_groups" })).content).toEqual([{ type: "text", text: "No IRC groups." }]);
 		await main.call({ op: "broadcast", message: "Second" });

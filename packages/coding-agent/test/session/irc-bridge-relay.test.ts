@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { Agent, AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -208,7 +208,16 @@ describe("IrcBridge broadcast legs reaching a streaming recipient", () => {
 			});
 			expect(card).toMatchObject({
 				k: "card",
-				p: { role: "omp.irc.incoming", head: [{ t: expect.stringContaining("Main") }] },
+				p: {
+					role: "omp.irc.incoming",
+					head: [
+						{ t: "⇠ Agent " },
+						{ t: "Main" },
+						{ t: ` ${theme.nav.selected} ` },
+						{ t: "Child" },
+						{ t: expect.stringMatching(/\d{2}:\d{2}:\d{2}$/) },
+					],
+				},
 			});
 			expect(card?.c).toContainEqual(expect.objectContaining({ k: "md", p: { text: "Review the parser" } }));
 		} finally {
@@ -251,7 +260,16 @@ describe("IrcBridge broadcast legs reaching a streaming recipient", () => {
 			});
 			expect(card).toMatchObject({
 				k: "card",
-				p: { role: "omp.irc.incoming", head: [{ t: expect.stringContaining("Main") }] },
+				p: {
+					role: "omp.irc.incoming",
+					head: [
+						{ t: "⇠ Agent " },
+						{ t: "Main" },
+						{ t: ` ${theme.nav.selected} ` },
+						{ t: "Child" },
+						{ t: expect.stringMatching(/\d{2}:\d{2}:\d{2}$/) },
+					],
+				},
 			});
 			expect(card?.c).toContainEqual(expect.objectContaining({ k: "md", p: { text: body } }));
 		} finally {

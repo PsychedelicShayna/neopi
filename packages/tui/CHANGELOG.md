@@ -4,6 +4,7 @@
 
 ### Changed
 
+- IRC transcript cards distinguish messages to you, to your attached agent, to both of you, and sent by your agent. Each card shows the full message with its route and time, and addressed messages stay in the transcript after resume.
 - Retry the last failed turn with Ctrl+Alt+R instead of F5 or Alt+R.
 - Ctrl+R redoes edits in Vim Normal mode alongside Alt+U; prompt-history search moves to Ctrl+H on terminals that distinguish it from Backspace.
 - IRC messages in the transcript show the whole message, rendered as Markdown at full width, between an opening rule (sender, group or recipient, time) and a closing rule in the sender's Agent Hub colour, with a rail of that colour down the body.

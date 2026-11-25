@@ -97,6 +97,10 @@ export interface ParentIrc {
 	from: string;
 	/** Message body as the parent wrote it. */
 	body: string;
+	/** Receiving child agent id. */
+	to?: string;
+	/** Delivered endpoints visible in the child's transcript. */
+	deliveredRecipientIds?: string[];
 }
 
 export interface UserMessage {

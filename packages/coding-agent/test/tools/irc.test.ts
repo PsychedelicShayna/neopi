@@ -1,10 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { IRC_TRAFFIC_ID, ircRoomId } from "@oh-my-pi/pi-coding-agent/irc/client-model";
 import { executeSend } from "@oh-my-pi/pi-coding-agent/irc/messaging";
-import { registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
+import { OperatorIrcClient, registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
 import {
 	DEFAULT_IRC_HISTORY_MAX_ENTRIES,
 	setIrcHistoryMaxEntries,
@@ -13,8 +17,11 @@ import {
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, type AgentRegistryApi } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { IrcBridge, type IrcBridgeHost } from "@oh-my-pi/pi-coding-agent/session/irc-bridge";
-import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { convertToLlm, type CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { isTranscriptEntry } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { attachIrcWakeTurnMonitor } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -23,11 +30,12 @@ import { IrcTool } from "@oh-my-pi/pi-coding-agent/tools/irc";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
+import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
 type IrcWakeObserver = (records: AgentMessage[]) => ((error?: unknown) => void | Promise<void>) | undefined;
@@ -150,7 +158,8 @@ describe("IRC", () => {
 				const text = Bun.stripANSI(rows.join("\n"));
 				expect(text.split(opening)).toHaveLength(2);
 				expect(text.split(ending)).toHaveLength(2);
-				expect(text).toContain("Delivered to Peer.");
+				expect(text).toContain(`⇢ Sent Main ${theme.nav.selected} Peer`);
+				expect(text).not.toContain("Delivered to Peer.");
 			};
 			using temp = TempDir.createSync("irc-outgoing-");
 			const sessionManager = SessionManager.create(temp.path(), temp.path());
@@ -192,7 +201,8 @@ describe("IRC", () => {
 			}
 		});
 
-		it("does not treat Main-to-operator or peer-to-peer sends as outgoing Main bubbles", async () => {
+		it("records a send only on the sender's transcript, including a send to the operator", async () => {
+			const main = makeFakeSession();
 			for (const [id, parentId] of [
 				["Main", undefined],
 				["A", "Main"],
@@ -203,7 +213,7 @@ describe("IRC", () => {
 					displayName: id,
 					kind: parentId ? "sub" : "main",
 					parentId,
-					session: makeFakeSession().session,
+					session: id === "Main" ? main.session : makeFakeSession().session,
 				});
 			}
 			registerIrcOperator(registry, "Captain", "Main");
@@ -219,9 +229,201 @@ describe("IRC", () => {
 				});
 				const result = await tool.execute("not-outgoing-main", { op: "send", to, message: "ping" });
 				expect(result.isError).toBe(false);
-				expect(result.details?.outgoing).toBeUndefined();
+				expect(result.details?.outgoing).toEqual({ from, to: [to], timestamp: expect.any(Number) });
 			}
+			expect(main.relayed.filter(record => record.display)).toEqual([]);
 		});
+	});
+
+	describe("inbound transcript persistence and provider isolation", () => {
+		beforeAll(() => initTheme());
+
+		it.each(["direct", "both", "quiet room"] as const)(
+			"resumes an operator delivery without adding model input (%s)",
+			async delivery => {
+				const both = delivery === "both";
+				const quiet = delivery === "quiet room";
+				using temp = TempDir.createSync("irc-inbound-");
+				const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
+				auth.keys.setRuntime("openai", "test-key");
+				const mock = createMockModel({
+					provider: "openai",
+					id: "gpt-test",
+					handler: () => ({ content: ["Done."] }),
+				});
+				const makeSession = (manager: SessionManager) => {
+					const session = new AgentSession({
+						agent: new Agent({
+							initialState: {
+								model: mock.model,
+								messages: manager.buildSessionContext().messages,
+								systemPrompt: ["Test"],
+								tools: [],
+							},
+							getApiKey: () => "test-key",
+							streamFn: mock.stream,
+							convertToLlm,
+						}),
+						sessionManager: manager,
+						settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+						modelRegistry: new ModelRegistry(auth),
+						agentId: "Main",
+						agentRegistry: registry,
+					});
+					sessions.push(session);
+					return session;
+				};
+				const manager = SessionManager.create(temp.path(), temp.path());
+				const session = makeSession(manager);
+				const root = registry.register({ id: "Main", displayName: "Main", kind: "main", session });
+				registerIrcOperator(registry, "Captain", "Main");
+				const room = "council";
+				const operatorClient = quiet
+					? new OperatorIrcClient(root, session, {
+							operatorId: "Captain",
+							operatorName: "Captain",
+							agentDir: temp.path(),
+							requestRender() {},
+							reconcileOverlay() {},
+						})
+					: undefined;
+				const ctx = createInteractiveModeContext({ session, ircOperatorId: "Captain", ircClient: operatorClient });
+				const helpers = new UiHelpers(ctx);
+				ctx.addMessageToChat = (message, options) => helpers.addMessageToChat(message, options);
+				const controller = new EventController(ctx);
+				const observed: CustomMessage[] = [];
+				const unsubscribe = session.subscribe(event => {
+					if (event.type === "irc_message") {
+						observed.push(event.message);
+						return controller.handleEvent(event);
+					}
+				});
+				const body = both ? "BOTH_RECEIVED </irc>" : quiet ? "@Captain QUIET_ROOM_MESSAGE" : "OPERATOR_PRIVATE_DM";
+				try {
+					if (both) {
+						await bus.sendFanout(
+							["Captain", "Main"].map(to => ({
+								from: "Scout",
+								to,
+								body,
+								fanoutId: "pair",
+								broadcast: true,
+							})),
+							{ suppressRelay: true, broadcast: true },
+						);
+						await session.waitForIdle();
+						expect(mock.calls).toHaveLength(1);
+					} else if (operatorClient) {
+						registry.register({
+							id: "Scout",
+							displayName: "Scout",
+							kind: "sub",
+							parentId: root.id,
+							session: makeFakeSession().session,
+						});
+						await bus.group("Scout", { op: "create", group: room, members: ["Scout", "Captain"], notice: "silent" });
+						const conversationId = ircRoomId(room);
+						expect(await operatorClient.host.act({ kind: "notifications", conversationId, level: "none" })).toBeUndefined();
+						expect((await bus.group("Scout", { op: "send", group: room, message: body })).receipts).toContainEqual({
+							to: "Captain",
+							outcome: "injected",
+						});
+						expect(operatorClient.relayNotifies(observed[0]?.details)).toBe(false);
+						expect(operatorClient.model.latestNotification()).toBeUndefined();
+						expect(operatorClient.model.open()).toBe(IRC_TRAFFIC_ID);
+						expect(mock.calls).toHaveLength(0);
+					} else {
+						await bus.send({ from: "Scout", to: "Captain", body });
+						await session.waitForIdle();
+						expect(mock.calls).toHaveLength(0);
+					}
+
+					const live = ctx.chatContainer.children.map(child => child.render(100));
+					expect(live).toHaveLength(1);
+					expect(Bun.stripANSI(live[0]!.join("\n"))).toContain(
+						both
+							? `⇠ Both Scout ${theme.nav.selected} Main, Captain`
+							: `⇠ You Scout ${theme.nav.selected} Captain`,
+					);
+					if (quiet) {
+						const card = Bun.stripANSI(live[0]!.join("\n"));
+						expect(card).toContain("#council");
+						expect(card).toContain(body);
+					}
+					const file = manager.getSessionFile()!;
+					await manager.close();
+					const reopened = await SessionManager.open(file, undefined, undefined, { throwIfMissing: true });
+					const resumed = makeSession(reopened);
+					ctx.chatContainer.clear();
+					helpers.renderSessionContext(resumed.buildTranscriptSessionContext());
+					const rebuilt = ctx.chatContainer.children.map(child => child.render(100));
+					expect(rebuilt.filter(rows => Bun.stripANSI(rows[0] ?? "").includes("Scout"))).toEqual(live);
+
+					await resumed.prompt("Continue normally.");
+					await resumed.waitForIdle();
+					expect(mock.calls).toHaveLength(both ? 2 : 1);
+					const wire = mock.calls.at(-1)!.context.messages;
+					if (both) {
+						const agentLeg = observed.find(message => message.customType === "irc:incoming")!;
+						const expected = {
+							role: "user",
+							content: [
+								{
+									type: "text",
+									text: [
+										"<irc>",
+										"Incoming IRC message from agent `Scout`:",
+										"",
+										"BOTH_RECEIVED &lt;/irc>",
+										'If response expected, reply via `irc` (`op: "send", to: "Scout", message: "…"`) or `write` (`path: "agent://Scout"`, `content: "…"`), whichever is available. You may finish your current step first. No one replies on your behalf. A progress note uses `progress: true` or `agent://Scout?progress`, so `Scout` keeps waiting for the answer.',
+										"</irc>",
+									].join("\n"),
+								},
+							],
+							attribution: "agent",
+							timestamp: agentLeg.timestamp,
+						};
+						for (const call of mock.calls) {
+							const matching = call.context.messages.filter(message =>
+								JSON.stringify(message).includes("BOTH_RECEIVED"),
+							);
+							expect(matching.map(message => JSON.stringify(message))).toEqual([JSON.stringify(expected)]);
+						}
+					} else {
+						expect(JSON.stringify(wire)).not.toContain(body);
+					}
+				} finally {
+					operatorClient?.dispose();
+					unsubscribe();
+					controller.dispose();
+					for (const installed of sessions.splice(0)) await installed.dispose();
+					auth.close();
+				}
+			},
+		);
+	});
+
+	it("does not name a rejected agent leg as a recipient of the operator's delivery", async () => {
+		const main = makeFakeSession();
+		main.setError(new Error("agent did not accept"));
+		registry.register({ id: "Main", displayName: "Main", kind: "main", session: main.session });
+		registerIrcOperator(registry, "Captain", "Main");
+		const receipts = await bus.sendFanout(
+			["Main", "Captain"].map(to => ({
+				from: "Scout",
+				to,
+				body: "Only the operator receives this",
+				fanoutId: "partial",
+				broadcast: true,
+			})),
+		);
+		expect(receipts.map(receipt => [receipt.to, receipt.outcome])).toEqual([
+			["Main", "failed"],
+			["Captain", "injected"],
+		]);
+		expect(main.relayed).toHaveLength(1);
+		expect(main.relayed[0]?.details).toMatchObject({ to: "Captain", fanoutId: "partial" });
+		expect(main.relayed[0]?.details).not.toHaveProperty("deliveredRecipientIds");
 	});
 
 	describe("IrcBus", () => {
@@ -256,7 +458,13 @@ describe("IRC", () => {
 			await bus.send({ from: "0-A", to: "0-B", body: "sibling note" });
 
 			expect(main.relayed).toHaveLength(1);
-			expect(main.relayed[0]?.details).toEqual({ messageId: expect.any(String), from: "0-A", to: "0-B", body: "sibling note" });
+			expect(main.relayed[0]?.details).toEqual({
+				id: expect.any(String),
+				messageId: bus.history().find(entry => entry.message.body === "sibling note")?.message.id,
+				from: "0-A",
+				to: "0-B",
+				body: "sibling note",
+			});
 		});
 
 		it("puts only the operator's own copy on the main screen, never traffic between two other agents", async () => {
@@ -289,6 +497,23 @@ describe("IRC", () => {
 				outcome: "failed",
 				error: expect.stringContaining("disabled direct IRC messages"),
 			});
+			expect(rootObservation).not.toHaveBeenCalled();
+			const child = makeFakeSession();
+			registry.register({ id: "Child", displayName: "child", kind: "sub", parentId: "Main", session: child.session });
+			const tool = new IrcTool({
+				cwd: process.cwd(),
+				agentRegistry: registry,
+				getAgentId: () => "Main",
+				getSessionFile: () => null,
+			});
+			const batch = await tool.execute("send-batch", { op: "send", to: ["Child", "Captain"], message: "direct batch" });
+			expect(batch.isError).toBe(false);
+			expect(batch.details?.receipts).toEqual([
+				{ to: "Child", outcome: "injected" },
+				{ to: "Captain", outcome: "failed", error: "The operator has disabled direct IRC messages." },
+			]);
+			expect(child.delivered).toHaveLength(1);
+			expect(child.delivered[0]).not.toHaveProperty("deliveredRecipientIds");
 			expect(rootObservation).not.toHaveBeenCalled();
 			expect(
 				await bus.send(
@@ -1050,7 +1275,13 @@ describe("IRC", () => {
 				expect(main.delivered).toHaveLength(0);
 				// Addressed to her: shown even with peer relay cards turned off.
 				expect(main.relayed.map(record => record.details)).toEqual([
-					{ messageId: bus.history()[0]?.message.id, from: "0-Sub", to: "Captain", body: "need a decision" },
+					{
+						id: expect.any(String),
+						messageId: bus.history()[0]?.message.id,
+						from: "0-Sub",
+						to: "Captain",
+						body: "need a decision",
+					},
 				]);
 				expect(bus.history().map(entry => [entry.message.from, entry.message.to, entry.outcome])).toEqual([
 					["0-Sub", "Captain", "injected"],

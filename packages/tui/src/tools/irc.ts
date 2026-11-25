@@ -46,6 +46,8 @@ export interface IrcMessage {
 	sharedGroups?: string[];
 	/** Shared by every leg of one group send or `all` broadcast, so one UI shows that send once. */
 	fanoutId?: string;
+	/** Actual recipients on this leg's transcript: this agent and any operator attached to it. */
+	deliveredRecipientIds?: string[];
 }
 
 /** Delivery outcome for one peer recipient. */
@@ -59,6 +61,8 @@ export interface IrcDeliveryReceipt {
 export interface IrcOutgoingTranscript {
 	from: string;
 	to: string[];
+	group?: string;
+	timestamp?: number;
 }
 
 /**

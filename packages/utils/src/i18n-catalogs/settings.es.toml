@@ -994,7 +994,7 @@
 "settings.setting.irc.operator.directMessages.label" = "Recibir mensajes directos de IRC"
 "settings.setting.irc.operator.directMessages.description" = "Permite que los agentes te envíen mensajes directos de IRC aunque no compartáis una sala"
 "settings.setting.irc.operator.notifyDefault.label" = "Notificaciones predeterminadas de salas de IRC"
-"settings.setting.irc.operator.notifyDefault.description" = "Elige qué mensajes de sala muestran un aviso y pueden abrirse con Alt+I, salvo que la sala tenga su propia configuración"
+"settings.setting.irc.operator.notifyDefault.description" = "Elige qué mensajes de sala pueden ser el próximo destino de Alt+I o de la respuesta rápida de Alt+R, salvo que la sala tenga su propia configuración"
 "settings.setting.irc.operator.relayToMainTranscript.label" = "Anunciar IRC entre agentes"
 "settings.setting.irc.operator.relayToMainTranscript.description" = "Permite que la voz en vivo, los sonidos de eventos y los clientes conectados reciban los mensajes entre otros agentes. Esos mensajes nunca se muestran en la transcripción principal y siguen apareciendo en Tráfico de IRC"
 "settings.setting.irc.history.maxEntries.label" = "Tamaño del historial de IRC"

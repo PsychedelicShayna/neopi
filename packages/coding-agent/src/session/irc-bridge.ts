@@ -255,6 +255,7 @@ export class IrcBridge {
 		// harness envelope it is rendered into or open a forged one, e.g. a parent
 		// steer. `details.message` keeps the raw body for the transcript card and inbox.
 		const envelopeBody = escapeHarnessTags(msg.body);
+		const deliveredRecipientIds = msg.deliveredRecipientIds ?? [msg.to];
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -271,12 +272,13 @@ export class IrcBridge {
 				},
 				{ cwd: this.#host.sessionManager.getCwd() },
 			),
-			// The parent steer becomes the transcript card when consumed; keep this
-			// observation available to listeners without also painting a live card.
-			display: !parentSteer,
+			// Parent steers render when consumed; a self-addressed group post is shown by the send tool.
+			display: !parentSteer && !(msg.from === msg.to && msg.groupText !== undefined),
 			details: {
 				id: msg.id,
 				from: msg.from,
+				to: msg.to,
+				deliveredRecipientIds,
 				message: msg.body,
 				...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
 				...(msg.wakeRelay ? { wakeRelay: true } : {}),
@@ -309,7 +311,7 @@ export class IrcBridge {
 						{ from: msg.from, message: envelopeBody },
 						{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
 					),
-					parentIrc: { from: msg.from, body: msg.body },
+					parentIrc: { from: msg.from, body: msg.body, to: msg.to, deliveredRecipientIds },
 					attribution: "agent",
 					timestamp: msg.ts,
 					steering: true,
@@ -371,8 +373,25 @@ export class IrcBridge {
 		for (const record of pending) this.#appendWithoutTurn(record);
 	}
 
-	/** Emits an IRC relay observation for rendering without persisting it. */
+	/** Persist actual operator deliveries for display; other relay observations are transient. */
 	emitRelayObservation(record: CustomMessage): void {
+		if (record.customType === "irc:relay" && record.display && record.excludeFromContext) {
+			const manager = this.#host.sessionManager;
+			setMessageEntryId(
+				record,
+				manager.appendCustomMessageEntry(
+					record.customType,
+					record.content,
+					record.display,
+					record.details,
+					record.attribution,
+					record.timestamp,
+					true,
+				),
+			);
+			// A DM can be the very first transcript entry, before any assistant turn.
+			void manager.ensureOnDisk().catch(error => logger.warn("Could not persist operator IRC delivery", { error }));
+		}
 		void this.#host.emitSessionEvent({ type: "irc_message", message: record });
 	}
 

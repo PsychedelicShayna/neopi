@@ -249,7 +249,7 @@ export class IrcClientModel {
 		this.#emit();
 	}
 
-	/** The same addressed-message predicate drives live cards and the Alt+I target. */
+	/** Whether an addressed delivery can move the IRC client or become a quick-reply target. */
 	notifies({ message, outcome, broadcast }: NotificationEntry): boolean {
 		const operatorId = this.options.operatorId;
 		const { from, to, group } = message;

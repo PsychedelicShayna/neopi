@@ -16008,7 +16008,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#ircWakeHolds > 0 || this.#ircWakesAwaitingCompaction > 0 || this.#irc.hasPending();
 	}
 
-	/** Emits an IRC relay observation for UI rendering without persisting it. */
+	/** Emits an IRC observation, persisting only display-only deliveries to this session's operator. */
 	emitIrcRelayObservation(record: CustomMessage): void {
 		this.#irc.emitRelayObservation(record);
 	}

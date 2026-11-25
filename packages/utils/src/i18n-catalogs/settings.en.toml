@@ -994,7 +994,7 @@
 "settings.setting.irc.operator.directMessages.label" = "Receive IRC Direct Messages"
 "settings.setting.irc.operator.directMessages.description" = "Allow agents to send you direct IRC messages, even if you share no room"
 "settings.setting.irc.operator.notifyDefault.label" = "Default IRC Room Notifications"
-"settings.setting.irc.operator.notifyDefault.description" = "Choose which room messages show a card and can become the next Alt+I destination unless overridden in the room"
+"settings.setting.irc.operator.notifyDefault.description" = "Choose which room messages can become the next Alt+I destination or Alt+R quick-reply target unless overridden in the room"
 "settings.setting.irc.operator.relayToMainTranscript.label" = "Announce Agent-to-Agent IRC"
 "settings.setting.irc.operator.relayToMainTranscript.description" = "Let live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript and remain in IRC Traffic either way"
 "settings.setting.irc.history.maxEntries.label" = "IRC History Size"

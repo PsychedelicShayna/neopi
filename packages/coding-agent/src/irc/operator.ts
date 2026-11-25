@@ -197,7 +197,7 @@ export class OperatorIrcClient {
 		else this.#roomRefreshQueued = false;
 	}
 
-	/** Live relay presentation, before the bus has appended that delivery to the ledger. */
+	/** Evaluate a live relay against the same notification policy as a recorded delivery. */
 	relayNotifies(details: unknown): boolean {
 		if (!this.#isCurrent() || !isRecord(details)) return false;
 		const { from, to, body, group, groupText, broadcast } = details;

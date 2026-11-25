@@ -40,6 +40,9 @@ function fixture() {
 						legs.push({ message, options });
 						return { to: message.to, outcome: "injected" };
 					},
+					async sendFanout(messages, options) {
+						return Promise.all(messages.map(message => this.send(message, options)));
+					},
 				},
 				saved,
 				{
@@ -50,11 +53,13 @@ function fixture() {
 				},
 				{
 					includes: ref => registry.rootOf(ref.id) === root,
-					async deliverInvite(_from, to, name, mode) {
-						const persisted = saved?.groups.find(room => room.name === name)?.members.includes(to) ?? false;
-						notices.push({ to, mode, persisted });
-						if (to === "Unreachable") return { to, outcome: "failed", error: "unreachable" };
-						return { to, outcome: "queued" };
+					async deliverInvites(_from, recipients, name, mode) {
+						return recipients.map(to => {
+							const persisted = saved?.groups.find(room => room.name === name)?.members.includes(to) ?? false;
+							notices.push({ to, mode, persisted });
+							if (to === "Unreachable") return { to, outcome: "failed", error: "unreachable" };
+							return { to, outcome: "queued" };
+						});
 					},
 				},
 			);

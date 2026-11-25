@@ -6,7 +6,7 @@ import reminderTemplate from "../prompts/system/irc-group-reminder.md" with { ty
 import type { AgentRef, AgentRegistryApi } from "../registry/agent-registry";
 import { isCurrentSessionRosterRef } from "../registry/persisted-agents";
 import type { SessionEntry } from "../session/session-entries";
-import type { IrcBusApi } from "./bus";
+import type { IrcBusApi, IrcSend } from "./bus";
 import {
 	activeMute,
 	DEFAULT_PERMISSIONS,
@@ -124,13 +124,12 @@ interface GroupPersistence {
 
 interface GroupOptions {
 	includes(ref: AgentRef): boolean;
-	deliverInvite(
+	deliverInvites(
 		from: string,
-		to: string,
+		recipients: readonly string[],
 		group: string,
-		mode: IrcInviteNoticeMode,
-		fanoutId?: string,
-	): Promise<IrcDeliveryReceipt | undefined>;
+		mode: Exclude<IrcInviteNoticeMode, "silent">,
+	): Promise<IrcDeliveryReceipt[]>;
 }
 
 function newGroup(creator?: string): Group {
@@ -163,7 +162,7 @@ export class IrcGroups {
 
 	constructor(
 		private readonly registry: AgentRegistryApi,
-		private readonly bus: Pick<IrcBusApi, "send">,
+		private readonly bus: Pick<IrcBusApi, "send" | "sendFanout">,
 		snapshot: IrcGroupSnapshot | undefined,
 		private readonly persistence: GroupPersistence | undefined,
 		private readonly options: GroupOptions,
@@ -478,24 +477,15 @@ export class IrcGroups {
 		noWake?: boolean,
 	): Promise<IrcDeliveryReceipt[]> {
 		const fanoutId = Snowflake.next();
-		const legs: Promise<IrcDeliveryReceipt | undefined>[] = [];
+		const legs: IrcSend[] = [];
+		const hidden = new Set<string>();
 		for (const to of group.members) {
 			if (!this.#isCurrent() || !this.#mayReceive(group, to)) continue;
-			const hidden = to !== from && group.policies.get(to)?.joinMode === "invisible";
-			legs.push(
-				this.bus
-					.send(
-						{ from, to, body, localOnly: true, broadcast: true, group: name, groupText, fanoutId },
-						{ suppressRelay: true, broadcast: true, groupDelivery: true, noWake },
-					)
-					.then(
-						receipt => (hidden ? undefined : receipt),
-						(error): IrcDeliveryReceipt | undefined =>
-							hidden ? undefined : { to, outcome: "failed", error: String(error) },
-					),
-			);
+			if (to !== from && group.policies.get(to)?.joinMode === "invisible") hidden.add(to);
+			legs.push({ from, to, body, localOnly: true, broadcast: true, group: name, groupText, fanoutId });
 		}
-		return (await Promise.all(legs)).filter(receipt => receipt !== undefined);
+		const receipts = await this.bus.sendFanout(legs, { suppressRelay: true, broadcast: true, groupDelivery: true, noWake });
+		return receipts.filter(({ to }) => !hidden.has(to));
 	}
 
 	#addMember(name: string, group: Group, ref: AgentRef): void {
@@ -583,35 +573,16 @@ export class IrcGroups {
 		this.#changed();
 		const affected = pending.map(({ ref }) => ref.id);
 		const room = this.#room(actor, name, group);
-		const notices: Promise<IrcDeliveryReceipt>[] = [];
-		if (notice !== "silent") {
-			const fanoutId = affected.length > 1 ? Snowflake.next() : undefined;
-			for (const to of affected) {
-				if (!this.#isCurrent() || !this.#mayReceive(group, to)) continue;
-				notices.push(this.#inviteNotice(actor.id, to, name, notice, fanoutId));
-			}
-		}
+		const recipients = notice === "silent" ? [] : affected.filter(to => this.#isCurrent() && this.#mayReceive(group, to));
+		const receipts = notice === "silent" || !recipients.length
+			? []
+			: await this.options.deliverInvites(actor.id, recipients, name, notice);
 		return {
 			text: `${create ? "Created" : "Updated"} IRC group ${name}; added ${affected.join(", ")}.`,
 			affected,
 			room,
-			receipts: await Promise.all(notices),
+			receipts,
 		};
-	}
-
-	async #inviteNotice(
-		from: string,
-		to: string,
-		name: string,
-		mode: Exclude<IrcInviteNoticeMode, "silent">,
-		fanoutId?: string,
-	): Promise<IrcDeliveryReceipt> {
-		try {
-			const receipt = await this.options.deliverInvite(from, to, name, mode, fanoutId);
-			return receipt ?? { to, outcome: "failed", error: "The invite notice was not delivered." };
-		} catch (error) {
-			return { to, outcome: "failed", error: String(error) };
-		}
 	}
 
 	#remove(actor: AgentRef, name: string, group: Group, members: string[]): IrcGroupResult {

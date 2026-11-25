@@ -28,7 +28,7 @@ import type {
 	RegistryEvent,
 	RegistryListener,
 } from "../../registry/agent-registry";
-import type { IrcBusApi, IrcSendOptions, IrcWaitFilter, UnansweredSend } from "../../irc/bus";
+import type { IrcBusApi, IrcSend, IrcSendOptions, IrcWaitFilter, UnansweredSend } from "../../irc/bus";
 import type { IrcGroupRequest, IrcGroupResult } from "../../irc/groups";
 import type { AgentSessionHandle } from "../../session/agent-session-handle";
 import type { AgentSessionDisposeOptions } from "../../session/agent-session-types";
@@ -287,6 +287,10 @@ export class RemoteIrcBus implements IrcBusApi {
 
 	send(msg: Omit<IrcMessage, "id" | "ts">, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
 		return this.#remote.call("send", msg, opts);
+	}
+
+	sendFanout(messages: readonly IrcSend[], opts?: IrcSendOptions): Promise<IrcDeliveryReceipt[]> {
+		return this.#remote.call("sendFanout", messages, opts);
 	}
 
 	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult> {

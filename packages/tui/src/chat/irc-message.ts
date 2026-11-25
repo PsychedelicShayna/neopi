@@ -1,6 +1,7 @@
 import { type DefaultTextStyle, Markdown, type MarkdownTheme } from "../components/markdown";
-import { card, compact, elapsed, md, row, span, text } from "../native/describe";
+import { card, md, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
+import { styledSpans } from "../native/spans";
 import { agentColored, agentColorHex } from "../overlays/agent-identity";
 import { sanitizeDisplaySingleLine, sanitizeDisplayText } from "../overlays/extensions/display-text";
 import { clockTime } from "../overlays/irc-viewer";
@@ -13,6 +14,10 @@ import { Ellipsis, truncateToWidth, visibleWidth } from "../utils";
 export interface IrcMessageDetails {
 	from?: string;
 	to?: string;
+	id?: string;
+	/** The deliveries visible to the session that owns this transcript. */
+	deliveredRecipientIds?: string[];
+	fanoutId?: string;
 	/** The delivered body: `irc:incoming` keeps it in `message`, `irc:relay` in `body`. */
 	message?: string;
 	body?: string;
@@ -30,11 +35,9 @@ export interface IrcMessageDetails {
 
 /** One peer message as the transcript shows it. */
 export interface IrcMessageView {
-	/** `incoming`: delivered here; `outgoing`: sent from here; `relay`: observed between others. */
-	kind: "incoming" | "outgoing" | "relay";
+	kind: "incoming" | "operator" | "both" | "outgoing" | "relay";
 	from?: string;
-	/** The recipient of an outgoing or relayed message. */
-	to?: string;
+	to?: string | readonly string[];
 	body?: string;
 	timestamp?: number;
 	replyTo?: string;
@@ -56,8 +59,8 @@ export function ircMessageView(
 	return {
 		kind,
 		from: details?.from,
-		to: details?.to,
-		body: details?.groupText ?? (kind === "incoming" ? details?.message : details?.body),
+		to: Array.isArray(details?.deliveredRecipientIds) ? details.deliveredRecipientIds : details?.to,
+		body: details?.groupText ?? details?.message ?? details?.body,
 		timestamp,
 		replyTo: details?.replyTo,
 		wakeRelay: details?.wakeRelay,
@@ -69,19 +72,13 @@ export function ircMessageView(
 	};
 }
 
-/**
- * Whether `message` is the operator's own copy of an IRC message: a DM to her,
- * or her leg of a group send. The bus shows it on her UI as a display-only
- * `irc:relay` record addressed to her id; nothing stores it in a transcript.
- */
-export function isOperatorIrcNotice(
-	message: { customType?: string; details?: unknown },
-	operatorId: string | undefined,
-): boolean {
-	if (operatorId === undefined || message.customType !== "irc:relay") return false;
-	const details = message.details;
-	return typeof details === "object" && details !== null && Reflect.get(details, "to") === operatorId;
-}
+const DIRECTION: Record<IrcMessageView["kind"], string> = {
+	incoming: "⇠ Agent",
+	operator: "⇠ You",
+	both: "⇠ Both",
+	outgoing: "⇢ Sent",
+	relay: "◇ Relay",
+};
 
 const NO_ROWS: readonly string[] = [];
 
@@ -113,18 +110,16 @@ function ruleRow(corner: string, label: string, tail: string, width: number, pai
 /**
  * A peer's IRC message in the transcript, shown whole: no preview, no expiry.
  * Two rules in the sender's Agent Hub colour bracket it and a rail of the same
- * colour runs down the body, so any row of a long message says whose it is. The
- * opening rule alone carries the envelope, the route (`➤ #group`, or the
- * recipient of an observed message), the markers and the time; the closing rule
- * repeats only the name, so the two never look alike. The body is Markdown in
- * the primary agent's prose colour at the transcript's full width.
+ * colour runs down its body. The opening rule carries the direction, route,
+ * markers and time; the closing rule repeats only the name. The body is Markdown in the primary
+ * agent's prose colour at the transcript's full width.
  */
 export class IrcMessageBlock implements Component {
-	readonly #view: IrcMessageView;
+	#view: IrcMessageView;
 	/** Sender id as registered: the key of its Agent Hub colour. */
 	readonly #fromId: string;
 	readonly #from: string;
-	readonly #body: string;
+	#body = "";
 	#markdown: { theme: MarkdownTheme; component: Markdown } | undefined;
 	#cache:
 		| { width: number; body: readonly string[]; colour: string; epoch: number; lines: readonly string[] }
@@ -135,9 +130,31 @@ export class IrcMessageBlock implements Component {
 		this.#view = view;
 		this.#fromId = typeof view.from === "string" ? view.from.trim() : "";
 		this.#from = lineLabel(view.from) || "?";
-		this.#body = sanitizeDisplayText(typeof view.body === "string" ? view.body : "")
+		this.#setBody(view.body);
+	}
+
+	#setBody(body: string | undefined): void {
+		const sanitized = sanitizeDisplayText(typeof body === "string" ? body : "")
 			.replace(/^(?:[ \t]*\n)+/, "")
 			.trimEnd();
+		if (this.#body !== sanitized) {
+			this.#body = sanitized;
+			this.#markdown = undefined;
+		}
+	}
+
+	/** Fold the two actual deliveries in either order, keeping the agent leg's envelope metadata. */
+	mergeDelivery(view: IrcMessageView): void {
+		const existing = this.#view;
+		if (existing.kind === "both" || view.kind === existing.kind) return;
+		if (view.kind !== "both" && (existing.kind === "relay" || view.kind === "relay")) return;
+		const agent = view.kind === "incoming" || view.kind === "both" ? view : existing;
+		const operator = view.kind === "operator" ? view : existing;
+		const to = view.kind === "both" ? view.to : [...recipientIds(agent), ...recipientIds(operator)];
+		this.#view = { ...agent, kind: "both", to };
+		this.#setBody(agent.body);
+		this.#cache = undefined;
+		this.#native = undefined;
 	}
 
 	invalidate(): void {
@@ -169,24 +186,22 @@ export class IrcMessageBlock implements Component {
 		return markers;
 	}
 
-	/** Where the message went, when that is not simply this session: a group or a recipient. */
-	#route(): { group: string } | { to: string; toId: string } | undefined {
+	#route(): { recipients: { id: string; name: string }[]; group: string } {
 		const view = this.#view;
-		const group = lineLabel(view.group);
-		if (group && view.sentToGroup) return { group };
-		const toId = view.kind !== "incoming" && typeof view.to === "string" ? view.to.trim() : "";
-		// A notice an agent's own action sent it (added to a group) is not a message to someone else.
-		if (!toId || toId === this.#fromId) return undefined;
-		return { to: lineLabel(toId), toId };
+		const group = view.sentToGroup ? lineLabel(view.group) : "";
+		const recipients = recipientIds(view)
+			.map(id => ({ id, name: lineLabel(id) }))
+			.filter(({ name }) => name.length > 0);
+		return { recipients, group };
 	}
 
 	#openingLabel(): string {
-		let label = `${this.#paint(theme.symbol("tool.irc"))} ${this.#paint(theme.bold(this.#from))}`;
-		const route = this.#route();
-		if (route) {
-			const target =
-				"group" in route ? theme.bold(`#${route.group}`) : agentColored(theme, route.toId, theme.bold(route.to));
-			label += ` ${theme.fg("dim", theme.nav.selected)} ${target}`;
+		let label = `${theme.fg("dim", DIRECTION[this.#view.kind])} ${this.#paint(theme.bold(this.#from))}`;
+		const { recipients, group } = this.#route();
+		const to = recipients.map(({ id, name }) => agentColored(theme, id, theme.bold(name))).join(", ");
+		if (to || group) {
+			label += ` ${theme.fg("dim", theme.nav.selected)} ${to || theme.bold(`#${group}`)}`;
+			if (to && group) label += theme.fg("dim", `${theme.sep.dot}#${group}`);
 		}
 		for (const marker of this.#markers()) label += theme.fg("dim", `${theme.sep.dot}${marker}`);
 		return label;
@@ -231,18 +246,27 @@ export class IrcMessageBlock implements Component {
 	/** Natively a card headed by the sender and route, holding the whole message as Markdown. */
 	describe(): NativeNode {
 		if (this.#native) return this.#native;
-		const head: TspSpan[] = [span(this.#from, "toolTitle strong")];
-		const route = this.#route();
-		if (route) head.push(span(` ${theme.nav.selected} ${"group" in route ? `#${route.group}` : route.to}`, "strong"));
-		for (const marker of this.#markers()) head.push(span(` ${marker}`, "muted"));
-		const timestamp = this.#view.timestamp;
+		const head: TspSpan[] = [
+			span(`${DIRECTION[this.#view.kind]} `, "muted"),
+			...styledSpans(this.#paint(theme.bold(this.#from))),
+		];
+		const { recipients, group } = this.#route();
+		if (recipients.length > 0 || group) head.push(span(` ${theme.nav.selected} `, "muted"));
+		for (const [index, { id, name }] of recipients.entries()) {
+			if (index > 0) head.push(span(", ", "muted"));
+			head.push(...styledSpans(agentColored(theme, id, theme.bold(name))));
+		}
+		if (group) head.push(span(`${recipients.length > 0 ? theme.sep.dot : ""}#${group}`, "muted"));
+		for (const marker of this.#markers()) head.push(span(`${theme.sep.dot}${marker}`, "muted"));
+		if (this.#view.timestamp) head.push(span(`${theme.sep.dot}${clockTime(this.#view.timestamp)}`, "dim"));
 		this.#native = card(
 			{ role: `omp.irc.${this.#view.kind}`, tone: "info", head },
-			compact([
-				timestamp ? row([elapsed(Date.now() - timestamp), text([span("ago", "dim")])], { gap: "xs" }) : undefined,
-				this.#body ? md(this.#body) : undefined,
-			]),
+			this.#body ? [md(this.#body)] : [],
 		);
 		return this.#native;
 	}
+}
+
+function recipientIds(view: IrcMessageView): readonly string[] {
+	return typeof view.to === "string" ? [view.to] : (view.to ?? []);
 }
