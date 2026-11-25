@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
-import { cfgSidebarEnabled, cfgSidebarView } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgSidebarEnabled, cfgSidebarView, cfgSidebarWidthColumns } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { type Component, parseSgrMouse, type SgrMouseEvent, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
@@ -263,6 +263,56 @@ describe("SidePanelController", () => {
 				await h.settle();
 				expect(h.controller.routeInlineMouse(click(1, panelRect.col + 1))).toBe(false);
 				overlay.hide();
+			} finally {
+				h.stop();
+			}
+		});
+	}
+
+	for (const side of ["right", "left"] as const) {
+		it(`resizes a ${side} dock by dragging the divider and resets it on a right-click`, async () => {
+			const h = await harness(160, { "sidebar.enabled": true, "sidebar.side": side });
+			try {
+				h.controller.applySettings();
+				await h.settle();
+				const before = h.composer.sidePanelGeometry();
+				if (!before) throw new Error("expected a docked frame");
+				const report = (button: number, col: number, suffix = "M") => {
+					const event = parseSgrMouse(`\x1b[<${button};${col + 1};2${suffix}`);
+					if (!event) throw new Error("bad report");
+					return h.controller.routeInlineMouse(event);
+				};
+				const bar = before.dividerCol + 1;
+				expect(report(0, bar)).toBe(true);
+				// Drag ten columns toward the chat: the panel widens live.
+				const toward = side === "right" ? -10 : 10;
+				expect(report(32, bar + toward)).toBe(true);
+				await h.settle();
+				expect(h.composer.sidePanelGeometry()?.panelRect.width).toBe(before.panelRect.width + 10);
+				expect(cfgSidebarWidthColumns.get(h.settings)).toBe(0);
+				// Release (over the chat column, still consumed) keeps the width.
+				expect(report(0, bar + toward, "m")).toBe(true);
+				await h.settle();
+				expect(cfgSidebarWidthColumns.get(h.settings)).toBe(before.panelRect.width + 10);
+				expect(h.composer.sidePanelGeometry()?.panelRect.width).toBe(before.panelRect.width + 10);
+				// If release happened outside the terminal, plain hover must not keep resizing.
+				const movedBar = h.composer.sidePanelGeometry()!.dividerCol + 1;
+				report(0, movedBar);
+				report(35, movedBar + toward);
+				await h.settle();
+				expect(h.composer.sidePanelGeometry()?.panelRect.width).toBe(before.panelRect.width + 10);
+				// The chat keeps its minimum however far the pointer goes.
+				const after = h.composer.sidePanelGeometry()!;
+				report(0, after.dividerCol + 1);
+				report(32, side === "right" ? 0 : 159);
+				report(0, side === "right" ? 0 : 159, "m");
+				await h.settle();
+				expect(h.composer.sidePanelGeometry()!.chatRect.width).toBeGreaterThanOrEqual(60);
+				// Right-click on the divider returns to the ratio and bounds.
+				report(2, h.composer.sidePanelGeometry()!.dividerCol + 1);
+				await h.settle();
+				expect(cfgSidebarWidthColumns.get(h.settings)).toBe(0);
+				expect(h.composer.sidePanelGeometry()?.panelRect.width).toBe(before.panelRect.width);
 			} finally {
 				h.stop();
 			}

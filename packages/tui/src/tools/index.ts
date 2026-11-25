@@ -15,6 +15,7 @@ import { githubToolRenderer } from "./github";
 import { globToolRenderer } from "./glob";
 import { goalToolRenderer } from "./goal";
 import { grepToolRenderer } from "./grep";
+import { ircToolRenderer } from "./irc-renderer";
 import { waitToolRenderer } from "./wait";
 import { lspToolRenderer } from "./lsp";
 import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory";
@@ -45,6 +46,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	find: findToolRenderer,
 	glob: globToolRenderer,
 	grep: grepToolRenderer,
+	irc: ircToolRenderer,
 	lsp: lspToolRenderer,
 	wait: waitToolRenderer,
 	read: readToolRenderer,

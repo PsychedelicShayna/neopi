@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { IrcDeliveryReceipt } from "@oh-my-pi/pi-tui/tools/irc";
+import type { IrcDeliveryReceipt, IrcOutgoingTranscript } from "@oh-my-pi/pi-tui/tools/irc";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { IrcBus } from "../irc/bus";
 import { IRC_EVERYONE, type IrcGroupRequest } from "../irc/groups";
@@ -41,6 +41,7 @@ type IrcParams = typeof ircSchema.infer;
 interface IrcDetails {
 	op: IrcParams["op"];
 	receipts?: IrcDeliveryReceipt[];
+	outgoing?: IrcOutgoingTranscript;
 }
 
 export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
@@ -96,9 +97,22 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 				const sends = await Promise.all(
 					[...targets].map(id => executeSend(deps, { to: id, message, replyTo, progress })),
 				);
+				const receipts = sends.flatMap(send => send.details?.receipts ?? []);
+				const peerRecipients =
+					registry.get(senderId)?.kind === "main"
+						? receipts
+								.filter(
+									receipt => receipt.outcome !== "failed" && registry.get(receipt.to)?.kind !== "operator",
+								)
+								.map(receipt => receipt.to)
+						: [];
 				return {
 					content: sends.flatMap(send => send.content),
-					details: { op, receipts: sends.flatMap(send => send.details?.receipts ?? []) },
+					details: {
+						op,
+						receipts,
+						...(peerRecipients.length > 0 ? { outgoing: { from: senderId, to: peerRecipients } } : {}),
+					},
 					isError: sends.every(send => send.isError === true),
 				};
 			}
