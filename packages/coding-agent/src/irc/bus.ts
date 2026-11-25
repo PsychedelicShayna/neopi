@@ -15,7 +15,7 @@ import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import groupAddedTemplate from "../prompts/system/irc-group-added.md" with { type: "text" };
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { isCurrentSessionRosterRef, registerPersistedSubagents } from "../registry/persisted-agents";
+import { ensurePersistedRoster, isCurrentSessionRosterRef, registerPersistedSubagents } from "../registry/persisted-agents";
 import { type AgentSessionHandle, isAgentViewSession } from "../session/agent-session-handle";
 import type { CustomMessage } from "../session/messages";
 import {
@@ -101,7 +101,7 @@ export interface UnansweredSend {
 /** A message awaiting delivery; local-only sends never fall through to a peer tunnel. */
 export type IrcSend = Omit<IrcMessage, "id" | "ts"> & { localOnly?: boolean };
 
-/** Options of one {@link IrcBus.send} leg. */
+/** Options for IRC delivery. */
 export interface IrcSendOptions {
 	/** Skip the display-only main-UI relay for this leg. */
 	suppressRelay?: boolean;
@@ -111,6 +111,8 @@ export interface IrcSendOptions {
 	groupDelivery?: boolean;
 	/** Deliver locally without interrupting or starting a model turn. */
 	noWake?: boolean;
+	/** Restore missing or parked recipients from this session before delivering their legs. */
+	sessionFileHint?: string | null;
 }
 
 interface IrcFanout {
@@ -156,7 +158,7 @@ interface IrcGroupScope {
 export interface IrcBusApi {
 	/** Fire-and-forget delivery; the receipt reports how the message reached the recipient. */
 	send(msg: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt>;
-	/** Deliver one broadcast/group send as a batch, retaining its visible endpoints per transcript. */
+	/** Deliver one send as a batch, retaining its visible endpoints per transcript. */
 	sendFanout(messages: readonly IrcSend[], opts?: IrcSendOptions): Promise<IrcDeliveryReceipt[]>;
 	/** Execute a namespace operation on the IRC host. */
 	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult>;
@@ -545,6 +547,13 @@ export class IrcBus implements IrcBusApi {
 	}
 
 	async #send({ localOnly, ...msg }: IrcSend, opts?: IrcSendOptions, fanout?: IrcFanout): Promise<IrcDeliveryReceipt> {
+		if (opts?.sessionFileHint) {
+			// A roster scan must not delay the same send's live recipients.
+			const recipient = this.#registry.get(msg.to);
+			if (!recipient || recipient.status === "parked") {
+				await ensurePersistedRoster(this.#registry, opts.sessionFileHint);
+			}
+		}
 		const message: IrcMessage = {
 			...msg,
 			...(opts?.noWake ? { noWake: true } : {}),

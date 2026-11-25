@@ -4,7 +4,7 @@ import type { IrcDeliveryReceipt, IrcOutgoingTranscript } from "@oh-my-pi/pi-tui
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { IrcBus } from "../irc/bus";
 import { IRC_EVERYONE, type IrcGroupRequest } from "../irc/groups";
-import { executeSend } from "../irc/messaging";
+import { executeDirectFanout, executeSend } from "../irc/messaging";
 import ircDescription from "../prompts/tools/irc.md" with { type: "text" };
 import type { ToolSession } from ".";
 
@@ -95,9 +95,10 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 				if (!targets.size || targets.has("") || targets.has("all"))
 					return result("Use non-empty peer IDs for direct sends, or broadcast to everyone.", true);
 				const deps = { registry, senderId, sessionFileHint: this.session.getSessionFile() };
-				const sends = await Promise.all(
-					[...targets].map(id => executeSend(deps, { to: id, message, replyTo, progress })),
-				);
+				const sends =
+					targets.size === 1
+						? [await executeSend(deps, { to: targets.values().next().value!, message, replyTo, progress })]
+						: await executeDirectFanout(deps, { to: [...targets], message, replyTo, progress });
 				const receipts = sends.flatMap(send => send.details?.receipts ?? []);
 				const recipients = receipts.filter(receipt => receipt.outcome !== "failed").map(receipt => receipt.to);
 				return {

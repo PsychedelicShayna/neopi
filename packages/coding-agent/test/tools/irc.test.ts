@@ -498,6 +498,23 @@ describe("IRC", () => {
 				error: expect.stringContaining("disabled direct IRC messages"),
 			});
 			expect(rootObservation).not.toHaveBeenCalled();
+			const child = makeFakeSession();
+			registry.register({ id: "Child", displayName: "child", kind: "sub", parentId: "Main", session: child.session });
+			const tool = new IrcTool({
+				cwd: process.cwd(),
+				agentRegistry: registry,
+				getAgentId: () => "Main",
+				getSessionFile: () => null,
+			});
+			const batch = await tool.execute("send-batch", { op: "send", to: ["Child", "Captain"], message: "direct batch" });
+			expect(batch.isError).toBe(false);
+			expect(batch.details?.receipts).toEqual([
+				{ to: "Child", outcome: "injected" },
+				{ to: "Captain", outcome: "failed", error: "The operator has disabled direct IRC messages." },
+			]);
+			expect(child.delivered).toHaveLength(1);
+			expect(child.delivered[0]).not.toHaveProperty("deliveredRecipientIds");
+			expect(rootObservation).not.toHaveBeenCalled();
 			expect(
 				await bus.send(
 					{ from: "Main", to: "Captain", group: "council", body: "room message" },

@@ -27,9 +27,10 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { convertToLlm, type CustomMessage, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { IrcTool } from "@oh-my-pi/pi-coding-agent/tools/irc";
 import type { AgentProgress, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
@@ -341,6 +342,51 @@ afterAll(() => {
 });
 
 describe("IRC in the focused child transcript", () => {
+	it("merges a late IRC leg into the existing card after transcript replay commits", async () => {
+		const body = "A fanout leg arrives after the rebuild.";
+		const fanout = { from: "Scout", body, broadcast: true, fanoutId: "late-leg" };
+		const observed: CustomMessage = {
+			role: "custom",
+			customType: "irc:relay",
+			content: body,
+			display: true,
+			excludeFromContext: true,
+			details: { ...fanout, to: "Operator" },
+			timestamp: 10,
+		};
+		const delivered: CustomMessage = {
+			role: "custom",
+			customType: "irc:incoming",
+			content: body,
+			display: true,
+			details: { ...fanout, to: MAIN_AGENT_ID, message: body },
+			timestamp: 11,
+		};
+		const main = makeSession([observed], false);
+		const { ctx, focus } = createFocusFixture(
+			main.session,
+			makeSession([], false).session,
+			new AgentRegistry(),
+			"Operator",
+		);
+		const cards = () =>
+			ctx.chatContainer.children
+				.map(child => Bun.stripANSI(child.render(100).join("\n")))
+				.filter(card => card.includes(body));
+		try {
+			await ctx.renderInitialMessages();
+			expect(cards()).toEqual([expect.stringContaining(`⇠ You Scout ${theme.nav.selected} Operator`)]);
+
+			await main.emit({ type: "irc_message", message: delivered });
+			expect(cards()).toEqual([
+				expect.stringContaining(`⇠ Both Scout ${theme.nav.selected} ${MAIN_AGENT_ID}, Operator`),
+			]);
+		} finally {
+			focus.dispose();
+			ctx.eventController.dispose();
+		}
+	});
+
 	it("shows a DM to a focused child live and restores the same card after switching away and back", async () => {
 		const registry = new AgentRegistry();
 		const session = new AgentSession({
@@ -466,7 +512,7 @@ describe("IRC in the focused child transcript", () => {
 	it.each([
 		{ direction: "Both", recipients: ["Worker", "Captain"] },
 		{ direction: "Agent", recipients: ["Worker"] },
-	])("shows a busy child's parent steer as ⇠ $direction live and after refocus", async ({ direction, recipients }) => {
+	])("shows a busy child's irc tool parent steer as ⇠ $direction live and after refocus", async ({ direction, recipients }) => {
 		const registry = new AgentRegistry();
 		const auth = await AuthStorage.create(":memory:");
 		auth.keys.setRuntime("openai", "test-key");
@@ -508,6 +554,13 @@ describe("IRC in the focused child transcript", () => {
 		const { ctx, focus } = createFocusFixture(main, worker, registry, operatorId);
 		const globalRegistry = spyOn(AgentRegistry, "global").mockReturnValue(registry);
 		const bus = new IrcBus(registry);
+		const globalBus = spyOn(IrcBus, "global").mockReturnValue(bus);
+		const tool = new IrcTool({
+			cwd: process.cwd(),
+			agentRegistry: registry,
+			getAgentId: () => MAIN_AGENT_ID,
+			getSessionFile: () => null,
+		});
 		const body = "PARENT_STEER </irc>";
 		const privateBody = "PRIVATE_OPERATOR_DM";
 		const renderCards = () => ctx.chatContainer.children.map(child => Bun.stripANSI(child.render(100).join("\n")));
@@ -517,7 +570,10 @@ describe("IRC in the focused child transcript", () => {
 			await Promise.race([started.promise, turn]);
 			expect(worker.isStreaming).toBe(true);
 			await bus.send({ from: "Scout", to: operatorId, body: privateBody });
-			await bus.sendFanout(recipients.map(to => ({ from: MAIN_AGENT_ID, to, body })));
+			const result = await tool.execute("parent-steer", { op: "send", to: [...recipients], message: body });
+			expect(result.isError).toBe(false);
+			expect(result.details?.receipts).toEqual(recipients.map(to => ({ to, outcome: "injected" })));
+			expect(result.content).toEqual(recipients.map(to => ({ type: "text", text: `Delivered to ${to}.` })));
 			finishFirstResponse.resolve();
 			await turn;
 			await worker.waitForIdle();
@@ -559,6 +615,7 @@ describe("IRC in the focused child transcript", () => {
 				await worker.dispose();
 				await main.dispose();
 			} finally {
+				globalBus.mockRestore();
 				globalRegistry.mockRestore();
 				auth.close();
 			}

@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { IrcDeliveryReceipt } from "@oh-my-pi/pi-tui/tools/irc";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
@@ -8,6 +9,18 @@ import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { canSpawnAtDepth } from "../task/types";
 
 import { cfgTaskMaxRecursionDepth } from "../task/settings";
+
+interface SendDeps {
+	registry: AgentRegistryApi;
+	senderId: string;
+	sessionFileHint?: string | null;
+}
+
+interface SendText {
+	message: string;
+	replyTo?: string;
+	progress?: boolean;
+}
 
 function coordinationErrorResult(text: string, details: CoordinationDetails): AgentToolResult<CoordinationDetails> {
 	return { content: [{ type: "text", text }], details, isError: true };
@@ -22,8 +35,8 @@ export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 
 /** Send a direct message or, from a top-level agent only, a broadcast, optionally as a reply to message `replyTo`; delivery never waits for a reply. */
 export async function executeSend(
-	deps: { registry: AgentRegistryApi; senderId: string; sessionFileHint?: string | null },
-	params: { to: string; message: string; replyTo?: string; progress?: boolean; remote?: boolean },
+	deps: SendDeps,
+	params: SendText & { to: string; remote?: boolean },
 ): Promise<AgentToolResult<CoordinationDetails>> {
 	const { registry, senderId, sessionFileHint } = deps;
 	const to = params.to.trim();
@@ -42,17 +55,6 @@ export async function executeSend(
 	}
 
 	const bus = IrcBus.global();
-	const targets = isBroadcast
-		? bus.filterBroadcastTargets(
-				senderId,
-				registry.listVisibleTo(senderId).map(ref => ref.id),
-			)
-		: [to];
-	// A broadcast that reaches the sender's root is shown there directly; the
-	// display-only relay to that root would duplicate it.
-	const relayRootId = ircRelayRoot(registry, senderId)?.id;
-	const suppressRelay = isBroadcast && relayRootId !== undefined && targets.includes(relayRootId);
-	const fanoutId = isBroadcast ? Snowflake.next() : undefined;
 	const send = {
 		from: senderId,
 		body: message,
@@ -60,45 +62,85 @@ export async function executeSend(
 		localOnly: !params.remote,
 		...(params.progress === true ? { progress: true } : {}),
 	};
-	const receipts = isBroadcast
-		? await bus.sendFanout(
-				targets.map(to => ({ ...send, to, broadcast: true, fanoutId })),
-				{
-					suppressRelay,
-					broadcast: true,
-				},
-			)
-		: [await bus.send({ ...send, to })];
+	if (!isBroadcast) return directSendResult(registry, senderId, await bus.send({ ...send, to }));
+
+	const targets = bus.filterBroadcastTargets(
+		senderId,
+		registry.listVisibleTo(senderId).map(ref => ref.id),
+	);
+	// A broadcast that reaches the sender's root is shown there directly; the
+	// display-only relay to that root would duplicate it.
+	const relayRootId = ircRelayRoot(registry, senderId)?.id;
+	const suppressRelay = relayRootId !== undefined && targets.includes(relayRootId);
+	const fanoutId = Snowflake.next();
+	const receipts = await bus.sendFanout(targets.map(to => ({ ...send, to, broadcast: true, fanoutId })), {
+		suppressRelay,
+		broadcast: true,
+	});
 	const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
-	let text: string;
-	if (isBroadcast) {
-		text =
-			targets.length === 0
-				? "No live peers to broadcast to."
-				: `Broadcast delivered to ${delivered.length} of ${targets.length} peer(s).`;
-		if (receipts.length) {
-			text += `\n${receipts
-				.map(receipt =>
-					receipt.outcome === "failed"
-						? `- ${receipt.to}: failed — ${receipt.error ?? "not running"}`
-						: `- ${receipt.to}: ${receipt.outcome}`,
-				)
-				.join("\n")}`;
-		}
-	} else {
-		const receipt = receipts[0]!;
-		const recipient = registry.get(to);
-		const unavailable = !recipient || recipient.status === "aborted" || !recipient.session;
-		text =
-			receipt.outcome === "failed"
-				? `Failed: ${to} ${unavailable ? "is not running" : "could not receive the message"}. ${receipt.error ?? ""}`.trimEnd()
-				: receipt.outcome === "revived"
-					? `Queued for ${to} (was parked; revived).`
-					: `Delivered to ${to}.`;
+	let text =
+		targets.length === 0
+			? "No live peers to broadcast to."
+			: `Broadcast delivered to ${delivered.length} of ${targets.length} peer(s).`;
+	if (receipts.length) {
+		text += `\n${receipts
+			.map(receipt =>
+				receipt.outcome === "failed"
+					? `- ${receipt.to}: failed — ${receipt.error ?? "not running"}`
+					: `- ${receipt.to}: ${receipt.outcome}`,
+			)
+			.join("\n")}`;
 	}
 	return {
 		content: [{ type: "text", text }],
 		details: { op: "send", from: senderId, to, receipts },
 		isError: delivered.length === 0 && targets.length > 0,
+	};
+}
+
+/** Send one DM to distinct normalized peer IDs, preserving a separate result for each. */
+export async function executeDirectFanout(
+	{ registry, senderId, sessionFileHint }: SendDeps,
+	{ to, message, replyTo, progress }: SendText & { to: readonly string[] },
+): Promise<AgentToolResult<CoordinationDetails>[]> {
+	const fanoutId = Snowflake.next();
+	const messages = to
+		.filter(id => id !== senderId)
+		.map(to => ({
+			from: senderId,
+			to,
+			body: message,
+			replyTo,
+			localOnly: true,
+			fanoutId,
+			...(progress === true ? { progress: true } : {}),
+		}));
+	const receipts = await IrcBus.global().sendFanout(messages, { sessionFileHint });
+	let next = 0;
+	return to.map(id =>
+		id === senderId
+			? coordinationErrorResult("Cannot send a message to yourself.", { op: "send", from: senderId, to: id })
+			: directSendResult(registry, senderId, receipts[next++]!),
+	);
+}
+
+function directSendResult(
+	registry: AgentRegistryApi,
+	senderId: string,
+	receipt: IrcDeliveryReceipt,
+): AgentToolResult<CoordinationDetails> {
+	const { to, outcome } = receipt;
+	const recipient = registry.get(to);
+	const unavailable = !recipient || recipient.status === "aborted" || !recipient.session;
+	const text =
+		outcome === "failed"
+			? `Failed: ${to} ${unavailable ? "is not running" : "could not receive the message"}. ${receipt.error ?? ""}`.trimEnd()
+			: outcome === "revived"
+				? `Queued for ${to} (was parked; revived).`
+				: `Delivered to ${to}.`;
+	return {
+		content: [{ type: "text", text }],
+		details: { op: "send", from: senderId, to, receipts: [receipt] },
+		isError: outcome === "failed",
 	};
 }

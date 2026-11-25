@@ -1298,6 +1298,19 @@ export class UiHelpers {
 					visibleChatContainer.addChild(child);
 				}
 			}
+			// Live legs must merge into the cards that survived the replay commit.
+			const replayedIrcCards = this.#ircCards.get(stagedChatContainer);
+			if (replayedIrcCards) {
+				const preservedIrcCards = preservedChatChildren && this.#ircCards.get(visibleChatContainer);
+				if (preservedIrcCards) {
+					for (const [id, card] of preservedIrcCards) {
+						if (!replayedIrcCards.has(id)) replayedIrcCards.set(id, card);
+					}
+				}
+				this.#ircCards.set(visibleChatContainer, replayedIrcCards);
+			} else if (!preservedChatChildren) {
+				this.#ircCards.delete(visibleChatContainer);
+			}
 			committed = true;
 			options.onCommit?.(context);
 
