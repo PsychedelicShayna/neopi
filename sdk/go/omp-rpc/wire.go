@@ -541,6 +541,10 @@ type ParentIrc struct {
 	From string `json:"from"`
 	// Message body as the parent wrote it.
 	Body string `json:"body"`
+	// Receiving child agent id.
+	To *string `json:"to,omitempty"`
+	// Delivered endpoints visible in the child's transcript.
+	DeliveredRecipientIds []string `json:"deliveredRecipientIds,omitempty"`
 	// Extra holds undeclared keys and declared keys whose value did not decode (that field stays zero).
 	// Encoding writes them back, over a declared field with the same key.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -555,6 +559,8 @@ func (v *ParentIrc) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "ParentIrc", open: true}
 	d.required("from", &out.From)
 	d.required("body", &out.Body)
+	d.optional("to", &out.To)
+	d.optional("deliveredRecipientIds", &out.DeliveredRecipientIds)
 	out.Extra = d.rest()
 	if d.err != nil {
 		return d.err

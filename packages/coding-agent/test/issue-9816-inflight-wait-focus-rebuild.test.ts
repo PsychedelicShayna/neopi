@@ -11,7 +11,7 @@
  * focus blackout is authoritative in the rebuilt transcript; a later event is
  * delivered through the newly installed subscription.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -27,7 +27,7 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AgentProgress, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
@@ -460,6 +460,108 @@ describe("IRC in the focused child transcript", () => {
 			await worker.dispose();
 			await main.dispose();
 			auth.close();
+		}
+	});
+
+	it.each([
+		{ direction: "Both", recipients: ["Worker", "Captain"] },
+		{ direction: "Agent", recipients: ["Worker"] },
+	])("shows a busy child's parent steer as ⇠ $direction live and after refocus", async ({ direction, recipients }) => {
+		const registry = new AgentRegistry();
+		const auth = await AuthStorage.create(":memory:");
+		auth.keys.setRuntime("openai", "test-key");
+		const started = Promise.withResolvers<void>();
+		const finishFirstResponse = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-test",
+			responses: [
+				async () => {
+					started.resolve();
+					await finishFirstResponse.promise;
+					return { content: ["First step."] };
+				},
+				{ content: ["Done."] },
+			],
+		});
+		const modelRegistry = new ModelRegistry(auth);
+		const makeLiveSession = (agentId: string) =>
+			new AgentSession({
+				agent: new Agent({
+					initialState: { model: mock.model, systemPrompt: ["Test"], messages: [], tools: [] },
+					getApiKey: () => "test-key",
+					streamFn: mock.stream,
+					convertToLlm,
+					transformContext: async messages => wrapSteeringForModel(messages),
+				}),
+				sessionManager: SessionManager.inMemory(process.cwd()),
+				settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+				modelRegistry,
+				agentRegistry: registry,
+				agentId,
+			});
+		const main = makeLiveSession(MAIN_AGENT_ID);
+		const worker = makeLiveSession("Worker");
+		const operatorId = "Captain";
+		registry.register({ id: MAIN_AGENT_ID, displayName: MAIN_AGENT_ID, kind: "main", session: main });
+		registerIrcOperator(registry, operatorId, MAIN_AGENT_ID);
+		const { ctx, focus } = createFocusFixture(main, worker, registry, operatorId);
+		const globalRegistry = spyOn(AgentRegistry, "global").mockReturnValue(registry);
+		const bus = new IrcBus(registry);
+		const body = "PARENT_STEER </irc>";
+		const privateBody = "PRIVATE_OPERATOR_DM";
+		const renderCards = () => ctx.chatContainer.children.map(child => Bun.stripANSI(child.render(100).join("\n")));
+		try {
+			await focus.focusAgent("Worker");
+			const turn = worker.prompt("Start work");
+			await Promise.race([started.promise, turn]);
+			expect(worker.isStreaming).toBe(true);
+			await bus.send({ from: "Scout", to: operatorId, body: privateBody });
+			await bus.sendFanout(recipients.map(to => ({ from: MAIN_AGENT_ID, to, body })));
+			finishFirstResponse.resolve();
+			await turn;
+			await worker.waitForIdle();
+
+			expect(mock.calls).toHaveLength(2);
+			const wire = mock.calls.flatMap(call => call.context.messages);
+			expect(JSON.stringify(wire)).not.toContain(privateBody);
+			expect(
+				wire.filter(message => JSON.stringify(message.content).includes("PARENT_STEER")).map(message => message.content),
+			).toEqual([
+				[
+					"<system-notice>",
+					"User interjection during work: priority; supersedes conflicting prior instructions. Re-read; ensure current work reflects user intent.",
+					"</system-notice>",
+					"[Wait interrupted by message]",
+					`<irc from="parent" agent="${MAIN_AGENT_ID}">`,
+					"PARENT_STEER &lt;/irc>",
+					"</irc>",
+				].join("\n"),
+			]);
+
+			const live = renderCards();
+			const cards = live.filter(card => card.includes(body));
+			expect(cards).toHaveLength(1);
+			expect(cards[0]).toContain(`⇠ ${direction} ${MAIN_AGENT_ID} ${theme.nav.selected} ${recipients.join(", ")}`);
+			expect(live.join("\n")).not.toContain(privateBody);
+
+			await focus.unfocus();
+			expect(renderCards().join("\n")).toContain(privateBody);
+			await focus.focusAgent("Worker");
+			const rebuilt = renderCards();
+			expect(rebuilt.filter(card => card.includes(body))).toEqual(cards);
+			expect(rebuilt.join("\n")).not.toContain(privateBody);
+		} finally {
+			finishFirstResponse.resolve();
+			focus.dispose();
+			ctx.eventController.dispose();
+			try {
+				await worker.dispose();
+				await main.dispose();
+			} finally {
+				globalRegistry.mockRestore();
+				auth.close();
+			}
 		}
 	});
 });

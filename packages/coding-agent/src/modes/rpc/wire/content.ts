@@ -85,7 +85,12 @@ export const messageDefs = {
 	},
 
 	ParentIrc: doc(
-		{ from: doc("string", "Sending parent agent id."), body: doc("string", "Message body as the parent wrote it.") },
+		{
+			from: doc("string", "Sending parent agent id."),
+			body: doc("string", "Message body as the parent wrote it."),
+			"to?": doc("string", "Receiving child agent id."),
+			"deliveredRecipientIds?": doc("string[]", "Delivered endpoints visible in the child's transcript."),
+		},
 		"Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope.",
 	),
 	UserMessage: {

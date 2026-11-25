@@ -236,6 +236,7 @@ export class IrcBridge {
 		// harness envelope it is rendered into or open a forged one, e.g. a parent
 		// steer. `details.message` keeps the raw body for the transcript card and inbox.
 		const envelopeBody = escapeHarnessTags(msg.body);
+		const deliveredRecipientIds = msg.deliveredRecipientIds ?? [msg.to];
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -258,7 +259,7 @@ export class IrcBridge {
 				id: msg.id,
 				from: msg.from,
 				to: msg.to,
-				deliveredRecipientIds: msg.deliveredRecipientIds ?? [msg.to],
+				deliveredRecipientIds,
 				message: msg.body,
 				...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
 				...(msg.wakeRelay ? { wakeRelay: true } : {}),
@@ -286,7 +287,7 @@ export class IrcBridge {
 						{ from: msg.from, message: envelopeBody },
 						{ cwd: this.#host.sessionManager.getCwd(), kind: "notice" },
 					),
-					parentIrc: { from: msg.from, body: msg.body },
+					parentIrc: { from: msg.from, body: msg.body, to: msg.to, deliveredRecipientIds },
 					attribution: "agent",
 					timestamp: msg.ts,
 					steering: true,

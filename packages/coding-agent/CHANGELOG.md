@@ -201,6 +201,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Parent IRC messages sent to both a busy child and the operator show `⇠ Both` with both recipients in the child's transcript, including after switching focus.
 - Main’s outgoing IRC DMs show their full text in the transcript, including after `--continue` ([#926](https://github.com/PsychedelicShayna/neopi/issues/926)).
 - Sending `/irc` to a subagent while Main is idle no longer freezes the terminal ([#898](https://github.com/PsychedelicShayna/neopi/issues/898)).
 - IRC direct and group messages no longer fail when unused fields contain empty values ([#883](https://github.com/PsychedelicShayna/neopi/issues/883)).

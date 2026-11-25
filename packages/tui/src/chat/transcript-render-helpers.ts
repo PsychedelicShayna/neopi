@@ -6,6 +6,7 @@
  */
 import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { UserMessage } from "@oh-my-pi/pi-ai";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type Component } from "../tui";
 import { formatBytes, formatCount, formatDuration } from "@oh-my-pi/pi-utils";
@@ -349,11 +350,14 @@ export function buildIrcMessageCard(
 
 /** Present a consumed parent steer as an IRC message without interpreting its model-facing envelope. */
 export function buildParentIrcMessageCard(
-	parentIrc: { from: string; body: string },
+	parentIrc: NonNullable<UserMessage["parentIrc"]>,
 	timestamp: number,
 	to?: string,
 ): Component {
-	return new IrcMessageBlock({ kind: "incoming", from: parentIrc.from, to, body: parentIrc.body, timestamp });
+	const view = ircMessageView("incoming", parentIrc, timestamp);
+	if (Array.isArray(view.to) && view.to.length > 1) view.kind = "both";
+	view.to ??= to;
+	return new IrcMessageBlock(view);
 }
 
 /**
