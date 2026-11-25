@@ -19,7 +19,7 @@ export const cfgIrcOperatorHandle = register({
 		group: "Messaging",
 		label: "IRC Operator Handle",
 		description:
-			"Your IRC id: agents message you at it, and what you send from /irc or the IRC viewer comes from it. Takes effect the next time npi starts",
+			"Your IRC id: agents message you at it, and what you send from /irc or the IRC client comes from it. Takes effect the next time npi starts",
 	},
 });
 
@@ -30,8 +30,8 @@ export const cfgIrcViewerEnabled = register({
 	ui: {
 		tab: "tasks",
 		group: "Messaging",
-		label: "IRC Viewer",
-		description: "Let the IRC viewer key open the history of agent-to-agent messages in this session",
+		label: "IRC Client",
+		description: "Allow opening the IRC client for this session",
 	},
 });
 
@@ -44,7 +44,7 @@ export const cfgIrcRelayToMainTranscript = register({
 		group: "Messaging",
 		label: "Announce Agent-to-Agent IRC",
 		description:
-			"Let live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript; the IRC viewer keeps every message either way",
+			"Let live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript and remain in IRC Traffic either way",
 	},
 });
 effect(cfgIrcRelayToMainTranscript, setIrcRelayToMainTranscript);
@@ -57,7 +57,7 @@ export const cfgIrcHistoryMaxEntries = register({
 		tab: "tasks",
 		group: "Messaging",
 		label: "IRC History Size",
-		description: "Most messages the IRC viewer keeps per process; the oldest drop first",
+		description: "Maximum number of recent IRC delivery attempts per root conversation; oldest drop first",
 		options: [
 			{ value: "200", label: "200" },
 			{ value: "1000", label: "1000" },

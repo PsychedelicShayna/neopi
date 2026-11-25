@@ -167,7 +167,13 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { DEFAULT_IRC_OPERATOR_HANDLE, operatorIrcLogSource, registerIrcOperator } from "../irc/operator";
+import {
+	DEFAULT_IRC_OPERATOR_HANDLE,
+	type IrcClientOpenRequest,
+	OperatorIrcClient,
+	operatorIrcLogSource,
+	registerIrcOperator,
+} from "../irc/operator";
 import { cfgIrcOperatorHandle } from "../irc/settings";
 import { executeSend } from "../irc/messaging";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
@@ -2276,6 +2282,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	get ircOperatorId(): string | undefined {
 		return this.#ircOperatorId;
 	}
+	get ircClient(): OperatorIrcClient | undefined {
+		return this.#ircClient;
+	}
 	/**
 	 * Send an IRC message as the operator: to a peer id or `all`, optionally as a
 	 * reply. Resolves with the delivery summary the hub tool would report.
@@ -2399,7 +2408,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			"irc",
 			new IrcSection({
 				source: operatorIrcLogSource(() => this.session),
-				openViewer: () => this.showIrcViewer(),
+				openViewer: (request?: IrcClientOpenRequest) => this.showIrcViewer(request),
 				requestRender,
 			}),
 		);
@@ -2496,6 +2505,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** The operator's IRC id while she is registered as a participant (issue #31). */
 	#ircOperatorId: string | undefined;
 	#releaseIrcOperator: (() => void) | undefined;
+	#ircClient: OperatorIrcClient | undefined;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
 	#pinnedHudOverride: boolean | undefined;
 	#eventBus?: EventBus;
@@ -9028,6 +9038,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter?.();
 		this.#disposeImageBlobWriter = undefined;
 		this.#hideSessionInfo();
+		this.#selectorController.disposeIrcViewer();
 		if (this.#ownsStartedUi) {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
@@ -9061,11 +9072,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		const handle = cfgIrcOperatorHandle.get(this.settings).trim() || DEFAULT_IRC_OPERATOR_HANDLE;
 		this.#releaseIrcOperator = registerIrcOperator(registry, handle, root.id);
 		this.#ircOperatorId = this.#releaseIrcOperator ? handle : undefined;
+		// The visible transcript can belong to a focused child. IRC actions and
+		// the operator's state remain bound to the owning primary conversation.
+		const session = this.session;
+		const resetClient = () => {
+			this.#selectorController.disposeIrcViewer();
+			this.#ircClient?.dispose();
+			this.#ircClient = new OperatorIrcClient(root, session, {
+				operatorName: handle,
+				operatorId: this.#ircOperatorId,
+				requestRender: () => this.ui.requestRender(),
+				reconcileOverlay: () => this.#selectorController.reconcileIrcViewer(),
+			});
+		};
 		IrcBus.restoreGroupsForRoot(root);
 		const releaseOperator = this.#releaseIrcOperator;
-		const unsubscribe = this.session.registerSessionChangeCallback(() => IrcBus.restoreGroupsForRoot(root));
+		resetClient();
+		const unsubscribe = session.registerSessionChangeCallback(() => {
+			IrcBus.restoreGroupsForRoot(root);
+			resetClient();
+		});
+		// Focus follows a child's transcript subscription, but an operator
+		// notice still belongs to the person at this UI.
+		const unsubscribeRelay = session.subscribe(event => {
+			if (
+				this.focusedAgentId &&
+				event.type === "irc_message" &&
+				event.message.customType === "irc:relay" &&
+				event.message.display
+			) {
+				return this.#eventController.dispatchSessionEvent(event);
+			}
+		});
 		this.#releaseIrcOperator = () => {
 			unsubscribe();
+			unsubscribeRelay();
+			this.#selectorController.disposeIrcViewer();
+			this.#ircClient?.dispose();
+			this.#ircClient = undefined;
 			releaseOperator?.();
 		};
 	}
@@ -10683,8 +10727,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		)?.trim();
 	}
 
-	showIrcViewer(): void {
-		this.#selectorController.showIrcViewer();
+	showIrcViewer(request?: IrcClientOpenRequest): void {
+		this.#selectorController.showIrcViewer(request);
 	}
 
 	resetObserverRegistry(): void {

@@ -3,6 +3,7 @@ import type { ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
@@ -306,8 +307,12 @@ function createOperatorNotice(
 	};
 }
 
-function createOperatorContext() {
-	const ctx = createInteractiveModeContext({ ircOperatorId: "Operator" });
+function createOperatorContext(focusedAgentId?: string) {
+	const ctx = createInteractiveModeContext({
+		ircOperatorId: "Operator",
+		focusedAgentId,
+		viewSession: focusedAgentId ? {} : undefined,
+	});
 	const { chatContainer } = ctx;
 	// A still-running tool, as in createIrcContext: cards under it stay in the live region.
 	const runningTool = {
@@ -359,16 +364,38 @@ describe("EventController IRC notifications to the operator", () => {
 		expect(chatContainer.children).toHaveLength(2);
 	});
 
-	it("names the group on the card for her leg of a group send, without the heading her agents' models read", async () => {
-		const { ctx, rendered } = createOperatorContext();
+	it("notifies only for an addressed room mention when a child's transcript is focused", async () => {
+		const { ctx, rendered } = createOperatorContext("Scout");
 		const controller = new EventController(ctx);
-		const text = "Compare findings.";
+		const registry = AgentRegistry.global();
+		const id = "irc-notification-test-root";
+		const root = registry.register({ id, displayName: id, kind: "main", session: ctx.session });
+		const text = "@Operator compare findings.";
 		const body = `Scout sent this to group council, which you are part of.\n\n${text}`;
-
-		await controller.handleEvent({
-			type: "irc_message",
-			message: createOperatorNotice(3, { body, broadcast: true, group: "council", groupText: text, fanoutId: "f3" }),
-		});
+		try {
+			await controller.handleEvent({
+				type: "irc_message",
+				message: createOperatorNotice(3, {
+					body: "passive room chat",
+					broadcast: true,
+					group: "council",
+					groupText: "passive room chat",
+				}),
+			});
+			await controller.handleEvent({
+				type: "irc_message",
+				message: createOperatorNotice(4, { from: id, body: "already shown in the main tool call" }),
+			});
+			await controller.handleEvent({
+				type: "irc_message",
+				message: createOperatorNotice(3, { body, broadcast: true, group: "council", groupText: text, fanoutId: "f3" }),
+			});
+		} finally {
+			registry.unregister(id, root);
+			controller.dispose();
+		}
+		expect(rendered().join("\n")).not.toContain("passive room chat");
+		expect(rendered().join("\n")).not.toContain("already shown in the main tool call");
 
 		const card = rendered().find(row => row.includes(text));
 		expect(card).toContain("#council");

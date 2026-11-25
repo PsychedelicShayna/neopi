@@ -76,6 +76,8 @@ import {
 	splitAssistantMessageToolTimeline,
 } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { isOperatorIrcNotice } from "@oh-my-pi/pi-tui/chat/irc-message";
+import { operatorRelayNotifies } from "../../irc/operator";
+import { AgentRegistry } from "../../registry/agent-registry";
 import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { ComposerPredictionController } from "./composer-prediction-controller";
 import { StreamingRevealController } from "./streaming-reveal";
@@ -1495,12 +1497,19 @@ export class EventController {
 	 */
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
 		if (!event.message.display) return;
-		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
+		const operatorId = this.ctx.ircOperatorId;
+		const operatorCopy = operatorId !== undefined && isOperatorIrcNotice(event.message, operatorId);
+		if (operatorCopy) {
+			const rootId = AgentRegistry.global().rootForSession(this.ctx.session)?.id;
+			if (!operatorRelayNotifies(event.message.details, operatorId, rootId)) return;
+		}
+		const details: unknown = event.message.details;
+		const messageId = isRecord(details) && typeof details.messageId === "string" ? details.messageId : undefined;
+		const signature = `${event.message.role}:${event.message.customType}:${messageId ?? event.message.timestamp}`;
 		if (this.#renderedCustomMessages.has(signature)) {
 			return;
 		}
 		this.#renderedCustomMessages.add(signature);
-		const details: unknown = event.message.details;
 		const fanoutId = isRecord(details) && typeof details.fanoutId === "string" ? details.fanoutId : undefined;
 		// The leg delivered to this session is the one its transcript stores; legs
 		// observed on their way to others are display-only copies of the same send.
@@ -1517,7 +1526,7 @@ export class EventController {
 		const components = this.ctx.addMessageToChat(event.message);
 		const [block] = components;
 		if (fanoutId !== undefined) this.#shownIrcFanouts.set(fanoutId, delivered ? undefined : block);
-		if (isOperatorIrcNotice(event.message, this.ctx.ircOperatorId)) {
+		if (operatorCopy) {
 			// Left under any running block: there its rows cannot reach scrollback,
 			// so the card can still be taken away when it retires.
 			this.#scheduleIrcNoticeExpiry(signature, components);

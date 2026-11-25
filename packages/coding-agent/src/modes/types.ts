@@ -34,6 +34,7 @@ import type {
 	PlanReviewRequestedEvent,
 } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
+import type { IrcClientOpenRequest, OperatorIrcClient } from "../irc/operator";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession } from "../session/agent-session";
@@ -256,6 +257,8 @@ export interface InteractiveModeContext {
 	readonly focusedAgentId: string | undefined;
 	/** The operator's IRC id (issue #31), undefined when she is not a registered participant. */
 	readonly ircOperatorId: string | undefined;
+	/** The client belongs to the primary root/session, not the agent currently being viewed. */
+	readonly ircClient: OperatorIrcClient | undefined;
 	/** Send an IRC message as the operator (to a peer id or `all`); resolves with the delivery summary. */
 	sendAsIrcOperator(to: string, message: string, replyTo?: string): Promise<{ text: string; isError: boolean }>;
 	/** Set while a tool-approval dialog owns the composer: its drafts steer the main session awaiting that approval, even from a focused agent's view. */
@@ -760,7 +763,7 @@ export interface InteractiveModeContext {
 	showAgentHub(options?: AgentHubOpenOptions): void;
 	showSpawn(launcher: AgentLauncher): Promise<SpawnDraft | undefined>;
 	showSpawnAssignment(): Promise<string | undefined>;
-	showIrcViewer(): void;
+	showIrcViewer(request?: IrcClientOpenRequest): void;
 	resetObserverRegistry(): void;
 
 	// Input handling

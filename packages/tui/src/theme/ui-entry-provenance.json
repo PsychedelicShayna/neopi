@@ -49,7 +49,7 @@
 			"features": []
 		},
 		"nightly": {
-			"keybindings": ["app.agent.menu", "app.chain.skipStep", "app.navigation.dismiss", "tui.editor.redo"],
+			"keybindings": ["app.agent.menu", "app.chain.skipStep", "app.irc.traffic", "app.navigation.dismiss", "tui.editor.redo"],
 			"statusSegments": [],
 			"roles": [],
 			"composerShapes": [],

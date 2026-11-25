@@ -59,6 +59,7 @@ interface AppKeybindings {
 	"app.clipboard.copyPrompt": true;
 	"app.agents.hub": true;
 	"app.irc.viewer": true;
+	"app.irc.traffic": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -277,7 +278,11 @@ export const KEYBINDINGS = {
 	},
 	"app.irc.viewer": {
 		defaultKeys: "alt+i",
-		description: "Open the IRC communications viewer",
+		description: "Open or close the IRC client",
+	},
+	"app.irc.traffic": {
+		defaultKeys: "alt+shift+i",
+		description: "Open IRC Traffic at the newest message",
 	},
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",

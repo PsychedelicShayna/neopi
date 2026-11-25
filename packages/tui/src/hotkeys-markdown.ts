@@ -153,6 +153,8 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 					],
 					action: "Open the agent hub",
 				},
+				{ keys: [act("app.irc.viewer")], action: "Open or close the IRC client" },
+				{ keys: [act("app.irc.traffic")], action: "Jump to the newest IRC traffic" },
 				{ keys: [{ token: "#<number>" }], action: "GitHub issue/PR reference (e.g. `#3164` → `pr://`/`issue://`)" },
 				{
 					keys: [{ token: "#" }, { text: " / " }, { token: "#<text>" }],
