@@ -1,12 +1,4 @@
-/**
- * Focused subagent views allow chat, viewer-scoped /btw, /copy, /export, /jobs and /usage,
- * effort controls, and session-only /fast. Other slash-command mutations,
- * including /usage reset and /jobs kill, still require returning to main.
- *
- * Failure mode if this regresses: allowed commands silently do nothing (or steer
- * the agent), /copy or exports read the main transcript, or focused effort/fast
- * controls change the main session instead of the viewed agent.
- */
+/** Focused commands must target the right session; dismissing a warning must do nothing. */
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -14,6 +6,7 @@ import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/c
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { setSubagentFast } from "@oh-my-pi/pi-coding-agent/registry/subagent-controls";
+import { HookSelectorComponent, type HookSelectorOptionInput } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 
 function createSessionControls() {
@@ -43,6 +36,8 @@ function createSessionControls() {
 			ultra = enabled;
 			return true;
 		}),
+		forcedOpenAITier: vi.fn(() => undefined),
+		setForcedOpenAITier: vi.fn(() => false),
 		isFastModeEnabled: vi.fn(() => fast),
 		isFastModeActive: vi.fn(() => false),
 		isUltrafastModeEnabled: vi.fn(() => ultra),
@@ -69,6 +64,8 @@ function createFocusedContext() {
 		pendingImages: [] as ImageContent[],
 		pendingImageLinks: [] as (string | undefined)[],
 		clearDraft: vi.fn(),
+		clearSubmittedDraft: vi.fn(),
+		restoreSubmittedDraft: vi.fn(() => false),
 	};
 	const prompt = vi.fn(async () => {});
 	const mainControls = createSessionControls();
@@ -85,8 +82,11 @@ function createFocusedContext() {
 	const ctx = {
 		editor,
 		ui: { requestRender: vi.fn() },
+		showHookSelector: vi.fn<(title: string, options: HookSelectorOptionInput[]) => Promise<string | undefined>>(),
+		showModelSelector: vi.fn(),
 		session: Object.assign(mainControls, {
 			isStreaming: false,
+			prompt: vi.fn(async () => {}),
 			isCompacting: false,
 			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
@@ -136,6 +136,24 @@ async function submit(text: string) {
 	focused.editor.setText(text);
 	await focused.ctx.editor.onSubmit?.(text);
 	return focused;
+}
+
+function submitWithWarning(
+	ctx: InteractiveModeContext,
+	showHookSelector: { mockImplementation: (fn: InteractiveModeContext["showHookSelector"]) => unknown },
+	text: string,
+) {
+	let selector: HookSelectorComponent | undefined;
+	showHookSelector.mockImplementation((title, options) => {
+		const { promise, resolve } = Promise.withResolvers<string | undefined>();
+		selector = new HookSelectorComponent(title, options, resolve, () => resolve(undefined));
+		return promise;
+	});
+	new InputController(ctx).setupEditorSubmitHandler();
+	// The real editor detaches submitted text before the handler runs.
+	const done = ctx.editor.onSubmit?.(text);
+	if (!selector) throw new Error(`Expected a confirmation for ${text}`);
+	return { done, selector };
 }
 
 describe("focused subagent view slash commands", () => {
@@ -400,18 +418,22 @@ describe("focused subagent view slash commands", () => {
 		expect(focused.prompt).not.toHaveBeenCalled();
 	});
 
-	it("keeps a builtin gated to the main session when a side file command shares its name", async () => {
+	it("warns for the builtin /clear instead of running a side file command with the same name", async () => {
 		const focused = createFocusedContext();
 		Object.assign(focused.raw, { fileSlashCommands: new Set(["clear"]) });
 		Object.assign(focused.raw.session, {
 			slashCommands: [{ name: "clear", description: "", content: "Side", side: true, source: "via OMP User" }],
 		});
-		const controller = new InputController(focused.ctx);
-		controller.setupEditorSubmitHandler();
-		focused.editor.setText("/clear");
-		await focused.ctx.editor.onSubmit?.("/clear");
+		const { done, selector } = submitWithWarning(focused.ctx, focused.raw.showHookSelector, "/clear");
+		selector.handleInput("\r");
+		await done;
+		expect(focused.raw.showHookSelector).toHaveBeenCalledWith(
+			expect.stringContaining("focused agent's transcript"),
+			expect.any(Array),
+		);
 		expect(focused.raw.handleBtwCommand).not.toHaveBeenCalled();
-		expect(focused.raw.showStatus).toHaveBeenCalledTimes(1);
+		expect(focused.raw.session.prompt).not.toHaveBeenCalled();
+		expect(focused.prompt).not.toHaveBeenCalled();
 		expect(focused.editor.getText()).toBe("/clear");
 	});
 
@@ -435,39 +457,113 @@ describe("focused subagent view slash commands", () => {
 		expect(focused.prompt).not.toHaveBeenCalled();
 	});
 
-	it("keeps other commands gated to the main session, draft intact", async () => {
-		for (const text of [
-			"/compact",
-			"/model",
-			"/models",
-			"/model openai/gpt-5",
-			"/switch",
-			"/slow on",
-			"!echo unsafe",
-		]) {
-			const { raw, editor, prompt } = await submit(text);
-			expect(editor.getText()).toBe(text);
-			expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));
+	it("sends /notice only to the focused transcript without confirmation", async () => {
+		const text = "/notice keep this wording :)";
+		const { raw, prompt } = await submit(text);
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledWith(
+			expect.stringContaining("keep this wording :)"),
+			expect.objectContaining({ synthetic: true, userInitiated: true }),
+		);
+		expect(raw.session.prompt).not.toHaveBeenCalled();
+		expect(raw.showHookSelector).not.toHaveBeenCalled();
+	});
+
+	it("queues behind the focused agent's active turn without prompting Main", async () => {
+		const focused = createFocusedContext();
+		const controller = new InputController(focused.ctx);
+		focused.ctx.handleQueueCommand = message => controller.handleQueueCommand(message);
+		Object.assign(focused.raw.viewSession, { isStreaming: true });
+		controller.setupEditorSubmitHandler();
+		await focused.ctx.editor.onSubmit?.("/queue wait for my next instruction");
+		expect(focused.prompt).toHaveBeenCalledWith(
+			"wait for my next instruction",
+			expect.objectContaining({ streamingBehavior: "followUp" }),
+		);
+		expect(focused.raw.session.prompt).not.toHaveBeenCalled();
+		expect(focused.raw.showHookSelector).not.toHaveBeenCalled();
+	});
+
+	it("opens the focused model picker with /model, /models, or /switch without confirmation", async () => {
+		for (const text of ["/model", "/models", "/switch", "/models session"]) {
+			const { raw, prompt } = await submit(text);
+			expect(raw.showModelSelector).toHaveBeenCalledTimes(1);
+			expect(raw.showModelSelector).toHaveBeenCalledWith({ temporaryOnly: true });
+			expect(raw.showHookSelector).not.toHaveBeenCalled();
+			expect(raw.session.prompt).not.toHaveBeenCalled();
 			expect(prompt).not.toHaveBeenCalled();
 		}
 	});
 
-	it("keeps the mutating /usage reset form gated to the main session", async () => {
-		for (const text of ["/usage reset", "/usage reset anthropic/active"]) {
-			const { raw, editor } = await submit(text);
-			expect(raw.showResetUsageSelector).not.toHaveBeenCalled();
-			expect(raw.handleUsageCommand).not.toHaveBeenCalled();
-			expect(editor.getText()).toBe(text);
+	it("selects a model on the focused agent without touching the parent or confirming", async () => {
+		const focused = createFocusedContext();
+		const childSelect = vi.fn(async () => ({ ok: true, data: { provider: "openai", modelId: "gpt-5" } }));
+		const mainSelect = vi.fn();
+		Object.assign(focused.raw.viewSession, { selectSubagentModel: childSelect });
+		Object.assign(focused.raw.session, { selectSubagentModel: mainSelect });
+		new InputController(focused.ctx).setupEditorSubmitHandler();
+		await focused.ctx.editor.onSubmit?.("/model openai/gpt-5");
+		expect(childSelect).toHaveBeenCalledTimes(1);
+		expect(childSelect).toHaveBeenCalledWith({ selector: "openai/gpt-5" });
+		expect(mainSelect).not.toHaveBeenCalled();
+		expect(focused.raw.showHookSelector).not.toHaveBeenCalled();
+		expect(focused.raw.session.prompt).not.toHaveBeenCalled();
+		expect(focused.prompt).not.toHaveBeenCalled();
+	});
+
+	it("keeps non-slash shell execution gated to the main session, draft intact", async () => {
+		const text = "!echo unsafe";
+		const { raw, editor, prompt } = await submit(text);
+		expect(editor.getText()).toBe(text);
+		expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));
+		expect(prompt).not.toHaveBeenCalled();
+	});
+
+	it("Enter selects Cancel and leaves the draft and both sessions untouched", async () => {
+		for (const text of [
+			"/compact",
+			"/slow on",
+			"/usage reset",
+			"/usage reset anthropic/active",
+			"/jobs kill all",
+			"/jobs kill job-1",
+		]) {
+			const focused = createFocusedContext();
+			const cancelAsyncJob = vi.fn();
+			const runFocusedAgentCommand = vi.fn();
+			Object.assign(focused.raw.session, { cancelAsyncJob });
+			Object.assign(focused.raw.viewSession, { cancelAsyncJob, runFocusedAgentCommand });
+			const { done, selector } = submitWithWarning(focused.ctx, focused.raw.showHookSelector, text);
+			selector.handleInput("\r");
+			await done;
+			expect(focused.editor.getText()).toBe(text);
+			expect(focused.editor.clearDraft).not.toHaveBeenCalled();
+			expect(focused.raw.showResetUsageSelector).not.toHaveBeenCalled();
+			expect(focused.raw.handleUsageCommand).not.toHaveBeenCalled();
+			expect(focused.raw.handleJobsCommand).not.toHaveBeenCalled();
+			expect(focused.raw.session.prompt).not.toHaveBeenCalled();
+			expect(focused.prompt).not.toHaveBeenCalled();
+			expect(cancelAsyncJob).not.toHaveBeenCalled();
+			expect(runFocusedAgentCommand).not.toHaveBeenCalled();
 		}
 	});
 
-	it("keeps the mutating /jobs kill form gated to the main session", async () => {
-		for (const text of ["/jobs kill all", "/jobs kill job-1"]) {
-			const { raw, editor } = await submit(text);
-			expect(raw.handleJobsCommand).not.toHaveBeenCalled();
-			expect(raw.showStatus).toHaveBeenCalled();
-			expect(editor.getText()).toBe(text);
-		}
+	it("only stops the focused agent's job after explicitly confirming", async () => {
+		const focused = createFocusedContext();
+		const childCancel = vi.fn(() => true);
+		const mainCancel = vi.fn(() => true);
+		const snapshot = { running: [{ id: "job-1" }] };
+		Object.assign(focused.raw.viewSession, { getAsyncJobSnapshot: () => snapshot, cancelAsyncJob: childCancel });
+		Object.assign(focused.raw.session, { getAsyncJobSnapshot: () => snapshot, cancelAsyncJob: mainCancel });
+		const { done, selector } = submitWithWarning(focused.ctx, focused.raw.showHookSelector, "/jobs kill job-1");
+		expect(childCancel).not.toHaveBeenCalled();
+		selector.handleInput("\x1b[B");
+		selector.handleInput("\r");
+		await done;
+		expect(childCancel).toHaveBeenCalledTimes(1);
+		expect(childCancel).toHaveBeenCalledWith("job-1");
+		expect(mainCancel).not.toHaveBeenCalled();
+		expect(focused.editor.getText()).toBe("");
 	});
 
 	it("exports the viewed (focused) session rather than the main session", async () => {

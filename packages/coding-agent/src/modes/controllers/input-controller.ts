@@ -69,8 +69,9 @@ import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { PINNED_HUD_TOGGLE_ID } from "../../task/output-manager";
 import { pickRecentFocusableAgentId } from "./session-focus-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import { focusedCommandRoute, type FocusedCommandEffect } from "../../slash-commands/focused-command-effects";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
-import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
+import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { isTinyLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
 import { resolveReadPath } from "../../tools/path-utils";
@@ -197,28 +198,18 @@ function hasPasteText(value: unknown): value is PasteTarget {
 	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
 }
 
-/**
- * Slash commands that also run from a focused subagent view, keyed by canonical name to
- * a check on their arguments: viewer-scoped reads and effort controls for the
- * focused agent. Every other command (and mutating forms such
- * as `/usage reset`, which spends a saved rate-limit reset, or `/jobs kill`, which cancels
- * a running job) still needs the main session.
- */
-const FOCUSED_VIEW_COMMANDS: Record<string, (args: string) => boolean> = {
-	btw: () => true,
-	copy: () => true,
-	effort: () => true,
-	export: () => true,
-	jobs: args => {
-		const { verb, rest } = parseSubcommand(args);
-		return !verb || (verb === "full" && !rest);
-	},
-	usage: args => {
-		const { verb, rest } = parseSubcommand(args);
-		return !verb || (verb === "show" && !rest);
-	},
-};
-const FOCUSED_VIEW_COMMAND_LIST = ["/fast", ...Object.keys(FOCUSED_VIEW_COMMANDS).map(name => `/${name}`)].join(", ");
+const FOCUSED_COMMAND_EFFECT_MESSAGES = {
+	transcript: "overlays.input_controller.focused_effect_transcript",
+	jobs: "overlays.input_controller.focused_effect_jobs",
+	tool: "overlays.input_controller.focused_effect_tool",
+	account: "overlays.input_controller.focused_effect_account",
+	session: "overlays.input_controller.focused_effect_session",
+	settings: "overlays.input_controller.focused_effect_settings",
+	external: "overlays.input_controller.focused_effect_external",
+	files: "overlays.input_controller.focused_effect_files",
+	process: "overlays.input_controller.focused_effect_process",
+	unknown: "overlays.input_controller.focused_effect_unknown",
+} as const satisfies Record<FocusedCommandEffect, string>;
 
 /** Commands whose handler owns the submitted draft, images included: Enter takes it out of the editor first. */
 const DETACHED_DRAFT_COMMANDS = new Set([
@@ -2253,13 +2244,17 @@ export class InputController {
 		);
 	}
 
-	/** Submit chat, viewer commands, or session-only /fast to the focused subagent. */
+	/** Submit to the focused agent, except for explicitly confirmed host-owned commands. */
 	async #submitToFocusedSession(
 		text: string,
 		streamingBehavior: "steer" | "followUp",
 		commandActor?: ControlActor,
 	): Promise<void> {
 		const target = this.ctx.viewSession;
+		const focusedId = this.ctx.focusedAgentId;
+		const main = this.ctx.session;
+		let promptTarget = target;
+		let commandPrompt = false;
 		const draftText = this.ctx.editor.getText();
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		const imageLinks =
@@ -2300,16 +2295,38 @@ export class InputController {
 				}
 				return;
 			}
-			const name = parsed && lookupBuiltinSlashCommand(parsed.name)?.name;
-			if (parsed && name && FOCUSED_VIEW_COMMANDS[name]?.(parsed.args)) {
-				// Viewer-scoped commands: /btw asks about the focused transcript, /copy picks
-				// from it, /export writes it (with its own subagents), /jobs lists the focused
-				// agent's jobs without a way to cancel them, /usage reports account-wide limits,
-				// and /effort changes the focused agent's thinking. Model controls stay main-session-only.
-				this.#recordSlashCommandUsage(text);
-				const input = images ? { images, imageLinks } : undefined;
-				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx, input }, commandActor)) === true) {
+			const builtin = parsed && lookupBuiltinSlashCommand(parsed.name);
+			if (parsed && builtin && (builtin.allowArgs || !parsed.args)) {
+				const route = focusedCommandRoute(builtin.name, parsed.args);
+				if (route.effect) {
+					const confirmed = await this.#confirmFocusedCommand(parsed.name, route.effect);
+					if (
+						this.ctx.focusedAgentId !== focusedId ||
+						this.ctx.viewSession !== target ||
+						this.ctx.session !== main
+					)
+						return;
+					if (!confirmed) {
+						this.#restoreFocusedCommandDraft(text);
+						return;
+					}
+				}
+				try {
+					const input = images ? { images, imageLinks } : undefined;
+					const result = await executeBuiltinSlashCommand(
+						text,
+						{ ctx: this.ctx, input, focusedSession: route.target === "view" ? target : undefined },
+						commandActor,
+						route.target === "home" ? target : undefined,
+					);
+					this.#recordSlashCommandUsage(text);
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
+					if (typeof result !== "string") return;
+					text = result;
+					commandPrompt = true;
+					if (route.target === "main") promptTarget = main;
+				} catch (error) {
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
 					return;
 				}
 			}
@@ -2317,6 +2334,7 @@ export class InputController {
 		// Builtins keep precedence over side file commands.
 		if (
 			text &&
+			!commandPrompt &&
 			!this.#matchesBuiltinSlashCommand(text) &&
 			(await this.#runSideFileCommand(text, {
 				detach: () => this.#detachSideSubmission(draftText, images),
@@ -2326,30 +2344,45 @@ export class InputController {
 			return;
 		}
 		if (
-			text &&
-			(text.startsWith("/") ||
-				text.startsWith("!") ||
-				parseReplEvalInput(text, this.ctx.session.extensionRunner?.getEvalBackendAliases()))
+			!commandPrompt &&
+			(text.startsWith("!") || parseReplEvalInput(text, this.ctx.session.extensionRunner?.getEvalBackendAliases()))
 		) {
 			this.ctx.showStatus(
-				translate("overlays.input_controller.focused_commands", {
-					FOCUSED_VIEW_COMMAND_LIST: `${FOCUSED_VIEW_COMMAND_LIST}`,
-					value: `${formatDoubleTap("left")}`,
-				}),
+				translate("overlays.input_controller.focused_local_execution", { value: formatDoubleTap("left") }),
 			);
-			return; // editor text not cleared: Editor does not auto-clear on submit
+			return;
+		}
+		const slash = !commandPrompt && parseSlashCommand(text);
+		if (slash) {
+			if (this.ctx.collabGuest) {
+				this.ctx.showStatus(translate("overlays.input_controller.command_host_only", { value: `/${slash.name}` }));
+				return;
+			}
+			const confirmed = await this.#confirmFocusedCommand(slash.name, "unknown");
+			if (this.ctx.focusedAgentId !== focusedId || this.ctx.viewSession !== target || this.ctx.session !== main)
+				return;
+			if (!confirmed) {
+				this.#restoreFocusedCommandDraft(text);
+				return;
+			}
 		}
 		const isContinueShortcut = streamingBehavior === "steer" && !images && (text === "." || text === "c");
 		this.ctx.editor.clearDraft(text);
 		try {
 			// Continue shortcuts do not request queueing: keep rejecting them while
 			// busy instead of scheduling another continuation behind the active turn.
-			if (isContinueShortcut) {
-				await target.resume();
+			if (isContinueShortcut && !commandPrompt) {
+				await promptTarget.resume();
+			} else if (slash) {
+				// Let the home session resolve extensions and prompt templates, without
+				// optimistically painting a user message for a locally consumed command.
+				await target.prompt(text, { streamingBehavior, images, ...(commandActor && { commandActor }) });
 			} else {
-				await this.ctx.withLocalSubmission(text, () => target.prompt(text, { streamingBehavior, images }), {
-					imageCount: images?.length ?? 0,
-				});
+				await this.ctx.withLocalSubmission(
+					text,
+					() => promptTarget.prompt(text, { streamingBehavior, images, ...(commandActor && { commandActor }) }),
+					{ imageCount: images?.length ?? 0 },
+				);
 			}
 		} catch (error) {
 			// Hand the message back, mirroring the main submit error path: restore
@@ -2364,6 +2397,25 @@ export class InputController {
 		}
 		this.ctx.updatePendingMessagesDisplay();
 		this.ctx.ui.requestRender();
+	}
+
+	#restoreFocusedCommandDraft(text: string): void {
+		const editor = this.ctx.editor;
+		if (!editor.getText() && !editor.restoreSubmittedDraft()) editor.setCollapsedText(text);
+	}
+
+	async #confirmFocusedCommand(name: string, effect: FocusedCommandEffect): Promise<boolean> {
+		const command = sanitizeText(name).replace(/[\r\n\t]/g, " ");
+		const description = translate(FOCUSED_COMMAND_EFFECT_MESSAGES[effect]);
+		return (
+			(await this.ctx.showHookSelector(
+				translate("overlays.input_controller.focused_confirm", { command, description }),
+				[
+					{ value: "cancel", label: translate("overlays.input_controller.focused_cancel") },
+					{ value: "run", label: translate("overlays.input_controller.focused_run") },
+				],
+			)) === "run"
+		);
 	}
 
 	handleCtrlC(): void {
@@ -2680,7 +2732,12 @@ export class InputController {
 		};
 		const images = source.images?.length ? [...source.images] : undefined;
 		const imageLinks = images && source.imageLinks?.length ? [...source.imageLinks] : undefined;
-		await this.#queueForYield(text, { images, imageLinks, detachedText: detached?.text });
+		await this.#queueForYield(text, {
+			images,
+			imageLinks,
+			detachedText: detached?.text,
+			focused: !detached && Boolean(this.ctx.focusedAgentId) && !this.ctx.approvalOwnsComposer,
+		});
 	}
 
 	async #queueForYield(
@@ -2688,6 +2745,7 @@ export class InputController {
 		options: {
 			historyText?: string;
 			images?: ImageContent[];
+			focused?: boolean;
 			imageLinks?: (string | undefined)[];
 			/** The submitted draft already left the editor; anything there now is newer. Restored on failure. */
 			detachedText?: string;
@@ -2700,6 +2758,9 @@ export class InputController {
 			this.ctx.editor.setText(options.detachedText ?? options.historyText ?? text);
 			return [];
 		}
+		const { focused } = options;
+		const main = this.ctx.session;
+		const target = focused ? this.ctx.viewSession : main;
 
 		const splitMessages = splitQueuedMessages(text);
 		if (splitMessages.length === 0 && !options.images?.length) {
@@ -2718,8 +2779,8 @@ export class InputController {
 				: undefined;
 		if (options.detachedText === undefined) this.ctx.editor.clearDraft(options.historyText);
 
-		this.releaseStaleYieldCompaction();
-		if (this.ctx.session.isCompacting || this.ctx.yieldCompaction) {
+		if (!focused) this.releaseStaleYieldCompaction();
+		if (!focused && (this.ctx.session.isCompacting || this.ctx.yieldCompaction)) {
 			for (let index = 0; index < messages.length; index++) {
 				this.ctx.compactionQueuedMessages.push({
 					text: messages[index] ?? "",
@@ -2737,7 +2798,12 @@ export class InputController {
 			return messages;
 		}
 
-		const startImmediately = !this.ctx.session.isStreaming && this.ctx.session.queuedMessageCount === 0;
+		const queue = focused && !target.isStreaming ? this.ctx.viewSession.getQueuedMessages() : undefined;
+		const startImmediately =
+			!target.isStreaming &&
+			(queue
+				? queue.steering.length + queue.followUp.length + queue.liveSteered === 0
+				: main.queuedMessageCount === 0);
 		let queuedCount = 0;
 		try {
 			if (startImmediately) {
@@ -2746,7 +2812,7 @@ export class InputController {
 				const [first = "", ...rest] = messages;
 				const followUps = rest.length > 0 ? rest : undefined;
 				const disposeRest = rest.map(message => this.ctx.recordLocalSubmission(message));
-				if (this.ctx.onInputCallback) {
+				if (!focused && this.ctx.onInputCallback) {
 					this.ctx.onInputCallback(
 						this.ctx.startPendingSubmission({
 							text: first,
@@ -2761,7 +2827,7 @@ export class InputController {
 						await this.ctx.withLocalSubmission(
 							first,
 							() =>
-								this.ctx.session.prompt(first, {
+								target.prompt(first, {
 									images,
 									streamingBehavior: "followUp",
 									followUps,
@@ -2783,9 +2849,21 @@ export class InputController {
 			while (queuedCount < messages.length) {
 				const message = messages[queuedCount] ?? "";
 				const queuedImages = queuedCount === 0 ? images : undefined;
-				await this.ctx.withLocalSubmission(message, () => this.ctx.session.followUp(message, queuedImages), {
-					imageCount: queuedImages?.length ?? 0,
-				});
+				await this.ctx.withLocalSubmission(
+					message,
+					async () => {
+						if (focused) {
+							await target.prompt(message, {
+								images: queuedImages,
+								streamingBehavior: "followUp",
+								runCommands: false,
+							});
+						} else {
+							await main.followUp(message, queuedImages);
+						}
+					},
+					{ imageCount: queuedImages?.length ?? 0 },
+				);
 				queuedCount++;
 			}
 		} catch (error) {
@@ -2845,7 +2923,7 @@ export class InputController {
 			return;
 		}
 
-		// Focused subagent session: follow-ups go to it; non-chat input is gated.
+		// Focused Enter and Ctrl+Enter share command dispatch and confirmation.
 		if (this.ctx.focusedAgentId && !this.ctx.approvalOwnsComposer) {
 			await this.#submitToFocusedSession(text, "followUp");
 			return;

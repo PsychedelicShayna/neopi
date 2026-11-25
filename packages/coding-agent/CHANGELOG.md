@@ -356,6 +356,7 @@
 
 ### Changed
 
+- Run slash commands from a focused subagent transcript, including `/notice` directly to that agent. Commands with shared, destructive, or unknown effects ask first with Cancel selected ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Launch directly from an agent type and inline spec, enter only an assignment, or edit all launch settings on one screen. The resulting `/hub <id>` link opens the agent transcript directly ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler settings moved from **Memory** to their own **Chronicler** tab next to **Memory**.
 - The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.

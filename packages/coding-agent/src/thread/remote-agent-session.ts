@@ -86,6 +86,8 @@ import type {
 	SessionStats,
 	SteerOptions,
 } from "../session/agent-session-types";
+import type { ControlActor } from "../control/actor";
+import type { FocusedAgentCommandResult } from "../slash-commands/focused-agent-command";
 import {
 	asyncJobSnapshot,
 	asyncJobTree,
@@ -812,6 +814,10 @@ export class RemoteAgentSession implements AgentViewSession {
 
 	retry(): Promise<boolean> {
 		return this.#command("retry");
+	}
+
+	runFocusedAgentCommand(text: string, actor?: ControlActor): Promise<FocusedAgentCommandResult> {
+		return this.#command("runFocusedAgentCommand", text, actor);
 	}
 
 	abortRetry(): void {
