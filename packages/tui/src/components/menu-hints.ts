@@ -5,8 +5,7 @@ import type { NativeNode } from "../native/node";
 import { compositeLineAt } from "../render/composite";
 import type { Component } from "../tui";
 import { replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { getMenuSearchVimMode, type MenuKeyReader } from "./menu-navigation";
-import { clampScrollOffset } from "./scroll-viewport";
+import { getMenuSearchVimMode, type MenuKeyReader, MenuViewport } from "./menu-navigation";
 
 export const MENU_VIM_HINT = "hjkl gg/G C-u d e y";
 
@@ -63,9 +62,7 @@ export class MenuHints implements Component {
 export class MenuHelp {
 	#open = false;
 	readonly #extra: string | (() => string);
-	#scroll = 0;
-	#contentsHeight = 0;
-	#visibleRows = 0;
+	readonly #viewport: MenuViewport | undefined;
 
 	constructor(
 		readonly vim = MENU_VIM_HINT,
@@ -74,6 +71,7 @@ export class MenuHelp {
 		readonly keys?: MenuKeyReader,
 	) {
 		this.#extra = extra;
+		this.#viewport = keys ? new MenuViewport() : undefined;
 	}
 
 	get extra(): string {
@@ -89,33 +87,32 @@ export class MenuHelp {
 			if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "?") {
 				this.#open = false;
 				this.keys?.reset();
-			} else {
+			} else if (this.#viewport) {
 				const action = this.keys?.read(data);
 				if (action && action !== "pending") {
-					let scroll = this.#scroll;
 					switch (action.kind) {
 						case "move":
 						case "scroll":
-							scroll += action.delta;
+							this.#viewport.scroll(action.delta);
 							break;
 						case "page":
-							scroll += action.delta * this.#visibleRows;
+							this.#viewport.scroll(action.delta * this.#viewport.visibleItems);
 							break;
 						case "halfPage":
-							scroll += action.delta * Math.max(1, Math.floor(this.#visibleRows / 2));
+							this.#viewport.scroll(action.delta * Math.max(1, Math.floor(this.#viewport.visibleItems / 2)));
 							break;
 						case "boundary":
-							scroll = action.edge === "first" ? 0 : this.#contentsHeight;
+							// Layout clamps End to the last full window.
+							this.#viewport.setTop(action.edge === "first" ? 0 : Number.MAX_SAFE_INTEGER);
 							break;
 					}
-					this.#scroll = clampScrollOffset(scroll, this.#contentsHeight, this.#visibleRows);
 				}
 			}
 			return true;
 		}
 		if (data !== "?") return false;
 		this.#open = true;
-		this.#scroll = 0;
+		this.#viewport?.setTop(0);
 		this.keys?.reset();
 		return true;
 	}
@@ -163,16 +160,15 @@ export class MenuHelp {
 	}
 
 	render(lines: readonly string[], width: number): string[] {
-		if (!this.#open || width < 6 || (this.keys && lines.length < 3)) return [...lines];
+		if (!this.#open || width < 6 || (this.#viewport && lines.length < 3)) return [...lines];
 		const boxWidth = Math.min(width, 64);
 		const innerWidth = boxWidth - 4;
 		const explanations = this.#explanations();
 		let contents = explanations.flatMap(line => (line ? wrapTextWithAnsi(line, innerWidth) : [""]));
-		if (this.keys) {
-			this.#contentsHeight = contents.length;
-			this.#visibleRows = Math.min(contents.length, lines.length - 2);
-			this.#scroll = clampScrollOffset(this.#scroll, this.#contentsHeight, this.#visibleRows);
-			contents = contents.slice(this.#scroll, this.#scroll + this.#visibleRows);
+		if (this.#viewport) {
+			// Each wrapped visual line is a viewport item, so page motions count rows.
+			const { startIndex, endIndex } = this.#viewport.layout(contents.map(() => 1), 0, lines.length - 2);
+			contents = contents.slice(startIndex, endIndex);
 		}
 		const box = [
 			`┌${"─".repeat(boxWidth - 2)}┐`,

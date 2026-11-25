@@ -305,6 +305,7 @@ describe("side-panel popups", () => {
 	});
 
 	it("keeps filters actionable and shields agent rows in an eight-row fullscreen panel", async () => {
+		const previousVim = getMenuSearchVimMode();
 		const h = await harness(100, 8);
 		const runner: AgentRecordLike = {
 			id: "runner",
@@ -325,6 +326,7 @@ describe("side-panel popups", () => {
 			await h.settle();
 		};
 		try {
+			setMenuSearchVimMode(false);
 			h.sidePanel.registerView(
 				"agents",
 				new AgentsSection({
@@ -367,14 +369,31 @@ describe("side-panel popups", () => {
 			expect(focus).not.toHaveBeenCalled();
 			expect(openTranscript).not.toHaveBeenCalled();
 
-			await send("\x1b", "?");
+			await send("\x1b");
+			const beforeHelp = viewport();
+			await send("?");
+			const helpFooter = "? / Enter / Esc: return to menu";
+			expect(screen()).not.toContain(helpFooter);
 			expect(screen()).not.toContain("i DM · r revive · x kill");
 			expect(viewport().at(-1)).toContain("└─");
 			await send(`\x1b[<0;50;${row + 1}M`, "\x1b[F");
 			expect(screen()).toContain("i DM · r revive · x kill");
+			expect(screen()).toContain(helpFooter);
+			await send("\x1b[H");
+			expect(screen()).not.toContain(helpFooter);
+			await send("\x1b[6~");
+			expect(screen()).toContain("i DM · r revive · x kill");
+			await send("\x1b[6~");
+			expect(screen()).toContain(helpFooter);
+
+			await send("\x1b");
+			expect(screen()).not.toContain(helpFooter);
+			expect(viewport()).toEqual(beforeHelp);
+			expect(h.sidePanel.fullscreenActive).toBe(true);
 			expect(focus).not.toHaveBeenCalled();
 			expect(openTranscript).not.toHaveBeenCalled();
 		} finally {
+			setMenuSearchVimMode(previousVim);
 			h.sidePanel.dispose();
 			h.stop();
 		}
