@@ -790,6 +790,8 @@ describe("interactive native input ingress", () => {
 				focusedAgentId: { value: "focused-task" },
 				viewSession: { value: { isStreaming: true, prompt: focusedPrompt } },
 			});
+			const showHookSelector = vi.fn(async () => "cancel");
+			h.ctx.showHookSelector = showHookSelector;
 			h.editor.setText("focused chat");
 			await h.pressSubmit(key);
 			expect(focusedPrompt).toHaveBeenCalledWith("focused chat", {
@@ -804,6 +806,7 @@ describe("interactive native input ingress", () => {
 			expect(input).not.toHaveBeenCalled();
 			expect(h.prompt).not.toHaveBeenCalled();
 			expect(h.ctx.handleClearCommand).not.toHaveBeenCalled();
+			expect(showHookSelector).toHaveBeenCalledTimes(1);
 		});
 	}
 

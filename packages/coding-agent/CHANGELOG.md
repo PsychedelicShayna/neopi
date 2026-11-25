@@ -357,7 +357,7 @@
 ### Changed
 
 - Read `model://astra` or another partial model name to list matching available models and variants while still seeing the best match in `selected`. Exact IDs still return one result ([#923](https://github.com/PsychedelicShayna/neopi/issues/923)).
-- Run slash commands from a focused subagent transcript, including `/notice` directly to that agent. Commands with shared, destructive, or unknown effects ask first with Cancel selected ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
+- Run `/notice`, `/goal`, `/todo`, `/tree`, `/branch`, and other session commands against the focused subagent. Shared, destructive, or unknown actions ask first with Cancel selected; commands that still run on Main or affect the whole harness name their target ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Launch directly from an agent type and inline spec, enter only an assignment, or edit all launch settings on one screen. The resulting `/hub <id>` link opens the agent transcript directly ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler settings moved from **Memory** to their own **Chronicler** tab next to **Memory**.
 - The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.

@@ -379,7 +379,9 @@ export function buildLocalFileArgumentCompletions(
 			.toLowerCase();
 		try {
 			const files = await InternalUrlRouter.instance().complete("local", query, {
-				localProtocolOptions: sessionLocalProtocolOptions(runtime.ctx.sessionManager),
+				localProtocolOptions: sessionLocalProtocolOptions(
+					(runtime.focusedSession ?? runtime.ctx.viewSession)?.sessionManager ?? runtime.ctx.sessionManager,
+				),
 			});
 			const matches = (files ?? [])
 				.filter(file => file.value.toLowerCase().startsWith(query))

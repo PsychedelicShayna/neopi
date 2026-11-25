@@ -88,6 +88,8 @@ import {
 } from "../../extensibility/plugins/marketplace";
 import { getAvailableThemes, getSymbolTheme, previewTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentHubOpenOptions, InteractiveModeContext, ResumeSessionOptions } from "../../modes/types";
+import type { AgentViewSession } from "../../session/agent-session-handle";
+import type { TreeNavigationExpected } from "../../session/tree-navigation";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import {
@@ -309,6 +311,7 @@ interface MenuVisitState {
 interface OpenMenu {
 	kind: MenuKind;
 	location: MenuLocation;
+	source?: AgentViewSession;
 	/** A history snapshot owned by this request while its component is still loading. */
 	restoreSnapshot?: unknown;
 	component?: Component;
@@ -390,9 +393,16 @@ export class SelectorController {
 	 * is handled. Overlays have no raise API, so a menu another overlay covers
 	 * is remounted on top rather than handed keys while hidden.
 	 */
-	#focusOpenMenu(kind: MenuKind): boolean {
+	#focusOpenMenu(kind: MenuKind, source?: AgentViewSession): boolean {
 		const open = this.#openMenus.get(kind);
 		if (!open) return false;
+		if (source && open.source !== source) {
+			this.#releaseMenu(kind, open);
+			if (isMenuHistoryLeaver(open.component)) open.component.leaveMenu();
+			open.handle?.hide();
+			open.component?.dispose?.();
+			return false;
+		}
 		if (!this.#navigatingHistory) {
 			this.#snapshotOpenMenus();
 			this.#menuHistory.visit(open.location, this.#menuState(open));
@@ -455,7 +465,7 @@ export class SelectorController {
 	 * Register a new `kind` menu; pass it to {@link #releaseMenu} when it closes
 	 * or fails to open. `reopen` repeats this request when menu history returns.
 	 */
-	#claimMenu(kind: MenuKind, reopen: () => void): OpenMenu {
+	#claimMenu(kind: MenuKind, reopen: () => void, source?: AgentViewSession): OpenMenu {
 		const restore =
 			this.#pendingRestore?.kind === kind && this.#pendingRestore.location === this.#menuHistory.current.location
 				? this.#pendingRestore
@@ -463,6 +473,7 @@ export class SelectorController {
 		this.#pendingRestore = undefined;
 		if (!this.#navigatingHistory && !restore) this.#snapshotOpenMenus();
 		const menu: OpenMenu = { kind, location: restore?.location ?? kind, reopen, restoreSnapshot: restore?.snapshot };
+		menu.source = source;
 		this.#openMenus.set(kind, menu);
 		if (!this.#navigatingHistory && !restore) this.#menuHistory.visit(kind, { kind, reopen });
 		this.#retirePendingMenus(menu);
@@ -612,10 +623,10 @@ export class SelectorController {
 	 */
 	showSelector(
 		create: (done: () => void) => { component: Component; focus: Component },
-		history?: { kind: MenuKind; reopen: () => void },
+		history?: { kind: MenuKind; reopen: () => void; source?: AgentViewSession },
 	): void {
-		if (history && this.#focusOpenMenu(history.kind)) return;
-		const menu = history ? this.#claimMenu(history.kind, history.reopen) : undefined;
+		if (history && this.#focusOpenMenu(history.kind, history.source)) return;
+		const menu = history ? this.#claimMenu(history.kind, history.reopen, history.source) : undefined;
 		this.#showInlineSelector(create, menu);
 	}
 
@@ -2626,15 +2637,20 @@ export class SelectorController {
 	}
 
 	/** The rewind selector (Esc Esc), its outline on the latest turn, or on entry `startAt` (a turn's Rewind to here…). */
-	showUserMessageSelector(startAt?: string): void {
-		if (this.#focusOpenMenu("rewind-selector")) return;
-		const entries = this.ctx.sessionManager.getBranch().filter(isTranscriptEntry);
+	showUserMessageSelector(startAt?: string, target?: AgentViewSession): void {
+		const session = target ?? this.ctx.session;
+		if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
+		if (this.#focusOpenMenu("rewind-selector", session)) return;
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
+		const expected = target && this.#treeExpected(target);
+		const entries = manager.getBranch().filter(isTranscriptEntry);
 		if (entries.length === 0) {
 			this.ctx.showStatus(t("overlaysModel.controller.session.no_branch_messages"));
 			return;
 		}
 
 		const done = () => {
+			if (this.#openMenus.get(menu.kind) !== menu) return;
 			this.#releaseMenu(menu.kind, menu);
 			menu.handle?.hide();
 			selector?.dispose();
@@ -2643,18 +2659,18 @@ export class SelectorController {
 		};
 		const selector = new RewindSelectorComponent(entries, {
 			ui: this.ctx.ui,
-			getTool: name => this.ctx.session.getToolByName(name),
-			isBuiltInTool: name => this.ctx.session.hasBuiltInTool(name),
-			getMessageRenderer: type => this.ctx.session.extensionRunner?.getMessageRenderer(type),
-			cwd: this.ctx.sessionManager.getCwd(),
+			getTool: name => session.getToolByName(name),
+			isBuiltInTool: name => session.hasBuiltInTool(name),
+			getMessageRenderer: type => session.extensionRunner?.getMessageRenderer(type),
+			cwd: manager.getCwd(),
 			hideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			proseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			expandThinkingBlocks: () => this.ctx.expandThinkingBlocks,
 			linkTargets: getAssistantMessageLinkTargets(this.ctx),
 			requestRender: () => this.ctx.ui.requestRender(),
-			siblingPaths: entryId => this.#siblingBranchPaths(entryId),
+			siblingPaths: entryId => this.#siblingBranchPaths(entryId, manager),
 			startAt,
-			onSelect: entryId => void this.#rewindFromTranscript(entryId, done),
+			onSelect: entryId => void this.#rewindFromTranscript(entryId, done, false, target, expected),
 			onCancel: done,
 		});
 		if (selector.targetCount === 0) {
@@ -2662,7 +2678,7 @@ export class SelectorController {
 			this.ctx.showStatus(t("overlaysModel.controller.session.no_branch_messages"));
 			return;
 		}
-		const menu = this.#claimMenu("rewind-selector", () => this.showUserMessageSelector(startAt));
+		const menu = this.#claimMenu("rewind-selector", () => this.showUserMessageSelector(startAt, target), session);
 		this.#mountMenu(menu, selector, () => this.#showFullscreenMenu(selector));
 	}
 
@@ -2672,10 +2688,10 @@ export class SelectorController {
 	 * descendants (children are timestamp-ordered, so the last child chain is
 	 * the branch's latest continuation) and filtered to message entries.
 	 */
-	#siblingBranchPaths(entryId: string): BranchVariantPath[] {
-		const entry = this.ctx.sessionManager.getEntry(entryId);
+	#siblingBranchPaths(entryId: string, manager: AgentViewSession["sessionManager"]): BranchVariantPath[] {
+		const entry = manager.getEntry(entryId);
 		if (!entry) return [];
-		const forest = this.ctx.sessionManager.getTree();
+		const forest = manager.getTree();
 		const byId = new Map<string, SessionTreeNode>();
 		const stack = [...forest];
 		while (stack.length > 0) {
@@ -2712,29 +2728,42 @@ export class SelectorController {
 	 * target's prompt again at once (a turn's Retry) instead of leaving it in
 	 * the editor; otherwise the status toast offers Undo ({@link #undoRewind}).
 	 */
-	async #rewindFromTranscript(entryId: string, done: () => void, resend = false): Promise<void> {
-		const entry = this.ctx.sessionManager.getEntry(entryId);
+	async #rewindFromTranscript(
+		entryId: string,
+		done: () => void,
+		resend = false,
+		target?: AgentViewSession,
+		expected?: TreeNavigationExpected,
+	): Promise<void> {
+		const session = target ?? this.ctx.session;
+		if ((this.ctx.viewSession ?? this.ctx.session) !== session) {
+			done();
+			return;
+		}
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
+		const entry = manager.getEntry(entryId);
 		if (!entry || !isTranscriptEntry(entry)) {
 			done();
 			return;
 		}
 
 		const isUserTarget = isUserRequestEntry(entry);
-		const realLeafId = this.ctx.sessionManager.getLeafId();
+		const realLeafId = manager.getLeafId();
 		if (entryId === realLeafId && !isUserTarget) {
 			done();
 			this.ctx.showStatus(t("overlaysModel.controller.session.already_at_point"));
 			return;
 		}
-		const branch = this.ctx.sessionManager.getBranch();
+		const branch = manager.getBranch();
 		const at = branch.findIndex(e => e.id === entryId);
 		const dropped = at < 0 ? 0 : branch.slice(isUserTarget ? at : at + 1).filter(e => isUserRequestEntry(e)).length;
 		const draft = isUserTarget
 			? { text: this.ctx.editor.getExpandedText(), images: [...this.ctx.editor.pendingImages] }
 			: undefined;
 		try {
-			const outcome = await this.rewindToEntry(entryId, { prefillDraft: "auto" });
+			const outcome = await this.rewindToEntry(entryId, { prefillDraft: "auto" }, target, expected);
 			done();
+			if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
 			if (outcome.status !== "rewound") {
 				if (outcome.status === "unchanged")
 					this.ctx.showStatus(t("overlaysModel.controller.session.already_at_point"));
@@ -2747,6 +2776,7 @@ export class SelectorController {
 				this.ctx.showStatus(t("overlaysModel.controller.session.retrying_turn"));
 				return;
 			}
+			const undoExpected = target && this.#treeExpected(target);
 			this.ctx.showStatus(
 				dropped === 1
 					? t("overlaysModel.controller.session.rewound_one", { count: dropped })
@@ -2757,7 +2787,7 @@ export class SelectorController {
 					action: {
 						act: "undo",
 						label: t("overlaysModel.controller.session.undo"),
-						run: () => void this.#undoRewind(realLeafId, draft),
+						run: () => void this.#undoRewind(realLeafId, draft, target, undoExpected),
 					},
 				},
 			);
@@ -2775,23 +2805,32 @@ export class SelectorController {
 	async rewindToEntry(
 		entryId: string,
 		options: { prefillDraft: boolean | "auto" },
+		target?: AgentViewSession,
+		expected?: TreeNavigationExpected,
 	): Promise<{ status: "rewound" | "unchanged" | "cancelled" | "invalid"; error?: string }> {
-		const entry = this.ctx.sessionManager.getEntry(entryId);
+		if (target && this.ctx.viewSession !== target) return { status: "cancelled" };
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
+		const entry = manager.getEntry(entryId);
 		if (!entry || !isTranscriptEntry(entry)) return { status: "invalid", error: `no transcript entry ${entryId}` };
 		const isUserTarget = isUserRequestEntry(entry);
-		const realLeafId = this.ctx.sessionManager.getLeafId();
+		const realLeafId = manager.getLeafId();
 		if (entryId === realLeafId && !isUserTarget) return { status: "unchanged" };
-		const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
-		const result = await this.ctx.session.navigateTree(entryId, { summarize: false });
+		const treeRewind = target ? undefined : this.#treeRewindBoundary(entryId, realLeafId);
+		const result = await (target ?? this.ctx.session).navigateTree(entryId, {
+			summarize: false,
+			...(expected ? { expected } : {}),
+		});
 		if (result.cancelled) return { status: "cancelled" };
 		const fastRewind =
 			treeRewind !== undefined &&
 			this.ctx.sessionManager.getLeafId() === treeRewind.expectedLeafId &&
 			this.ctx.truncateTranscriptFromMessage(treeRewind.message);
-		if (!fastRewind) {
-			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+		if (target) {
+			if (!(await this.#replayFocusedNavigation(target))) return { status: "cancelled" };
+		} else {
+			if (!fastRewind) await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+			await this.ctx.reloadTodos();
 		}
-		await this.ctx.reloadTodos();
 		const prefill =
 			options.prefillDraft === "auto" ? isUserTarget || !this.ctx.editor.getText().trim() : options.prefillDraft;
 		if (prefill && (result.editorText !== undefined || result.editorImages?.length)) {
@@ -2807,16 +2846,26 @@ export class SelectorController {
 	async #undoRewind(
 		leafId: string | null,
 		draft: { text: string; images: ImageContent[] } | undefined,
+		target?: AgentViewSession,
+		expected?: TreeNavigationExpected,
 	): Promise<void> {
-		if (!leafId) return;
+		const session = target ?? this.ctx.session;
+		if (!leafId || (this.ctx.viewSession ?? this.ctx.session) !== session) return;
 		try {
-			const result = await this.ctx.session.navigateTree(leafId, { summarize: false });
+			const result = await session.navigateTree(leafId, {
+				summarize: false,
+				...(expected ? { expected } : {}),
+			});
 			if (result.cancelled) {
 				this.ctx.showStatus(t("overlaysModel.controller.session.navigation_cancelled"));
 				return;
 			}
-			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-			await this.ctx.reloadTodos();
+			if (target) {
+				if (!(await this.#replayFocusedNavigation(target))) return;
+			} else {
+				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+				await this.ctx.reloadTodos();
+			}
 			if (draft) this.ctx.editor.setDraft(draft.text, draft.images);
 			this.ctx.showStatus(t("overlaysModel.controller.session.rewind_undone"));
 		} catch (error) {
@@ -2938,9 +2987,35 @@ export class SelectorController {
 		this.#mountMenu(menu, selector, () => this.#showFullscreenMenu(selector));
 	}
 
-	showTreeSelector(): void {
-		const tree = this.ctx.sessionManager.getTree();
-		const realLeafId = this.ctx.sessionManager.getLeafId();
+	#treeExpected(target: AgentViewSession): TreeNavigationExpected {
+		const manager = target.sessionManager;
+		return {
+			expectedSessionId: manager.getSessionId(),
+			expectedSessionFile: manager.getSessionFile() ?? null,
+			expectedLeafId: manager.getLeafId(),
+		};
+	}
+
+	/** Rebuild only the view which made the request, ordered with its streaming events. */
+	async #replayFocusedNavigation(target: AgentViewSession): Promise<boolean> {
+		if (this.ctx.viewSession !== target) return false;
+		await this.ctx.eventController.runSerialized(async () => {
+			if (this.ctx.viewSession !== target) return;
+			this.ctx.eventController.resetTranscriptAnchors();
+			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+			if (this.ctx.viewSession === target) await this.ctx.reloadTodos(target);
+		});
+		return this.ctx.viewSession === target;
+	}
+
+	showTreeSelector(target?: AgentViewSession): void {
+		const session = target ?? this.ctx.session;
+		if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
+		const tree = manager.getTree();
+		const realLeafId = manager.getLeafId();
+		const expected = target && this.#treeExpected(target);
+		let labeling: Promise<void> | undefined;
 
 		if (tree.length === 0) {
 			this.ctx.showStatus(t("overlaysModel.controller.session.no_entries"));
@@ -2954,12 +3029,16 @@ export class SelectorController {
 					realLeafId,
 					this.ctx.ui.terminal.rows,
 					async (entryId, options) => {
+						if ((this.ctx.viewSession ?? this.ctx.session) !== session) {
+							done();
+							return;
+						}
 						// Selecting the current leaf is normally a no-op (already there) —
 						// unless it's an `ask` toolResult, in which case the re-answer flow
 						// must still be allowed to reopen the picker even though the leaf
 						// doesn't move (chatgpt-codex review on #5895).
 						if (entryId === realLeafId) {
-							const currentEntry = this.ctx.sessionManager.getEntry(entryId);
+							const currentEntry = manager.getEntry(entryId);
 							const currentIsAskResult =
 								currentEntry?.type === "message" &&
 								currentEntry.message.role === "toolResult" &&
@@ -2978,7 +3057,7 @@ export class SelectorController {
 						// target sits on the current leaf's path and no summary is added,
 						// the post-navigation transcript is a strict prefix of the rendered
 						// one and the tail can be dropped in place.
-						const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
+						const treeRewind = target ? undefined : this.#treeRewindBoundary(entryId, realLeafId);
 
 						// Loop until user makes a complete choice or cancels to tree.
 						// Shift+Enter in the tree selector pre-answers "Summarize" and
@@ -2986,7 +3065,7 @@ export class SelectorController {
 						let wantsSummary = options.summarize;
 						let customInstructions: string | undefined;
 
-						const branchSummariesEnabled = cfgBranchSummaryEnabled.get(settings);
+						const branchSummariesEnabled = cfgBranchSummaryEnabled.get(target?.settings ?? settings);
 
 						while (!wantsSummary && branchSummariesEnabled) {
 							const summaryChoice = await this.ctx.showHookSelector(
@@ -3000,7 +3079,7 @@ export class SelectorController {
 
 							if (summaryChoice === undefined) {
 								// User pressed escape - re-show tree selector
-								this.showTreeSelector();
+								this.showTreeSelector(target);
 								return;
 							}
 
@@ -3019,15 +3098,15 @@ export class SelectorController {
 							// User made a complete choice
 							break;
 						}
+						if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
 
 						// Set up the cancel handler and loader if summarizing.
 						let summaryLoader: Loader | undefined;
 						const originalOnCancel = this.ctx.editor.onCancel;
+						const cancelSummary = () => session.abortBranchSummary();
 
 						if (wantsSummary) {
-							this.ctx.editor.onCancel = () => {
-								this.ctx.session.abortBranchSummary();
-							};
+							this.ctx.editor.onCancel = cancelSummary;
 							this.ctx.chatContainer.addChild(new Spacer(1));
 							summaryLoader = new Loader(
 								this.ctx.ui,
@@ -3043,33 +3122,39 @@ export class SelectorController {
 						}
 
 						try {
-							let result = await this.ctx.session.navigateTree(entryId, {
+							if (labeling) await labeling;
+							if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
+							let result = await session.navigateTree(entryId, {
 								summarize: wantsSummary,
 								customInstructions,
 								allowAskReopen: true,
+								...(expected ? { expected } : {}),
 							});
 
 							// Selecting an `ask` toolResult doesn't land the leaf directly —
 							// re-open the picker with the original questions first, then
 							// complete the navigation as a new sibling branch (issue #5642).
 							if (result.reopenAsk) {
-								const reanswer = await this.#reanswerAsk(result.reopenAsk.questions);
+								if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
+								const reanswer = await this.#reanswerAsk(result.reopenAsk.questions, target);
 								if (!reanswer) {
 									this.ctx.showStatus(t("overlaysModel.controller.session.reanswer_cancelled"));
 									return;
 								}
-								result = await this.ctx.session.navigateTree(entryId, {
+								if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
+								result = await session.navigateTree(entryId, {
 									summarize: wantsSummary,
 									customInstructions,
 									allowAskReopen: true,
 									reanswerAskResult: reanswer,
+									...(expected ? { expected } : {}),
 								});
 							}
 
 							if (result.aborted) {
 								// Summarization aborted - re-show tree selector
 								this.ctx.showStatus(t("overlaysModel.controller.session.summary_cancelled"));
-								this.showTreeSelector();
+								this.showTreeSelector(target);
 								return;
 							}
 							if (result.cancelled) {
@@ -3077,23 +3162,27 @@ export class SelectorController {
 								return;
 							}
 
-							// Update UI — rebuild the display transcript for the new leaf (the
-							// context from navigateTree is the LLM context, not the transcript).
-							const fastRewind =
-								treeRewind !== undefined &&
-								!wantsSummary &&
-								!result.summaryEntry &&
-								!result.askReanswerCommitted &&
-								this.ctx.sessionManager.getLeafId() === treeRewind.expectedLeafId &&
-								this.ctx.truncateTranscriptFromMessage(treeRewind.message);
-							if (!fastRewind) {
-								await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+							// Replay only the conversation that initiated this selection.
+							let stillViewing = (this.ctx.viewSession ?? this.ctx.session) === session;
+							if (stillViewing && target) stillViewing = await this.#replayFocusedNavigation(target);
+							else if (stillViewing) {
+								const fastRewind =
+									treeRewind !== undefined &&
+									!wantsSummary &&
+									!result.summaryEntry &&
+									!result.askReanswerCommitted &&
+									manager.getLeafId() === treeRewind.expectedLeafId &&
+									this.ctx.truncateTranscriptFromMessage(treeRewind.message);
+								if (!fastRewind) await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+								stillViewing = (this.ctx.viewSession ?? this.ctx.session) === session;
+								if (stillViewing) await this.ctx.reloadTodos();
 							}
-							await this.ctx.reloadTodos();
-							if (result.editorText && !this.ctx.editor.getText().trim()) {
-								this.ctx.editor.setDraft(result.editorText, result.editorImages);
+							if (stillViewing && (this.ctx.viewSession ?? this.ctx.session) === session) {
+								if (result.editorText && !this.ctx.editor.getText().trim()) {
+									this.ctx.editor.setDraft(result.editorText, result.editorImages);
+								}
+								this.ctx.showStatus(t("overlaysModel.controller.session.navigated"));
 							}
-							this.ctx.showStatus(t("overlaysModel.controller.session.navigated"));
 
 							// Re-answering a past `ask` commits a new sibling answer but,
 							// unlike a live `ask`, leaves the agent idle. Resume it now —
@@ -3101,16 +3190,29 @@ export class SelectorController {
 							// new answer without the resumed turn rendering against the stale
 							// pre-rebuild UI (issue #6483).
 							if (result.askReanswerCommitted) {
-								this.ctx.session.resumeAfterAskReanswer();
+								const state = result.navigationState;
+								await session.resumeAfterAskReanswer(
+									expected && state && result.resumeToken
+										? {
+												expected: {
+													expectedSessionId: state.sessionId,
+													expectedSessionFile: state.sessionFile ?? null,
+													expectedLeafId: state.leafId,
+												},
+												resumeToken: result.resumeToken,
+											}
+										: undefined,
+								);
 							}
 						} catch (error) {
 							this.ctx.showError(error instanceof Error ? error.message : String(error));
 						} finally {
 							if (summaryLoader) {
 								summaryLoader.stop();
-								this.ctx.statusContainer.disposeChildren();
+								if (target) this.ctx.statusContainer.removeChild(summaryLoader);
+								else this.ctx.statusContainer.disposeChildren();
 							}
-							this.ctx.editor.onCancel = originalOnCancel;
+							if (this.ctx.editor.onCancel === cancelSummary) this.ctx.editor.onCancel = originalOnCancel;
 						}
 					},
 					() => {
@@ -3118,15 +3220,28 @@ export class SelectorController {
 						this.ctx.ui.requestRender();
 					},
 					(entryId, label) => {
-						this.ctx.sessionManager.appendLabelChange(entryId, label);
-						this.ctx.ui.requestRender();
+						if ((this.ctx.viewSession ?? this.ctx.session) !== session) return;
+						if (!expected || !target) {
+							this.ctx.sessionManager.appendLabelChange(entryId, label);
+							this.ctx.ui.requestRender();
+							return;
+						}
+						labeling = (labeling ?? Promise.resolve())
+							.then(async () => {
+								// A label is itself a journal entry. Track the new leaf so a move
+								// after our own label does not trip the stale-menu guard.
+								if (this.ctx.viewSession !== target) return;
+								expected.expectedLeafId = await manager.appendLabelChange(entryId, label, expected);
+								this.ctx.ui.requestRender();
+							})
+							.catch(error => this.ctx.showError(error instanceof Error ? error.message : String(error)));
 					},
-					cfgTreeFilterMode.get(settings),
-					this.ctx.sessionManager.getSessionName(),
+					cfgTreeFilterMode.get(target?.settings ?? settings),
+					manager.getSessionName(),
 				);
 				return { component: selector, focus: selector };
 			},
-			{ kind: "tree-selector", reopen: () => this.showTreeSelector() },
+			{ kind: "tree-selector", reopen: () => this.showTreeSelector(target), source: session },
 		);
 	}
 
@@ -3178,22 +3293,29 @@ export class SelectorController {
 	 * Returns `undefined` when the user cancels — mirrors `navigateTree`'s
 	 * cancellation contract instead of throwing.
 	 */
-	async #reanswerAsk(questions: AskToolInput["questions"]): Promise<AgentToolResult<AskToolDetails> | undefined> {
+	async #reanswerAsk(
+		questions: AskToolInput["questions"],
+		target?: AgentViewSession,
+	): Promise<AgentToolResult<AskToolDetails> | undefined> {
 		const uiContext = this.ctx.getToolUIContext();
 		if (!uiContext) {
 			this.ctx.showError(t("overlaysModel.controller.session.ask_not_ready"));
 			return undefined;
 		}
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
 		const toolSession: ToolSession = {
-			cwd: this.ctx.sessionManager.getCwd(),
+			cwd: manager.getCwd(),
 			hasUI: true,
-			settings: this.ctx.settings,
-			getSessionFile: () => this.ctx.sessionManager.getSessionFile() ?? null,
+			settings: target?.settings ?? this.ctx.settings,
+			getSessionFile: () => manager.getSessionFile() ?? null,
 			getSessionSpawns: () => null,
-			getPlanModeState: () => this.ctx.session.getPlanModeState(),
+			getPlanModeState: target ? undefined : () => this.ctx.session.getPlanModeState(),
 		};
 		const askTool = new AskTool(toolSession);
-		const context = this.ctx.session.buildAskReanswerContext(uiContext);
+		// This standalone picker does not own a worker turn to abort.
+		const context = target
+			? { ui: uiContext, hasUI: true, abort() {} }
+			: this.ctx.session.buildAskReanswerContext(uiContext);
 		let result: AgentToolResult<AskToolDetails>;
 		try {
 			result = await askTool.execute("tree-reanswer", { questions }, undefined, undefined, context);
@@ -3958,13 +4080,14 @@ export class SelectorController {
 	}
 
 	async showSessionPinSelector(): Promise<void> {
-		if (this.#focusOpenMenu("session-account-selector")) return;
-		const session = this.ctx.session;
+		const session = this.ctx.viewSession ?? this.ctx.session;
+		if (this.#focusOpenMenu("session-account-selector", session)) return;
+		const sessionId = session.sessionId;
 		if (session.isStreaming) {
 			this.ctx.showStatus(t("overlaysModel.controller.account.pin_while_streaming"));
 			return;
 		}
-		const menu = this.#claimMenu("session-account-selector", () => void this.showSessionPinSelector());
+		const menu = this.#claimMenu("session-account-selector", () => void this.showSessionPinSelector(), session);
 		this.ctx.showStatus(t("overlaysModel.controller.account.loading"), { dim: true });
 		let accountList: SessionOAuthAccountList | undefined;
 		try {
@@ -3986,6 +4109,12 @@ export class SelectorController {
 			return;
 		}
 		const { getOAuthProviders } = await loadProviderAuthUi();
+		if (this.#openMenus.get(menu.kind) !== menu) return;
+		if ((this.ctx.viewSession ?? this.ctx.session) !== session || session.sessionId !== sessionId) {
+			this.#releaseMenu(menu.kind, menu);
+			return;
+		}
+		const providerId = accountList.provider;
 		const provider = getOAuthProviders().find(candidate => candidate.id === accountList.provider);
 		const providerName = provider?.name ?? accountList.provider;
 		const accounts = toSessionPinAccounts(accountList.accounts);
@@ -4004,12 +4133,21 @@ export class SelectorController {
 			const selector = new SessionAccountSelectorComponent(
 				providerName,
 				accounts,
-				account => {
+				async account => {
 					done();
-					if (!session.pinCurrentProviderOAuthAccount(account.credentialId)) {
-						this.ctx.showWarning(
-							t("overlaysModel.controller.account.pin_unavailable", { account: account.label }),
-						);
+					if ((this.ctx.viewSession ?? this.ctx.session) !== session || session.sessionId !== sessionId) return;
+					try {
+						if (
+							session.model?.provider !== providerId ||
+							!(await session.pinProviderOAuthAccount(providerId, account.credentialId))
+						) {
+							this.ctx.showWarning(
+								t("overlaysModel.controller.account.pin_unavailable", { account: account.label }),
+							);
+							return;
+						}
+					} catch (error) {
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
 						return;
 					}
 					this.ctx.showStatus(

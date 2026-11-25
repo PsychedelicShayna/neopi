@@ -883,7 +883,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		// a goal record exists, only an enabled goal keeps the tool: a completed
 		// (exiting) or paused goal must stop advertising it on the next rebuild.
 		if (name === "goal") {
-			if (!goalEnabled || restrictToolNames) return false;
+			if (!goalEnabled || (restrictToolNames && !requestedTools?.includes("goal"))) return false;
 			const goalState = session.getGoalModeState?.();
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}

@@ -119,6 +119,8 @@ export interface SlashCommandRuntime {
 	cwd: string;
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
+	/** Present only when a builtin was dispatched from a focused subagent composer. */
+	focusedInput?: Pick<SubmittedUserInput, "images">;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */
 	output: (text: string) => Promise<void> | void;
 	/** Re-advertise the available command list (no-op outside ACP). */
@@ -243,6 +245,8 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 				runtime: SlashCommandRuntime,
 		  ) => SlashCommandResult | Promise<SlashCommandResult>)
 		| ((command: ParsedSlashCommand, runtime: SlashCommandRuntime) => void | Promise<void>);
+	/** Override for commands dispatched to the focused subagent's home session. */
+	handleFocused?: SlashCommandSpec["handle"];
 	/**
 	 * TUI-only handler that supersedes `handle` when both are present. Use for
 	 * selectors, wizards, dashboards, and anything else that requires

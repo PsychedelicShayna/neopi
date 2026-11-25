@@ -3,6 +3,7 @@
  * real focus controller, composer submit path, and status line drive the main
  * thread's `RemoteAgentSession` mirror of a real worker-homed `AgentSession`.
  */
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -10,6 +11,8 @@ import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { Container } from "@oh-my-pi/pi-tui";
+import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -19,7 +22,9 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { IrcBus } from "../../src/irc/bus";
 import { InputController } from "../../src/modes/controllers/input-controller";
+import { SelectorController } from "../../src/modes/controllers/selector-controller";
 import { SessionFocusController } from "../../src/modes/controllers/session-focus-controller";
+import { TodoCommandController } from "../../src/modes/controllers/todo-command-controller";
 import { statusLineHost } from "../../src/modes/status-line-host";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import { buildRpcSessionState } from "../../src/modes/rpc/rpc-session-state";
@@ -27,8 +32,10 @@ import { AgentLifecycleManager } from "../../src/registry/agent-lifecycle";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import type { AgentSessionEvent } from "../../src/session/agent-session-events";
 import type { AgentViewSession } from "../../src/session/agent-session-handle";
-import { AuthStorage } from "../../src/session/auth-storage";
+import { AuthStorage, SqliteAuthCredentialStore } from "../../src/session/auth-storage";
 import type { RestoredQueuedMessage } from "../../src/session/agent-session-types";
+import { SessionManager } from "../../src/session/session-manager";
+import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
 import type { SessionEntriesDelta, SessionRestorableQueue } from "../../src/thread/session-mirror";
 import { RemoteAgentSession } from "../../src/thread/remote-agent-session";
 import type { ThreadService } from "../../src/thread/services";
@@ -39,6 +46,7 @@ import { identityThreadService } from "../../src/thread/services/identity";
 import { SubagentWorker } from "../../src/thread/subagent-worker";
 import { cfgTasksTodoClearDelay } from "../../src/tools/settings";
 import { TODO_HUD_STATE_CUSTOM_TYPE } from "../../src/tools/todo";
+import * as externalEditor from "../../src/utils/external-editor";
 import type { FocusProbe, FocusProbeGlobals } from "../fixtures/focus-view-worker";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
@@ -64,12 +72,12 @@ afterEach(async () => {
 });
 
 /** Main registry the worker sessions are built over (their worker registry mirrors it). */
-async function mainRegistry(): Promise<ModelRegistry> {
+async function mainRegistry(fixtureAuth?: AuthStorage): Promise<ModelRegistry> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-focus-view-"));
 	const modelsPath = path.join(dir, "models.json");
 	await Bun.write(modelsPath, JSON.stringify({ providers: {} }));
-	const authStorage = await AuthStorage.create(":memory:");
-	authStorage.keys.setRuntime("anthropic", "test-key");
+	const authStorage = fixtureAuth ?? (await AuthStorage.create(":memory:"));
+	if (!fixtureAuth) authStorage.keys.setRuntime("anthropic", "test-key");
 	cleanups.push(async () => {
 		authStorage.close();
 		await fs.rm(dir, { recursive: true, force: true });
@@ -125,6 +133,7 @@ function textOf(message: AgentMessage | null | undefined): string {
 }
 
 interface FocusHarness {
+	ctx: InteractiveModeContext;
 	controller: SessionFocusController;
 	events: AgentSessionEvent[];
 	/** Mirror `isStreaming` as each `agent_start` reached the view (the state patch must precede the event). */
@@ -196,7 +205,7 @@ function focusHarness(): FocusHarness {
 	const controller = new SessionFocusController(ctx, AgentRegistry.global(), () => AgentLifecycleManager.global());
 	focus.controller = controller;
 	cleanups.push(() => controller.dispose());
-	return { controller, events, streamingAtAgentStart, transcripts, statusSessions, todoSources };
+	return { ctx, controller, events, streamingAtAgentStart, transcripts, statusSessions, todoSources };
 }
 
 /** The composer's submit path with `view` focused, as `InputController` dispatches it. */
@@ -245,6 +254,130 @@ function composerFor(view: AgentViewSession, focusedAgentId: string) {
 }
 
 describe("focused view of a worker-homed agent session", () => {
+	it("opens /tree on the worker, moves its native leaf, and leaves Main's branch alone", async () => {
+		const probe = await startWorker();
+		await probe.open("W1", await mainRegistry(), {});
+		await probe.prompt("W1", "worker first question");
+		await probe.prompt("W1", "worker second question");
+		const remote = mirrorOf("W1");
+		const { ctx, controller, transcripts, todoSources } = focusHarness();
+		const main = SessionManager.inMemory();
+		const mainLeaf = main.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "Main question" }],
+			timestamp: Date.now(),
+		});
+		const navigateMain = vi.fn();
+		Object.assign(ctx.session, { navigateTree: navigateMain, sessionManager: main });
+		Object.assign(ctx.ui, { terminal: { rows: 40 }, getFocused: () => undefined, setFocus() {} });
+		Object.assign(ctx, {
+			sessionManager: main,
+			editor: { getText: () => "", setText() {} },
+			editorContainer: new Container(),
+			showError: vi.fn(),
+			showHookSelector: async () => "none",
+		});
+		const selectorController = new SelectorController(ctx);
+		ctx.showTreeSelector = target => selectorController.showTreeSelector(target);
+
+		await controller.focusAgent("W1");
+		const branch = remote.sessionManager.getBranch();
+		const firstReply = branch.find(entry => entry.type === "message" && entry.message.role === "assistant");
+		if (!firstReply) throw new Error("Expected the worker's first reply in the mirrored tree");
+
+		expect(await executeBuiltinSlashCommand("/tree", { ctx, focusedSession: remote })).toBe(true);
+		const selector = ctx.editorContainer.children[0];
+		expect(selector).toBeInstanceOf(TreeSelectorComponent);
+		if (!(selector instanceof TreeSelectorComponent)) throw new Error("Worker tree selector did not open");
+		const display = stripVTControlCharacters(selector.render(100).join("\n"));
+		expect(display).toContain("worker first question");
+		expect(display).toContain("worker second question");
+		expect(display).not.toContain("Main question");
+
+		await selector.getTreeList().onSelect?.(firstReply.id, { summarize: false });
+
+		expect(ctx.showError).not.toHaveBeenCalled();
+		expect(controller.target).toBe(remote);
+		expect((await probe.report("W1")).userTexts).toEqual(["worker first question"]);
+		expect(remote.sessionManager.getBranch().map(entry => entry.id)).toContain(firstReply.id);
+		expect(transcripts.at(-1)?.map(row => row.text)).toEqual(["worker first question", "ok"]);
+		expect(todoSources.at(-1)).toBe(remote);
+		expect(main.getLeafId()).toBe(mainLeaf);
+		expect(navigateMain).not.toHaveBeenCalled();
+	});
+
+	it("commits /todo edit to the worker that supplied the edited list", async () => {
+		const probe = await startWorker();
+		await probe.open("W1", await mainRegistry(), {});
+		const remote = mirrorOf("W1");
+		const { ctx, controller, todoSources } = focusHarness();
+		const mainCommit = vi.fn();
+		const editorEnv = {};
+		Object.assign(ctx.session, { environment: { snapshot: () => editorEnv }, commitUserTodoEdit: mainCommit });
+		Object.assign(ctx.ui, { start() {}, stop() {} });
+		Object.assign(ctx, { showError: vi.fn(), showWarning: vi.fn() });
+		await controller.focusAgent("W1");
+		const initial: TodoPhase[] = [{ name: "Worker", tasks: [{ content: "original task", status: "pending" }] }];
+		await remote.commitUserTodoEdit(initial, "Original test state");
+		const getEditor = vi.spyOn(externalEditor, "getEditorCommand").mockReturnValue("test-editor");
+		const openEditor = vi.spyOn(externalEditor, "openInEditor").mockResolvedValue("# Worker\n- [x] revised task\n");
+		cleanups.push(
+			() => getEditor.mockRestore(),
+			() => openEditor.mockRestore(),
+		);
+
+		await new TodoCommandController(ctx).handleTodoCommand("edit", remote);
+
+		expect(openEditor).toHaveBeenCalledWith("test-editor", expect.stringContaining("original task"), {
+			extension: ".todo.md",
+			env: editorEnv,
+		});
+		expect((await probe.report("W1")).todoPhases).toEqual([
+			{ name: "Worker", tasks: [{ content: "revised task", status: "completed" }] },
+		]);
+		expect(mainCommit).not.toHaveBeenCalled();
+		expect(todoSources.at(-1)).toBe(remote);
+		expect(ctx.showError).not.toHaveBeenCalled();
+	});
+
+	it("pins the selected OAuth account only for the worker's session", async () => {
+		const provider = "anthropic";
+		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
+		const storage = new AuthStorage(store);
+		const registry = await mainRegistry(storage);
+		for (const accountId of ["first", "second"]) {
+			await store.saveOAuth(provider, {
+				access: `access-${accountId}`,
+				refresh: `refresh-${accountId}`,
+				expires: Date.now() + 60_000,
+				accountId,
+				email: `${accountId}@example.com`,
+				orgId: `org-${accountId}`,
+			});
+		}
+		await storage.credentials.reload();
+		const [first, second] = storage.oauth.accounts(provider);
+		if (!first || !second) throw new Error("Expected two stored test accounts");
+		const mainId = "main-test-session";
+		expect(storage.sessions.pin(provider, mainId, first.credentialId)).toBe(true);
+		const probe = await startWorker();
+		await probe.open("W1", registry, {});
+		const remote = mirrorOf("W1");
+		const { controller } = focusHarness();
+		await controller.focusAgent("W1");
+
+		const list = await remote.listCurrentProviderOAuthAccounts();
+		expect(list?.provider).toBe(provider);
+		expect(list?.accounts.map(account => account.credentialId)).toEqual([first.credentialId, second.credentialId]);
+		expect(await remote.pinProviderOAuthAccount(provider, second.credentialId)).toBe(true);
+		const selected = (await remote.listCurrentProviderOAuthAccounts())?.accounts.find(account => account.active);
+		expect(selected?.credentialId).toBe(second.credentialId);
+		expect(storage.oauth.accounts(provider, mainId).find(account => account.active)?.credentialId).toBe(
+			first.credentialId,
+		);
+		expect(remote.sessionManager.getEntries().some(entry => entry.type === "credential_pin")).toBe(true);
+	});
+
 	it("attaches, rebuilds the transcript, streams deltas in order, and steers from the composer", async () => {
 		const probe = await startWorker();
 		await probe.open("W1", await mainRegistry(), {});

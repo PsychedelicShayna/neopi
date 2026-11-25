@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import { t } from "@oh-my-pi/pi-utils/i18n";
+import type { AgentViewSession } from "../../session/agent-session-handle";
 import {
 	applyOpsToPhases,
 	getLatestTodoPhasesFromEntries,
@@ -139,13 +140,15 @@ export class TodoCommandController {
 	 * True latest todo state for the user-facing /todo verbs. Reads from session
 	 * entries or falls back to the active session state.
 	 */
-	#currentPhases(): TodoPhase[] {
-		const fromEntries = getLatestTodoPhasesFromEntries(this.ctx.sessionManager.getBranch());
+	#currentPhases(target?: AgentViewSession): TodoPhase[] {
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
+		const fromEntries = getLatestTodoPhasesFromEntries(manager.getBranch());
 		if (fromEntries.length > 0) return fromEntries;
-		return this.ctx.session.getTodoPhases();
+		return (target ?? this.ctx.session).getTodoPhases();
 	}
 
-	async handleTodoCommand(args: string): Promise<void> {
+	async handleTodoCommand(args: string, target?: AgentViewSession): Promise<void> {
+		if (target && this.ctx.viewSession !== target) return;
 		const trimmed = args.trim();
 		if (!trimmed) {
 			this.#showCurrent();
@@ -158,13 +161,17 @@ export class TodoCommandController {
 
 		switch (verb) {
 			case "expand":
+				if (target) {
+					await this.ctx.reloadTodos(target);
+					if (this.ctx.viewSession !== target) return;
+				}
 				this.ctx.setTodoExpanded(true);
 				return;
 			case "collapse":
 				if (this.ctx.todoExpanded) this.ctx.toggleTodoExpansion();
 				return;
 			case "edit":
-				await this.#editInExternalEditor();
+				await this.#editInExternalEditor(target);
 				return;
 			case "copy":
 				this.#copyMarkdown();
@@ -433,7 +440,7 @@ export class TodoCommandController {
 
 	// ------------------------------------------------------------- editor
 
-	async #editInExternalEditor(): Promise<void> {
+	async #editInExternalEditor(target?: AgentViewSession): Promise<void> {
 		const env = this.ctx.session.environment.snapshot();
 		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
@@ -441,7 +448,8 @@ export class TodoCommandController {
 			return;
 		}
 
-		const current = this.#currentPhases();
+		const sessionId = target?.sessionId;
+		const current = this.#currentPhases(target);
 		const initialMarkdown =
 			current.length > 0 ? phasesToMarkdown(current) : "# Todos\n- [ ] (replace this with your tasks)\n";
 
@@ -459,7 +467,14 @@ export class TodoCommandController {
 				);
 				return;
 			}
-			this.#commit(parsed, "/todo edit");
+			if (target) {
+				if (this.ctx.viewSession !== target || target.sessionId !== sessionId) return;
+				await target.commitUserTodoEdit(parsed, buildSystemReminder("/todo edit", parsed));
+				if (this.ctx.viewSession !== target) return;
+				await this.ctx.reloadTodos(target);
+			} else {
+				this.#commit(parsed, "/todo edit");
+			}
 			const taskCount = parsed.reduce((sum, p) => sum + p.tasks.length, 0);
 			this.ctx.showStatus(
 				t("overlays.todo_command_controller.editor_updated", { part1: `${parsed.length}`, part2: `${taskCount}` }),
@@ -477,22 +492,10 @@ export class TodoCommandController {
 	}
 
 	#commit(nextPhases: TodoPhase[], action: string, opts?: { removed?: boolean }): void {
-		// Commit first so HUD visibility binds to the new canonical source.
-		this.ctx.session.commitTodoPhases(nextPhases);
+		// Removals carry explicit intent so the agent does not rebuild the
+		// cleared/removed items on its next turn (issue #5258).
+		this.ctx.session.commitUserTodoEdit(nextPhases, buildSystemReminder(action, nextPhases, opts?.removed ?? false));
 		this.ctx.setTodos(nextPhases);
-
-		// 3. Inject system reminder so the agent learns about the change next turn.
-		//    Removals carry explicit intent so the agent does not rebuild the
-		//    cleared/removed items on its next turn (issue #5258).
-		const reminderText = buildSystemReminder(action, nextPhases, opts?.removed ?? false);
-		const message = {
-			role: "developer" as const,
-			content: [{ type: "text" as const, text: reminderText }],
-			attribution: "user" as const,
-			timestamp: Date.now(),
-		};
-		this.ctx.agent.appendMessage(message);
-		this.ctx.sessionManager.appendMessage(message);
 	}
 }
 

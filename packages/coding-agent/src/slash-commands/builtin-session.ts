@@ -334,7 +334,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handle: handleTodoAcp,
 		handleTui: async (command, runtime) => {
-			await runtime.ctx.handleTodoCommand(command.args);
+			await runtime.ctx.handleTodoCommand(command.args, runtime.focusedSession);
 			clearSubmittedText(runtime);
 		},
 	},
@@ -855,7 +855,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
-			await openLocalFileInEditor(runtime.ctx, command.args);
+			await openLocalFileInEditor(runtime.ctx, command.args, runtime.focusedSession);
 		},
 	},
 	{
@@ -893,8 +893,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			return t("commands.session.rewindDescription");
 		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showUserMessageSelector();
 			clearSubmittedText(runtime);
+			runtime.ctx.showUserMessageSelector(undefined, runtime.focusedSession);
 		},
 	},
 	{
@@ -950,7 +950,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				}
 			}
 			clearSubmittedText(runtime);
-			if (placement) await runtime.ctx.handleForkCommand(placement);
+			if (placement) await runtime.ctx.handleForkCommand(placement, runtime.focusedSession);
 			else await runtime.ctx.handleForkCommand();
 		},
 	},
@@ -961,8 +961,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			return t("commands.session.treeDescription");
 		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showTreeSelector();
 			clearSubmittedText(runtime);
+			runtime.ctx.showTreeSelector(runtime.focusedSession);
 		},
 	},
 	{

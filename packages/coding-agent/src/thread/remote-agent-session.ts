@@ -67,6 +67,8 @@ import {
 	type AgentViewSession,
 	type AgentViewSessionManager,
 	type AgentViewState,
+	type AgentViewTreeOptions,
+	type AgentViewTreeResult,
 	isLocalAgentSession,
 	type ToolExecutionUpdateEvent,
 } from "../session/agent-session-handle";
@@ -83,6 +85,7 @@ import type {
 	ResolvedRoleModel,
 	RoleModelCycle,
 	RoleModelCycleResult,
+	SessionOAuthAccountList,
 	SessionStats,
 	SteerOptions,
 } from "../session/agent-session-types";
@@ -108,6 +111,7 @@ import {
 } from "../session/session-context";
 import type { CustomEntry, SessionEntry } from "../session/session-entries";
 import { conversationTip, lastModelChangeRole, SessionEntryIndex } from "../session/session-manager";
+import type { TreeNavigationExpected } from "../session/tree-navigation";
 import type { AgentDefinition } from "../task/types";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
@@ -196,6 +200,7 @@ function emptyViewState(): SessionViewState {
 		activeTimeMs: 0,
 		providerSessionId: "",
 		sessionName: undefined,
+		additionalDirectories: [],
 		leafId: null,
 		agentEffort: undefined,
 		tools: [],
@@ -351,8 +356,12 @@ export class RemoteAgentSession implements AgentViewSession {
 			getArtifactsDir: () => this.#state.artifactsDir,
 			getUsageStatistics: () => this.#state.usageStatistics,
 			getSessionName: () => this.#view.sessionName,
+			getAdditionalDirectories: () => this.#view.additionalDirectories,
 			getEntries: () => [...this.#entries],
 			getBranch: fromId => this.#entryIndex.pathTo(fromId),
+			getEntry: id => this.#entryIndex.get(id),
+			getTree: () => this.#entryIndex.tree(this.#entries),
+			appendLabelChange: (id, label, expected) => this.#command("appendLabelChange", id, label, expected),
 			getLeafId: () => this.#entryIndex.leafId(),
 			getConversationTip: () => conversationTip(this.#entries, this.#entryIndex.branchView()),
 			appendCustomEntry: (customType, data) => this.#appendCustomEntry(customType, data),
@@ -737,6 +746,36 @@ export class RemoteAgentSession implements AgentViewSession {
 		this.setTodoPhases(phases);
 	}
 
+	commitUserTodoEdit(phases: TodoPhase[], reminder: string): Promise<void> {
+		return this.#command("commitUserTodoEdit", phases, reminder);
+	}
+
+	navigateTree(entryId: string, options: AgentViewTreeOptions = {}): Promise<AgentViewTreeResult> {
+		const expected = options.expected ?? {
+			expectedSessionId: this.sessionId,
+			expectedSessionFile: this.sessionFile ?? null,
+			expectedLeafId: this.sessionManager.getLeafId(),
+		};
+		return this.#command("navigateTree", entryId, { ...options, expected });
+	}
+
+	abortBranchSummary(): void {
+		this.#notify("abortBranchSummary");
+	}
+
+	resumeAfterAskReanswer(request?: { expected: TreeNavigationExpected; resumeToken: string }): Promise<void> {
+		if (!request) throw new Error("Worker ask re-answer requires a committed navigation token");
+		return this.#command("resumeAfterAskReanswer", request);
+	}
+
+	listCurrentProviderOAuthAccounts(): Promise<SessionOAuthAccountList | undefined> {
+		return this.#command("listCurrentProviderOAuthAccounts");
+	}
+
+	pinProviderOAuthAccount(provider: string, credentialId: number): Promise<boolean> {
+		return this.#command("pinProviderOAuthAccount", provider, credentialId);
+	}
+
 	/**
 	 * Main-thread renderer source for the child's tool `name`: the nearest
 	 * main-thread ancestor's tool of that name (worker tool copies drop their
@@ -816,8 +855,12 @@ export class RemoteAgentSession implements AgentViewSession {
 		return this.#command("retry");
 	}
 
-	runFocusedAgentCommand(text: string, actor?: ControlActor): Promise<FocusedAgentCommandResult> {
-		return this.#command("runFocusedAgentCommand", text, actor);
+	runFocusedAgentCommand(
+		text: string,
+		actor?: ControlActor,
+		images?: ImageContent[],
+	): Promise<FocusedAgentCommandResult> {
+		return this.#command("runFocusedAgentCommand", text, actor, images);
 	}
 
 	abortRetry(): void {

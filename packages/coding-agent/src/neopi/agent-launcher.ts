@@ -190,6 +190,10 @@ export async function createAgentLauncher(session: AgentSession): Promise<AgentL
 	const childDepth = (spawnSession.taskDepth ?? 0) + 1;
 	const canDelegate = canSpawnAtDepth(cfgTaskMaxRecursionDepth.get(settings), childDepth);
 	const inheritedTools = session.getEnabledToolNames().filter(tool => session.hasBuiltInTool(tool));
+	// The hidden goal tool is a mode grant, not an active tool. An unedited
+	// inherited roster keeps it; an explicit agent tool list or checkbox can omit it.
+	const canGrantGoal = !isPlan && session.hasBuiltInTool("goal");
+	if (canGrantGoal && !inheritedTools.includes("goal")) inheritedTools.push("goal");
 	const candidates = normalizeToolNames([
 		...inheritedTools,
 		...Array.from(agents.values()).flatMap(agent => agent.tools ?? []),
@@ -197,7 +201,13 @@ export async function createAgentLauncher(session: AgentSession): Promise<AgentL
 	]);
 	const eligible = (
 		await resolveBuiltinToolPlan(
-			{ ...spawnSession, restrictToolNames: true, taskDepth: childDepth, skipPythonPreflight: true },
+			{
+				...spawnSession,
+				restrictToolNames: true,
+				taskDepth: childDepth,
+				skipPythonPreflight: true,
+				getGoalModeState: undefined,
+			},
 			candidates,
 		)
 	).names;
@@ -226,6 +236,7 @@ export async function createAgentLauncher(session: AgentSession): Promise<AgentL
 		const allowed = eligible.filter(
 			tool =>
 				tool !== "yield" &&
+				(tool !== "goal" || (canGrantGoal && (agent.harness === undefined || agent.harness === "omp"))) &&
 				(tool !== "task" || canDelegate) &&
 				(!isPlan || spawnTools?.includes(tool)) &&
 				(tool !== "todo" || !usesYield || Boolean(prewalkPattern)),

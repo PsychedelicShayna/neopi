@@ -14,6 +14,7 @@ import { parseDeferredInput } from "@oh-my-pi/pi-coding-agent/neopi/defer";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { lookupBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { runFocusedAgentCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/focused-agent-command";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
@@ -130,6 +131,25 @@ describe("/defer", () => {
 		);
 		expect(h.editor.getText()).toBe("new draft");
 		expect(h.editor.pendingImages).toEqual([image]);
+	});
+
+	it("delivers a worker-owned schedule after focus moves to another composer", async () => {
+		const main = harness();
+		const worker = harness();
+		await main.submit("/defer 1h Main's pending prompt");
+		await runFocusedAgentCommand(worker.session, "/defer 1h cancelled child prompt");
+		await runFocusedAgentCommand(worker.session, "/defer cancel all");
+		await runFocusedAgentCommand(worker.session, "/defer 5ms child-only deferred prompt");
+		main.editor.setText("still editing Main");
+		await waitUntil(() => worker.mock.calls.length === 1);
+		expect(worker.session.messages).toContainEqual(
+			expect.objectContaining({ role: "user", content: [{ type: "text", text: "child-only deferred prompt" }] }),
+		);
+		expect(main.mock.calls).toHaveLength(0);
+		expect(main.editor.getText()).toBe("still editing Main");
+		expect((await runFocusedAgentCommand(main.session, "/defer cancel all")).output).toEqual([
+			"Cancelled 1 deferred submission.",
+		]);
 	});
 
 	for (const payload of ["plain delayed text", "/tan delayed command"]) {

@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/local-file-editor";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as externalEditor from "../src/utils/external-editor";
 import { vi } from "bun:test";
 
 describe("resolveLocalEditorTarget", () => {
@@ -200,6 +201,41 @@ describe("buildLocalFileArgumentCompletions", () => {
 		// name does not collapse onto the "plan.md" sibling.
 		const resolved = await resolveLocalEditorTarget("local://%20plan.md", options);
 		expect(resolved.path).toBe(await fs.realpath(path.join(tmp.path(), "local", " plan.md")));
+	});
+
+	it("completes and opens only the focused worker's local artifact", async () => {
+		using main = TempDir.createSync("@omp-local-main-");
+		using worker = TempDir.createSync("@omp-local-worker-");
+		const mainManager = { getArtifactsDir: () => main.path(), getSessionId: () => "main" };
+		const workerManager = { getArtifactsDir: () => worker.path(), getSessionId: () => "worker" };
+		const mainFile = path.join(main.path(), "local", "notes.md");
+		const childFile = path.join(worker.path(), "local", "notes.md");
+		await Bun.write(mainFile, "Main notes");
+		await Bun.write(path.join(main.path(), "local", "main-only.md"), "Main only");
+		await Bun.write(childFile, "Worker notes");
+		const target = { sessionManager: workerManager };
+		const ctx = {
+			sessionManager: mainManager,
+			viewSession: target,
+			ui: { stop() {}, start() {}, requestRender() {} },
+			showStatus: vi.fn(),
+		} as unknown as InteractiveModeContext;
+
+		const getEditor = vi.spyOn(externalEditor, "getEditorCommand").mockReturnValue("test-editor");
+		const openEditor = vi.spyOn(externalEditor, "openEditorOnPath").mockImplementation(async (_command, file) => {
+			await Bun.write(file, "Edited worker notes");
+			return 0;
+		});
+		try {
+			const complete = buildLocalFileArgumentCompletions({ ctx });
+			expect((await complete(""))?.map(item => item.value)).toEqual(["local://notes.md"]);
+			await openLocalFileInEditor(ctx, "notes.md", ctx.viewSession);
+			expect(await Bun.file(mainFile).text()).toBe("Main notes");
+			expect(await Bun.file(childFile).text()).toBe("Edited worker notes");
+		} finally {
+			openEditor.mockRestore();
+			getEditor.mockRestore();
+		}
 	});
 
 	// Windows filenames cannot contain control bytes.

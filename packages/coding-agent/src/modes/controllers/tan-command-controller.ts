@@ -105,7 +105,12 @@ async function removeCloneSession(cloneFile: string): Promise<void> {
 }
 
 export class TanCommandController {
-	constructor(private readonly ctx: InteractiveModeContext) {}
+	constructor(
+		private readonly ctx: Pick<
+			InteractiveModeContext,
+			"session" | "sessionManager" | "settings" | "mcpManager" | "showStatus" | "showError"
+		>,
+	) {}
 
 	/** Dispatch `work` to a background clone of this session; resolves `false` when nothing was dispatched. */
 	async start(work: string, images?: ImageContent[]): Promise<boolean> {
@@ -295,7 +300,7 @@ export class TanCommandController {
 							clone?.agent.appendMessage({
 								role: "developer",
 								content: resolvePromptAsset("system/tan-context-switch.md", bundledTanContextSwitchPrompt, {
-									cwd: this.ctx.sessionManager.getCwd(),
+									cwd,
 									kind: "notice",
 								}).text,
 								attribution: "agent",
@@ -418,7 +423,7 @@ export class TanCommandController {
 			"system/background-tan-dispatch.md",
 			backgroundTanDispatchPrompt,
 			{ jobId: escapeHarnessTags(jobId), work: escapeHarnessTags(trimmedWork) },
-			{ cwd: this.ctx.sessionManager.getCwd(), kind: "notice" },
+			{ cwd, kind: "notice" },
 		);
 		// Steer the notice into a running turn at its next step boundary so the agent
 		// learns of the tangent now, not after it finishes; idle, the same call appends,

@@ -9,15 +9,11 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function createContext(cwd: string, phases: TodoPhase[]): InteractiveModeContext {
 	return {
-		agent: {
-			appendMessage: vi.fn(),
-		},
 		session: {
 			getTodoPhases: () => phases,
-			commitTodoPhases: vi.fn(),
+			commitUserTodoEdit: vi.fn(),
 		},
 		sessionManager: {
-			appendMessage: vi.fn(),
 			getBranch: () => [],
 			getCwd: () => cwd,
 		},
@@ -74,10 +70,8 @@ describe("TodoCommandController", () => {
 		await controller.handleTodoCommand("import");
 
 		const expected: TodoPhase[] = [{ name: "Imported", tasks: [{ content: "From cwd", status: "in_progress" }] }];
-		expect(ctx.session.commitTodoPhases).toHaveBeenCalledWith(expected);
+		expect(ctx.session.commitUserTodoEdit).toHaveBeenCalledWith(expected, expect.stringContaining("From cwd"));
 		expect(ctx.setTodos).toHaveBeenCalledWith(expected);
-		expect(ctx.agent.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "developer" }));
-		expect(ctx.sessionManager.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "developer" }));
 		expect(ctx.showStatus).toHaveBeenCalledWith(`Imported 1 phase(s), 1 task(s) from ${target}.`);
 		expect(ctx.showError).not.toHaveBeenCalled();
 	});
@@ -94,7 +88,10 @@ describe("TodoCommandController", () => {
 		const expected: TodoPhase[] = [
 			{ name: "Quoted", tasks: [{ content: "From quoted path", status: "in_progress" }] },
 		];
-		expect(ctx.session.commitTodoPhases).toHaveBeenCalledWith(expected);
+		expect(ctx.session.commitUserTodoEdit).toHaveBeenCalledWith(
+			expected,
+			expect.stringContaining("From quoted path"),
+		);
 		expect(ctx.showStatus).toHaveBeenCalledWith(`Imported 1 phase(s), 1 task(s) from ${target}.`);
 		expect(ctx.showError).not.toHaveBeenCalled();
 	});
@@ -109,7 +106,7 @@ describe("TodoCommandController", () => {
 		await controller.handleTodoCommand("import");
 
 		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining(`Could not parse ${target}:`));
-		expect(ctx.session.commitTodoPhases).not.toHaveBeenCalled();
+		expect(ctx.session.commitUserTodoEdit).not.toHaveBeenCalled();
 		expect(ctx.setTodos).not.toHaveBeenCalled();
 	});
 
@@ -122,7 +119,7 @@ describe("TodoCommandController", () => {
 
 		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("Failed to read todos:"));
 		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("internal scheme"));
-		expect(ctx.session.commitTodoPhases).not.toHaveBeenCalled();
+		expect(ctx.session.commitUserTodoEdit).not.toHaveBeenCalled();
 		expect(ctx.setTodos).not.toHaveBeenCalled();
 	});
 
@@ -139,9 +136,8 @@ describe("TodoCommandController", () => {
 	});
 
 	function reminderTextFrom(ctx: InteractiveModeContext): string {
-		const appendMessage = ctx.agent.appendMessage as unknown as Mock<(message: unknown) => void>;
-		const message = appendMessage.mock.calls[0][0] as { content: Array<{ text: string }> };
-		return message.content[0].text;
+		const commit = ctx.session.commitUserTodoEdit as Mock<(phases: TodoPhase[], reminder: string) => void>;
+		return commit.mock.calls[0][1];
 	}
 
 	it("tells the model not to recreate the list after /todo rm (all)", async () => {
@@ -154,7 +150,7 @@ describe("TodoCommandController", () => {
 
 		await controller.handleTodoCommand("rm");
 
-		expect(ctx.agent.appendMessage).toHaveBeenCalledTimes(1);
+		expect(ctx.session.commitUserTodoEdit).toHaveBeenCalledTimes(1);
 		const text = reminderTextFrom(ctx);
 		expect(text).toContain("intentionally cleared the todo list");
 		expect(text).toMatch(/Do NOT recreate/i);

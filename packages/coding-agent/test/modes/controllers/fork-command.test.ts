@@ -193,6 +193,43 @@ describe("/fork terminal placement", () => {
 		expect(session.fork).not.toHaveBeenCalled();
 	});
 
+	it("launches from the focused source without flushing or forking Main", async () => {
+		const workerFile = path.join(tempDirectory, "worker.jsonl");
+		const workerCwd = path.join(tempDirectory, "worktree");
+		await Bun.write(workerFile, '{"type":"session"}\n');
+		const workerFlush = vi.fn(async () => undefined);
+		const target = {
+			isStreaming: false,
+			model: { provider: "worker-provider", id: "worker-model" },
+			configuredThinkingLevel: () => "high",
+			settings: { getAgentDir: () => "/user/agent", getConfigFiles: () => [] },
+			sessionManager: {
+				getSessionFile: () => workerFile,
+				getCwd: () => workerCwd,
+				flush: workerFlush,
+			},
+		} as unknown as InteractiveModeContext["viewSession"];
+		const { controller, launchTerminal, flush, ctx, session } = createContext();
+		Object.defineProperty(ctx, "viewSession", { value: target });
+
+		await controller.handleForkCommand("pane", target);
+
+		expect(workerFlush).toHaveBeenCalledTimes(1);
+		expect(flush).not.toHaveBeenCalled();
+		expect(session.fork).not.toHaveBeenCalled();
+		const request = launchTerminal.mock.calls[0]?.[0];
+		expect(request?.cwd).toBe(workerCwd);
+		const command = request?.command ?? [];
+		expect(command.slice(command.indexOf("--model"))).toEqual([
+			"--model",
+			"worker-provider/worker-model",
+			"--thinking",
+			"high",
+			"--fork",
+			workerFile,
+		]);
+	});
+
 	it("reports a launcher warning instead of claiming a visible placement", async () => {
 		const { controller, ctx } = createContext({ launchWarning: "it started in the background." });
 		await controller.handleForkCommand("pane");
