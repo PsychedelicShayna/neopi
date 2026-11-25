@@ -65,6 +65,10 @@ class IrcContent implements MouseRoutable {
 		];
 	}
 
+	itemIdAtRow(row: number): string | undefined {
+		return this.#rowIds[row];
+	}
+
 	routeMouse(event: SgrMouseEvent, line: number): void {
 		if (event.leftClick) this.#host.openViewer(this.#rowIds[line]);
 	}
@@ -98,6 +102,10 @@ export class IrcSection implements SidePanelViewSection {
 
 	selectionTarget(): PanelSelectionTarget | undefined {
 		return this.content.selection.target();
+	}
+
+	itemIdAtRow(row: number): string | undefined {
+		return this.content.itemIdAtRow(row);
 	}
 
 	moveSelection(delta: number): boolean {

@@ -37,6 +37,8 @@ export interface SidePanelSection {
 	 * view; while a selection exists the follow target does not move the view.
 	 */
 	selectionTarget?(): PanelSelectionTarget | undefined;
+	/** Stable menu item id covering a rendered body row, if the section supports selection. */
+	itemIdAtRow?(row: number): string | undefined;
 	/** Rendered as a title-only row when true. */
 	collapsed?: boolean;
 	/** Section order; lower first. Ties keep registration order. */
@@ -202,6 +204,27 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 
 	get viewportHeight(): number {
 		return this.#viewportHeight;
+	}
+
+	/** Count items that intersect the viewport, including partially visible entries. */
+	visibleItems(section: SidePanelSection): number {
+		const range = viewportRange(this.#documentRows, this.#viewportHeight, this.#scrollOffset);
+		let count = 0;
+		let previous: string | undefined;
+		for (let row = range.start; row < range.end; row++) {
+			const tag = this.#rowTags[row];
+			if (tag?.kind !== "body" || tag.sectionId !== section.id) continue;
+			const id = section.itemIdAtRow?.(tag.bodyRow);
+			if (id !== undefined && id !== previous) count++;
+			previous = id;
+		}
+		return Math.max(1, count);
+	}
+
+	/** Reveal on the next layout even if a motion clamped at the current selection. */
+	revealSelection(): void {
+		this.#selectionRevision = undefined;
+		this.#onChange();
 	}
 
 	scrollToPercent(percent: number): void {
