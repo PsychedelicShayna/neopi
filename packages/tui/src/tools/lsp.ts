@@ -7,6 +7,8 @@
  * - Grouped references and symbols
  * - Collapsible/expandable views
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { formatCount } from "./localized-count";
 import type { TspSpan, TspText, TspTone, TspTreeNode } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead, NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResult } from "./renderer";
 import type { Component } from "../tui";
@@ -15,9 +17,7 @@ import { getLanguageFromPath } from "../lang-from-path";
 import { highlightCode as highlightThemeCode, isHighlightLanguage, type Theme, type ThemeColor } from "../theme/theme";
 import {
 	formatCodeFrameLine,
-	formatCount,
 	formatExpandHint,
-	formatMoreItems,
 	formatStyledPath,
 	PREVIEW_LIMITS,
 	type ParsedDiagnostic,
@@ -27,6 +27,7 @@ import {
 	shortenPath,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
+	formatMoreItems,
 } from "../render/render-utils";
 import { renderStatusLine, renderTreeList } from "../render";
 import type { StatusLineOptions } from "../render/status-line";
@@ -244,7 +245,9 @@ export function renderResult(
 	if (result.isError) {
 		const { description, meta } = lspRequestStatus(request, result.details?.action);
 		const header = renderStatusLine({ icon: "error", title: "LSP", description, meta }, theme);
-		const messageLines = (text.trim() || "LSP request failed").split("\n").filter(line => line.trim().length > 0);
+		const messageLines = (text.trim() || t("tools.lsp.request_failed"))
+			.split("\n")
+			.filter(line => line.trim().length > 0);
 		// The message hangs under the title, like a Grep or AST Grep error's, and wraps in full.
 		return plainToolCard(theme, ({ contentWidth }) => ({
 			header,
@@ -258,7 +261,7 @@ export function renderResult(
 	if (!text) {
 		const { description, meta } = lspRequestStatus(request, result.details?.action);
 		const header = renderStatusLine(
-			{ icon: "warning", title: "LSP", description, meta: [...meta, "No result"] },
+			{ icon: "warning", title: "LSP", description, meta: [...meta, t("tools.lsp.no_result")] },
 			theme,
 		);
 		return plainToolCard(theme, () => ({ header, phase: "warning", applyBg: false }));
@@ -429,7 +432,7 @@ function diagnosticsView(lines: string[], theme: Theme): LspResultView {
 		...parsed.other.map(raw("muted")),
 	];
 	// Only a response with nothing to count and nothing to show claims a clean file.
-	if (meta.length === 0 && items.length === 0) meta.push("No issues");
+	if (meta.length === 0 && items.length === 0) meta.push(t("tools.lsp.no_issues"));
 
 	return {
 		action: "diagnostics",
@@ -969,7 +972,7 @@ function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbac
 	];
 	if (parsed.other.length > 0) rows.push(keyed(code(parsed.other.join("\n"), { wrap: true }), "other"));
 	const hasErrors = parsed.failures.length > 0 || parsed.diagnostics.some(d => d.severity === "error");
-	const meta = compact<TspText>([counts, failed, unverified, rows.length === 0 && "No issues"]);
+	const meta = compact<TspText>([counts, failed, unverified, rows.length === 0 && t("tools.lsp.no_issues")]);
 	const head = lspNativeHead(request, fallbackAction, meta);
 	const flagged =
 		parsed.diagnostics.length + parsed.failures.length + parsed.unreported.length + parsed.warnings.length;
@@ -1076,8 +1079,14 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 	const action = request?.action ?? result.details?.action;
 	const content = result.content?.[0];
 	const text = content?.type === "text" ? (content.text ?? "") : "";
-	if (result.isError) return inlineErrorView(lspNativeHead(request, fallbackAction), text || "LSP request failed");
-	if (!text) return { tool: lspNativeHead(request, fallbackAction, ["No result"]), tone: "warning", inline: true };
+	if (result.isError)
+		return inlineErrorView(lspNativeHead(request, fallbackAction), text || t("tools.lsp.request_failed"));
+	if (!text)
+		return {
+			tool: lspNativeHead(request, fallbackAction, [t("tools.lsp.no_result")]),
+			tone: "warning",
+			inline: true,
+		};
 
 	const lines = text.split("\n");
 	const locations = parseLspLocations(lines);
@@ -1140,7 +1149,7 @@ export const lspToolRenderer = {
 		_options: RenderResultOptions,
 		args?: LspParams,
 	): NativeToolView | undefined {
-		return lspResultMemo.get(result, [], () => describeLspResult(result, args));
+		return lspResultMemo.get(result, [getLocale()], () => describeLspResult(result, args));
 	},
 	mergeCallAndResult: true,
 	inline: true,

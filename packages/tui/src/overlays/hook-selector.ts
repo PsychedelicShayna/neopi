@@ -2,6 +2,7 @@
  * Generic selector component for hooks.
  * Displays a list of string options with keyboard navigation.
  */
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	Container,
 	Ellipsis,
@@ -103,17 +104,20 @@ export interface HookSelectorOptions {
 
 export interface HookSelectorOption {
 	label: string;
+	/** Returned on selection instead of the display label, when supplied. */
+	value?: string;
 	description?: string;
 }
 
 export type HookSelectorOptionInput = string | HookSelectorOption;
 
-function normalizeHookSelectorOption(option: HookSelectorOptionInput): HookSelectorOption {
-	if (typeof option === "string") return { label: option };
-	if (option.description?.trim()) {
-		return { label: option.label, description: option.description.trim() };
-	}
-	return { label: option.label };
+type ResolvedHookSelectorOption = HookSelectorOption & { value: string };
+
+function normalizeHookSelectorOption(option: HookSelectorOptionInput): ResolvedHookSelectorOption {
+	if (typeof option === "string") return { label: option, value: option };
+	const { label, value = label } = option;
+	const description = option.description?.trim();
+	return description ? { label, value, description } : { label, value };
 }
 
 function splitLeadingSpacesForWrap(line: string, width: number): { indent: string; body: string } {
@@ -201,7 +205,7 @@ class SelectorList extends Container {
 
 /** A filtered option paired with its index into the original options array, so
  *  disabled-index lookups survive fuzzy filtering and reordering. */
-type FilteredOption = { option: HookSelectorOption; index: number };
+type FilteredOption = { option: ResolvedHookSelectorOption; index: number };
 
 /** Plain text of an extension-supplied inline-markdown string: markers rendered away, no ANSI. */
 function plainInline(source: string, mdTheme: MarkdownTheme): string {
@@ -211,6 +215,7 @@ function plainInline(source: string, mdTheme: MarkdownTheme): string {
 const ENTER_KEYS: readonly KeyName[] = ["enter"];
 
 interface HookSelectorNativeMemo {
+	locale: Locale;
 	items: readonly FilteredOption[];
 	selected: string | undefined;
 	query: string;
@@ -221,7 +226,7 @@ interface HookSelectorNativeMemo {
 }
 
 export class HookSelectorComponent extends OverlayPanel {
-	#options: HookSelectorOption[];
+	#options: ResolvedHookSelectorOption[];
 	#menu: MenuSelection<FilteredOption>;
 	#search = new MenuSearchField();
 	#keys = new MenuKeyReader();
@@ -252,7 +257,7 @@ export class HookSelectorComponent extends OverlayPanel {
 	/** Described option rows by original index; `marker` is the radio state baked into the label. */
 	readonly #nativeItems = new Map<number, { marker: boolean; node: NativeNode }>();
 	/** Title/detail/hint nodes, fixed for the dialog's lifetime. */
-	#nativeStatic: { title: string; detail: NativeNode | undefined; hints: NativeNode } | undefined;
+	#nativeStatic: { locale: Locale; title: string; detail: NativeNode | undefined; hints: NativeNode } | undefined;
 	#nativeMemo: HookSelectorNativeMemo | undefined;
 	/** Every option as a picker row, by original index (built once; filtering only changes `order`). */
 	#pickerItems: readonly TspPickerItem[] | undefined;
@@ -336,7 +341,7 @@ export class HookSelectorComponent extends OverlayPanel {
 					// Auto-select current option on timeout (typically the first/recommended option)
 					const selected = this.#menu.selectedItem;
 					if (selected && !this.#menu.isDisabled(selected)) {
-						this.#onSelectCallback(selected.option.label);
+						this.#onSelectCallback(selected.option.value);
 					} else {
 						this.#onCancelCallback();
 					}
@@ -349,8 +354,19 @@ export class HookSelectorComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 		const controlsHint =
 			opts?.helpText ??
-			`${editorKeys("tui.select.up", "tui.select.down")} navigate · PgUp/Dn page · ${formatKeyHint("enter")} select · ${editorKey("tui.select.cancel")} cancel${this.#selectionMarker === "checkbox" ? " · Space toggle option" : ""}${this.#slider ? " · Tab tier" : this.#onLeftCallback || this.#onRightCallback ? " · Tab question" : ""}${this.#isSearchEnabled() ? " · / search" : ""}`;
-		this.addChild(new MenuHints(`${controlsHint} · ? help`, text => theme.fg("dim", text)));
+			t("overlays.hook_selector.hook_selector_controls", {
+				editorKeys: `${editorKeys("tui.select.up", "tui.select.down")}`,
+				value: `${formatKeyHint("enter")}`,
+				editorKey: `${editorKey("tui.select.cancel")}`,
+				value2: `${this.#selectionMarker === "checkbox" ? t("overlays.hook_selector.hook_selector_toggle_hint") : ""}`,
+				value3: `${this.#slider ? t("overlays.hook_selector.hook_selector_tier_hint") : this.#onLeftCallback || this.#onRightCallback ? t("overlays.hook_selector.hook_selector_question_hint") : ""}`,
+				value4: `${this.#isSearchEnabled() ? t("overlays.hook_selector.hook_selector_search_hint") : ""}`,
+			});
+		this.addChild(
+			new MenuHints(t("overlays.hook_selector.hook_selector_help_hint", { controlsHint: `${controlsHint}` }), text =>
+				theme.fg("dim", text),
+			),
+		);
 		this.addChild(new Spacer(1));
 
 		this.#updateList();
@@ -547,7 +563,10 @@ export class HookSelectorComponent extends OverlayPanel {
 		}
 
 		if (total === 0) {
-			rows.push({ text: theme.fg("dim", "  No matching options"), highlight: false });
+			rows.push({
+				text: theme.fg("dim", t("overlays.hook_selector.hook_selector_no_matches_indented")),
+				highlight: false,
+			});
 		}
 
 		const status =
@@ -604,7 +623,11 @@ export class HookSelectorComponent extends OverlayPanel {
 		const selectedCount = total === 0 ? 0 : this.#menu.selectedIndex + 1;
 		const count =
 			this.#menu.query.trim() && total !== this.#options.length
-				? `${selectedCount}/${total} of ${this.#options.length}`
+				? t("overlays.hook_selector.hook_selector_selected_count", {
+						selectedCount: `${selectedCount}`,
+						total: `${total}`,
+						length: `${this.#options.length}`,
+					})
 				: `${selectedCount}/${total}`;
 		const field = this.#search.render(Math.max(1, (this.#lastRenderWidth ?? 80) - count.length - 6), {
 			muted: value => theme.fg("dim", value),
@@ -633,7 +656,7 @@ export class HookSelectorComponent extends OverlayPanel {
 		this.#menu.setSelectedIndex(targetIndex);
 		this.#viewport.reveal();
 		this.#updateList();
-		if (this.#selectionMarker !== "checkbox") this.#onSelectCallback(target.option.label);
+		if (this.#selectionMarker !== "checkbox") this.#onSelectCallback(target.option.value);
 		return true;
 	}
 
@@ -687,7 +710,7 @@ export class HookSelectorComponent extends OverlayPanel {
 				(action.kind === "confirm" ||
 					(this.#selectionMarker === "checkbox" && selected.index < this.#markableCount))
 			)
-				this.#onSelectCallback(selected.option.label);
+				this.#onSelectCallback(selected.option.value);
 		} else if (action.kind === "horizontal" || action.kind === "context") {
 			this.#search.focused = false;
 			if (this.#slider) this.#moveSlider(action.delta);
@@ -751,10 +774,10 @@ export class HookSelectorComponent extends OverlayPanel {
 			selected: selected ?? null,
 			...(checkbox ? { current: [...this.#checkedIndices].map(String) } : {}),
 			total: this.#options.length,
-			empty: "No matching options",
+			empty: t("overlays.hook_selector.hook_selector_no_matches"),
 			actions: [
-				pickerAction("confirm", "Select", "enter", { primary: true }),
-				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+				pickerAction("confirm", t("tui.picker.select"), "enter", { primary: true }),
+				{ ...CLOSE_ACTION, label: this.#search.focused ? t("tui.picker.back_to_list") : t("tui.picker.close") },
 			],
 		});
 		this.#pickerMemo = { items, selected, query, cursor, focused: this.#search.focused, node: result };
@@ -780,9 +803,10 @@ export class HookSelectorComponent extends OverlayPanel {
 		const selected = this.#menu.selectedKey;
 		const query = this.#menu.query;
 		const countdown = this.#countdown?.describe();
+		const locale = getLocale();
 		const memo = this.#nativeMemo;
 		if (
-			memo &&
+			memo?.locale === locale &&
 			memo.items === items &&
 			memo.selected === selected &&
 			memo.query === query &&
@@ -815,7 +839,7 @@ export class HookSelectorComponent extends OverlayPanel {
 				{
 					selected: selectedItem && !this.#menu.isDisabled(selectedItem) ? (selected ?? null) : null,
 					filter: (compileMenuRegex(query) ? query : query.trim()) || undefined,
-					empty: compileMenuRegex(query)?.error ?? "No matching options",
+					empty: compileMenuRegex(query)?.error ?? t("overlays.hook_selector.hook_selector_no_matches"),
 					max: { lines: this.#maxVisible },
 				},
 				rows,
@@ -826,13 +850,19 @@ export class HookSelectorComponent extends OverlayPanel {
 		if (this.#search.focused) children.push(this.#search.input);
 		else if (query) {
 			children.push(
-				node("text", { spans: [span("Search: ", "dim"), span(query)], wrap: "none" }, undefined, "search"),
+				node(
+					"text",
+					{ spans: [span(t("tui.components.search.prefix"), "dim"), span(query)], wrap: "none" },
+					undefined,
+					"search",
+				),
 			);
 		}
 		children.push(fixed.hints);
 
 		const root = overlayCard(this.nativeRole, countdown ? undefined : fixed.title, children);
 		this.#nativeMemo = {
+			locale,
 			items,
 			selected,
 			query,
@@ -861,7 +891,7 @@ export class HookSelectorComponent extends OverlayPanel {
 				this.#syncSearchQuery();
 			} else if (ev.act === "confirm") {
 				const selected = this.#menu.selectedItem;
-				if (selected && !this.#menu.isDisabled(selected)) this.#onSelectCallback(selected.option.label);
+				if (selected && !this.#menu.isDisabled(selected)) this.#onSelectCallback(selected.option.value);
 			}
 			return;
 		}
@@ -893,7 +923,7 @@ export class HookSelectorComponent extends OverlayPanel {
 		this.#keys.reset();
 		this.#viewport.reveal();
 		this.#updateList();
-		this.#onSelectCallback(target.option.label);
+		this.#onSelectCallback(target.option.value);
 	}
 
 	#resetCountdown(): void {
@@ -903,7 +933,8 @@ export class HookSelectorComponent extends OverlayPanel {
 	}
 
 	#describeStatic(mdTheme: MarkdownTheme): { title: string; detail: NativeNode | undefined; hints: NativeNode } {
-		if (this.#nativeStatic) return this.#nativeStatic;
+		const locale = getLocale();
+		if (this.#nativeStatic?.locale === locale) return this.#nativeStatic;
 		const detail =
 			this.#detailLines.length > 0
 				? node(
@@ -917,17 +948,22 @@ export class HookSelectorComponent extends OverlayPanel {
 			this.#helpText !== undefined
 				? node("text", { spans: [span(plainText(this.#helpText), "dim")], wrap: "word" }, undefined, "hints")
 				: hintsRow([
-						actionHint(["tui.select.up", "tui.select.down"], "navigate"),
+						actionHint(["tui.select.up", "tui.select.down"], t("overlays.native_hint.navigate")),
 						...(this.#slider || this.#onLeftCallback || this.#onRightCallback
-							? [{ keys: ["left", "right"] as const, label: this.#slider ? "tier" : "question" }]
+							? [
+									{
+										keys: ["left", "right"] as const,
+										label: this.#slider ? t("overlays.native_hint.tier") : t("overlays.native_hint.question"),
+									},
+								]
 							: []),
 						...(this.#selectionMarker === "checkbox"
-							? [{ keys: ["space"] as const, label: "toggle option" }]
+							? [{ keys: ["space"] as const, label: t("overlays.hook_selector.hook_selector_toggle") }]
 							: []),
-						{ keys: ENTER_KEYS, label: "select" },
-						actionHint("tui.select.cancel", "back / cancel"),
+						{ keys: ENTER_KEYS, label: t("tui.ask.hint.select") },
+						actionHint("tui.select.cancel", t("overlays.hook_selector.hook_selector_back_cancel")),
 					]);
-		this.#nativeStatic = { title: plainInline(this.#baseTitle, mdTheme), detail, hints };
+		this.#nativeStatic = { locale, title: plainInline(this.#baseTitle, mdTheme), detail, hints };
 		return this.#nativeStatic;
 	}
 

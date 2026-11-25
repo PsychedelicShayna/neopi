@@ -12,7 +12,7 @@ import { Container, type TUI } from "@oh-my-pi/pi-tui";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { clearCache, readDirEntries } from "@oh-my-pi/pi-coding-agent/capability/fs";
 
-const PROJECT_OPTION = "This project (.omp/rules)";
+const PROJECT_OPTION = "project";
 
 const usage: Usage = {
 	input: 0,

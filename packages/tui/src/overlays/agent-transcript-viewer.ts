@@ -13,6 +13,7 @@
  * historical entries cannot leave stale components behind. Collab guests use the
  * same append path over the host's byte-capped transcript reads.
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type * as fs from "node:fs";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
@@ -174,9 +175,9 @@ const STATUS_TONE: Record<AgentStatus, TspTone> = {
 function statusBadge(status: AgentStatus): string {
 	switch (status) {
 		case "running":
-			return theme.fg("success", "running");
+			return theme.fg("success", t("overlays.agent_transcript_viewer.status_running"));
 		case "idle":
-			return theme.fg("accent", "idle");
+			return theme.fg("accent", t("overlays.agent_transcript_viewer.status_idle"));
 		case "parked":
 			return theme.fg("muted", "parked");
 		case "aborted":
@@ -191,7 +192,7 @@ export class AgentTranscriptViewer implements Component {
 	#notice: string | undefined;
 	#expanded = false;
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp("jk gg/G C-u d e y", "Left arrow returns to the agent hub.");
+	readonly #help = new MenuHelp("jk gg/G C-u d e y", () => t("overlays.agent_transcript_viewer.return_hub_help"));
 	#focus: "view" | "editor" = "view";
 	#pendingSends = 0;
 	#scroll: NativeScroll | undefined;
@@ -730,6 +731,7 @@ export class AgentTranscriptViewer implements Component {
 			? [progress.contextTokens, progress.contextWindow, progress.durationMs, progress.toolCount, progress.cost]
 			: undefined;
 		const signature = JSON.stringify([
+			getLocale(),
 			ref?.status,
 			ref?.kind,
 			ref?.parentId,
@@ -750,7 +752,13 @@ export class AgentTranscriptViewer implements Component {
 		// Top row: the agent's meta on the left, a clickable `esc` (close) on the right.
 		const top: NativeChild[] = [];
 		if (ref) {
-			const kindTag = ref.parentId ? `${ref.kind} ${theme.sep.dot} of ${ref.parentId}` : ref.kind;
+			const kindTag = ref.parentId
+				? t("overlays.agent_transcript_viewer.kind_parent", {
+						kind: `${ref.kind}`,
+						dot: `${theme.sep.dot}`,
+						parentId: `${ref.parentId}`,
+					})
+				: ref.kind;
 			const meta: NativeChild[] = [
 				text([span(id, "strong")]),
 				node("badge", { text: ref.status, tone: STATUS_TONE[ref.status] }),
@@ -828,13 +836,23 @@ export class AgentTranscriptViewer implements Component {
 		children.push(
 			hintsRow([
 				this.#editor
-					? { keys: ["tab", "shift+tab"], label: this.#focus === "editor" ? "view" : "message" }
+					? {
+							keys: ["tab", "shift+tab"],
+							label:
+								this.#focus === "editor" ? t("overlays.native_hint.view") : t("overlays.native_hint.message"),
+						}
 					: undefined,
-				this.#focus === "editor" ? actionHint("tui.input.submit", "send") : undefined,
-				{ keys: [this.#deps.expandKeys[0] ?? "alt+e", "space"], label: "expand" },
+				this.#focus === "editor"
+					? actionHint("tui.input.submit", t("overlays.agent_transcript_viewer.send_hint"))
+					: undefined,
+				{ keys: [this.#deps.expandKeys[0] ?? "alt+e", "space"], label: t("tui.ask.hint.expand") },
 			]),
 		);
-		const head = [span("Agent Hub", "accent"), span(` ${theme.sep.dot} `, "dim"), span(id, "accent")];
+		const head = [
+			span(t("overlays.agent_transcript_viewer.hub_title"), "accent"),
+			span(` ${theme.sep.dot} `, "dim"),
+			span(id, "accent"),
+		];
 		const described = overlayCard("omp.hub.transcript", head, children);
 		this.#nativeCache = { signature, node: described };
 		return described;
@@ -882,9 +900,20 @@ export class AgentTranscriptViewer implements Component {
 	}
 
 	#headerLines(status: AgentStatus | undefined, kind: string | undefined, parentId: string | undefined): string[] {
-		const lines = [theme.fg("accent", `Agent Hub ${theme.sep.dot} ${this.#deps.agentId}`)];
+		const lines = [
+			theme.fg(
+				"accent",
+				t("overlays.agent_transcript_viewer.hub_agent_title", {
+					dot: `${theme.sep.dot}`,
+					agentId: `${this.#deps.agentId}`,
+				}),
+			),
+		];
 		if (status && kind) {
-			const kindTag = theme.fg("dim", ` ${parentId ? `${kind} ${theme.sep.dot} of ${parentId}` : kind}`);
+			const kindTag = theme.fg(
+				"dim",
+				` ${parentId ? t("overlays.agent_transcript_viewer.kind_parent", { kind: `${kind}`, dot: `${theme.sep.dot}`, parentId: `${parentId}` }) : kind}`,
+			);
 			const modelLabel = this.#model ? theme.fg("muted", `${theme.sep.dot}${this.#model}`) : "";
 			lines.push(`${theme.bold(this.#deps.agentId)} ${statusBadge(status)}${kindTag}${modelLabel}`);
 		}
@@ -895,11 +924,17 @@ export class AgentTranscriptViewer implements Component {
 		const lines: string[] = [];
 		const statsLine = this.#statsLine();
 		if (statsLine) lines.push(statsLine);
-		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand`;
+		const keys = t("overlays.agent_transcript_viewer.hub_expand_hint", {
+			value: `${formatKeyHint("escape")}`,
+			value2: `${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}`,
+		});
 		const hint =
 			this.#focus === "editor"
-				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
-				: `${keys}${this.#editor ? " · Tab message" : ""} · ? help`;
+				? t("overlays.agent_transcript_viewer.editor_keys_hint", { editorKey: `${editorKey("tui.input.submit")}` })
+				: t("overlays.agent_transcript_viewer.view_help_hint", {
+						keys: `${keys}`,
+						value: `${this.#editor ? t("overlays.agent_transcript_viewer.message_hint") : ""}`,
+					});
 		lines.push(
 			...menuHintLines(hint, width, this.#focus === "editor" ? "" : "jk gg/G C-u d e y").map(line =>
 				theme.fg("dim", line),
@@ -934,11 +969,14 @@ export class AgentTranscriptViewer implements Component {
 	#placeholder(maxWidth: number): string {
 		if (this.#deps.remote) {
 			if (this.#remoteError) return sanitizeErrorLine(this.#remoteError, maxWidth);
-			if (this.#remoteUnavailable) return "Transcript lives on the host — not available.";
-			return this.#hasRemoteData ? "No messages yet." : "Loading transcript from host…";
+			if (this.#remoteUnavailable) return t("overlays.agent_transcript_viewer.transcript_unavailable");
+			return this.#hasRemoteData
+				? t("overlays.agent_transcript_viewer.no_messages")
+				: t("overlays.agent_transcript_viewer.loading_transcript");
 		}
-		if (!this.#deps.registry.get(this.#deps.agentId)?.sessionFile) return "No session file available yet.";
-		return "No messages yet.";
+		if (!this.#deps.registry.get(this.#deps.agentId)?.sessionFile)
+			return t("overlays.agent_transcript_viewer.no_session_file");
+		return t("overlays.agent_transcript_viewer.no_messages");
 	}
 
 	get agentId(): string {

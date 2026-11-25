@@ -52,8 +52,8 @@ export function renderClassicWelcome(
 	// Right column
 	const rightLines = [
 		` ${theme.bold(theme.fg("accent", t("tui.welcome.tips")))}`,
-		` ${theme.fg("dim", "#")}${theme.fg("muted", " for prompt actions")}`,
-		` ${theme.fg("dim", "/")}${theme.fg("muted", " for commands")}`,
+		` ${theme.fg("dim", "#")}${theme.fg("muted", t("overlays.classic_welcome.prompt_actions_suffix"))}`,
+		` ${theme.fg("dim", "/")}${theme.fg("muted", t("overlays.classic_welcome.commands_suffix"))}`,
 		` ${theme.fg("dim", "!")}${theme.fg("muted", t("tui.welcome.bash_suffix"))}`,
 		` ${theme.fg("dim", "$")}${theme.fg("muted", t("tui.welcome.python_suffix"))}`,
 	];

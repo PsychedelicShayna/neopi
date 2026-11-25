@@ -4,6 +4,7 @@
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { usageHelp as commandHelp } from "../cli/command-help";
 import { runUsageCommand } from "../cli/usage-cli";
 
@@ -44,19 +45,22 @@ export default class Usage extends Command {
 		}),
 	};
 
-	static examples = [
-		`# Detailed per-account usage breakdown across all providers\n  ${APP_NAME} usage`,
-		`# Only Anthropic accounts\n  ${APP_NAME} usage --provider anthropic`,
-		`# Redact account identifiers for screenshots\n  ${APP_NAME} usage --redact`,
-		`# Machine-readable output\n  ${APP_NAME} usage --json`,
-		`# Usage-limit trend over the last 30 days\n  ${APP_NAME} usage --history --days 30`,
-		`# Per-client token burn (which machine/app spent what) over the last 30 days\n  ${APP_NAME} usage clients --days 30`,
-		`# OAuth identity keys for task.agentAccountPools (no tokens)\n  ${APP_NAME} usage accounts`,
-		`# Saved Codex and Claude rate-limit resets per account, with each account's credential id\n  ${APP_NAME} usage reset`,
-		`# Spend one saved reset on a listed account\n  ${APP_NAME} usage reset codex/3`,
-		`# Invalidate cached usage reports for all providers\n  ${APP_NAME} usage invalidate`,
-		`# Invalidate cached usage reports for a specific provider\n  ${APP_NAME} usage invalidate --provider anthropic`,
-	];
+	static get examples(): string[] {
+		const values = { bin: APP_NAME };
+		return [
+			t("cli.commands.usage.exampleBreakdown", values),
+			t("cli.commands.usage.exampleProvider", values),
+			t("cli.commands.usage.exampleRedact", values),
+			t("cli.commands.usage.exampleJson", values),
+			t("cli.commands.usage.exampleHistory", values),
+			t("cli.commands.usage.exampleClients", values),
+			t("cli.commands.usage.exampleAccounts", values),
+			t("cli.commands.usage.exampleResetList", values),
+			t("cli.commands.usage.exampleReset", values),
+			t("cli.commands.usage.exampleInvalidateAll", values),
+			t("cli.commands.usage.exampleInvalidateProvider", values),
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Usage);

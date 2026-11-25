@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { CLIP_DESCRIPTION_MAX, STREAM_TITLE_MAX } from "@oh-my-pi/pi-wire";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { clipHelp as commandHelp } from "../cli/command-help";
 import { Settings } from "../config/settings";
 import { StencilCredential } from "../stencil/credential";
@@ -32,18 +33,20 @@ export default class Clip extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Clip);
 		if (flags.title !== undefined && flags.title.length > STREAM_TITLE_MAX) {
-			throw new CliUsageError(`--title must be at most ${STREAM_TITLE_MAX} characters`);
+			throw new CliUsageError(t("cli.commands.clip.error.max_length", { flag: "--title", max: STREAM_TITLE_MAX }));
 		}
 		if (flags.description !== undefined && flags.description.length > CLIP_DESCRIPTION_MAX) {
-			throw new CliUsageError(`--description must be at most ${CLIP_DESCRIPTION_MAX} characters`);
+			throw new CliUsageError(
+				t("cli.commands.clip.error.max_length", { flag: "--description", max: CLIP_DESCRIPTION_MAX }),
+			);
 		}
 		const file = args.file ? path.resolve(args.file) : await latestRecording();
-		if (!file) throw new CliUsageError(`no recordings in ${recordingsDir()}; start one with /record`);
+		if (!file) throw new CliUsageError(t("cli.commands.clip.error.no_recordings", { dir: recordingsDir() }));
 		let recording: string;
 		try {
 			recording = await Bun.file(file).text();
 		} catch (error) {
-			if (isEnoent(error)) throw new CliUsageError(`recording not found: ${file}`);
+			if (isEnoent(error)) throw new CliUsageError(t("cli.commands.clip.error.not_found", { file }));
 			throw error;
 		}
 

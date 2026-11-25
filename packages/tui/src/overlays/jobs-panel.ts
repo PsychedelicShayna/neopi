@@ -5,6 +5,7 @@
  * {@link buildJobTree}) beside the selected one's status, command, facts
  * (cwd, live pids, exit code, artifact) and live output.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { formatDuration, sanitizeText, spillUrl } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
@@ -95,10 +96,18 @@ export interface JobsSheetSource {
 
 /** A job's status as the sheet names it. */
 const STATUS_LABEL: Record<JobsPanelJob["status"], string> = {
-	running: "Running",
-	completed: "Done",
-	failed: "Failed",
-	cancelled: "Cancelled",
+	get running() {
+		return t("overlays.jobs_panel.jobs_panel_running");
+	},
+	get completed() {
+		return t("overlays.jobs_panel.jobs_panel_done");
+	},
+	get failed() {
+		return t("overlays.jobs_panel.jobs_panel_failed");
+	},
+	get cancelled() {
+		return t("overlays.jobs_panel.jobs_panel_cancelled");
+	},
 };
 
 /** A job's status color: the list row's icon and the detail's status pill. */
@@ -140,7 +149,9 @@ export class JobsSheet implements Component {
 		role: "omp.overlay.jobs",
 		size: "lg",
 		anchor: "center",
-		head: "Background jobs",
+		get head() {
+			return t("overlays.jobs_panel.jobs_panel_title");
+		},
 	} as const;
 	readonly #source: JobsSheetSource;
 	readonly #keys = new MenuKeyReader();
@@ -209,7 +220,7 @@ export class JobsSheet implements Component {
 		const { rows, jobs, selected, cancellable } = this.#current();
 		const detail = selected && this.#inspect(selected.id);
 		const now = Date.now();
-		const close = actionButton("Close", "close", { keys: "escape" });
+		const close = actionButton(t("tui.picker.close"), "close", { keys: "escape" });
 		const queryError = compileMenuRegex(this.#search.value)?.error;
 		return col([
 			this.#search.input.describe(cx),
@@ -242,11 +253,16 @@ export class JobsSheet implements Component {
 		const now = Date.now();
 		const running = jobs.filter(job => job.status === "running").length;
 		const lines = [
-			truncateToWidth(` Background jobs · ${running} running`, width),
+			truncateToWidth(t("overlays.jobs_panel.jobs_panel_running_header", { running: `${running}` }), width),
 			this.#search.render(width, { muted: text => text }),
 		];
 		const window = this.#viewport.layout(this.#rowCounts, this.#selection.selectedIndex, this.#listRows());
-		if (jobs.length === 0) lines.push(this.#search.query ? "No matching jobs" : "No background jobs");
+		if (jobs.length === 0)
+			lines.push(
+				this.#search.query
+					? t("overlays.jobs_panel.jobs_panel_no_matches")
+					: t("overlays.jobs_panel.jobs_panel_empty"),
+			);
 		let jobIndex = 0;
 		const groupRows: string[] = [];
 		for (const entry of rows) {
@@ -289,12 +305,16 @@ export class JobsSheet implements Component {
 				);
 				for (const line of commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)) lines.push(`   ${line}`);
 				const hidden = commandRows.length - PREVIEW_LIMITS.EXPANDED_LINES;
-				if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
+				if (hidden > 0)
+					lines.push(
+						truncateToWidth(t("overlays.jobs_panel.jobs_panel_hidden_commands", { hidden: `${hidden}` }), width),
+					);
 			}
 			const facts = compact([
-				detail.cwd && `cwd ${detail.cwd}`,
+				detail.cwd && t("overlays.jobs_panel.jobs_panel_cwd", { cwd: `${detail.cwd}` }),
 				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
-				detail.exitCode !== undefined && `exit ${detail.exitCode}`,
+				detail.exitCode !== undefined &&
+					t("overlays.jobs_panel.jobs_panel_exit", { exitCode: `${detail.exitCode}` }),
 				detail.artifactId && spillUrl(detail.artifactId),
 			]);
 			if (facts.length > 0) lines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
@@ -313,7 +333,9 @@ export class JobsSheet implements Component {
 		}
 		lines.push(
 			...menuHintLines(
-				`Tab list/output · PgUp/PgDn page · Enter/Space details · / search${this.#source.cancel ? " · x cancel" : ""} · Esc close · ? help`,
+				t("overlays.jobs_panel.jobs_panel_controls", {
+					value: `${this.#source.cancel ? t("overlays.jobs_panel.jobs_panel_cancel_hint") : ""}`,
+				}),
 				width,
 			),
 		);
@@ -529,8 +551,8 @@ function describeJobItem(job: JobsPanelJob, agentName: string | undefined, guide
 function describeSummary(jobs: readonly JobsPanelJob[]): NativeNode {
 	const running = jobs.filter(job => job.status === "running").length;
 	const parts = compact([
-		running > 0 && `${running} running`,
-		jobs.length > running && `${jobs.length - running} recent`,
+		running > 0 && t("overlays.jobs_panel.jobs_panel_running_count", { running: `${running}` }),
+		jobs.length > running && t("overlays.jobs_panel.jobs_panel_recent_count", { value: `${jobs.length - running}` }),
 	]);
 	return node("text", { role: "omp.jobs.summary", text: parts.join(" · "), wrap: "none" }, undefined, "summary");
 }
@@ -542,8 +564,8 @@ function describeEmpty(): NativeNode {
 		{ role: "omp.jobs.empty", align: "center" },
 		[
 			node("icon", { name: "jobs" }),
-			text("No background jobs", { role: "omp.jobs.empty.title" }),
-			text("Commands and subagent tasks started in the background show up here while they run.", {
+			text(t("overlays.jobs_panel.jobs_panel_empty"), { role: "omp.jobs.empty.title" }),
+			text(t("overlays.jobs_panel.jobs_panel_empty_note"), {
 				role: "omp.jobs.empty.note",
 				wrap: "word",
 			}),
@@ -572,11 +594,16 @@ function describeDetail(
 	const title = job.intent ?? (command ? undefined : job.label);
 	const pids = detail?.pids ?? [];
 	const facts = compact([
-		job.agentId ? { k: "Agent", v: [span(job.agentId, "mono")] } : undefined,
-		detail?.cwd ? { k: "Directory", v: [span(detail.cwd, "path")] } : undefined,
+		job.agentId ? { k: t("settings.group.agent"), v: [span(job.agentId, "mono")] } : undefined,
+		detail?.cwd ? { k: t("overlays.jobs_panel.jobs_panel_directory"), v: [span(detail.cwd, "path")] } : undefined,
 		pids.length > 0 && { k: pids.length > 1 ? "PIDs" : "PID", v: [span(pids.join(", "), "num")] },
-		exit !== undefined && { k: "Exit code", v: [span(String(exit), exit === 0 ? "success" : "error")] },
-		detail?.artifactId ? { k: "Full output", v: [span(spillUrl(detail.artifactId), "mono")] } : undefined,
+		exit !== undefined && {
+			k: t("overlays.jobs_panel.jobs_panel_exit_code"),
+			v: [span(String(exit), exit === 0 ? "success" : "error")],
+		},
+		detail?.artifactId
+			? { k: t("overlays.jobs_panel.jobs_panel_full_output"), v: [span(spillUrl(detail.artifactId), "mono")] }
+			: undefined,
 	]);
 	const children = compact<NativeChild>([
 		row(
@@ -591,11 +618,15 @@ function describeDetail(
 					...(settled ? { stopped: age } : {}),
 					format: "short",
 					role: "omp.jobs.age",
-					title: settled ? "Ran for" : "Running for",
+					title: settled
+						? t("overlays.jobs_panel.jobs_panel_ran_for")
+						: t("overlays.jobs_panel.jobs_panel_running_for"),
 				}),
 				text([span(`${job.type} · ${job.id}`, "mono")], { role: "omp.jobs.id", wrap: "none", truncate: "end" }),
 				node("spacer", { grow: 1 }),
-				cancellable && !settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
+				cancellable &&
+					!settled &&
+					actionButton(t("overlays.jobs_panel.jobs_panel_cancel_job"), "cancel", { keys: "x", tone: "error" }),
 			]),
 			{ role: "omp.jobs.status", gap: "sm", align: "center" },
 		),
@@ -612,13 +643,18 @@ function describeDetail(
 			"col",
 			{ role: "omp.jobs.out", gap: "sm" },
 			[
-				text("Output", { role: "omp.jobs.label" }),
+				text(t("overlays.jobs_panel.jobs_panel_output"), { role: "omp.jobs.label" }),
 				detail?.output
 					? {
 							...ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } }),
 							scroll,
 						}
-					: text(settled ? "No output" : "No output yet", { role: "omp.jobs.nooutput" }),
+					: text(
+							settled
+								? t("overlays.jobs_panel.jobs_panel_no_output")
+								: t("overlays.jobs_panel.jobs_panel_no_output_yet"),
+							{ role: "omp.jobs.nooutput" },
+						),
 			],
 			"out",
 		),

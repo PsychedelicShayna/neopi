@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../render";
 import { visibleWidth } from "../utils";
@@ -111,8 +112,8 @@ export function renderAgentWrite(
 		if (recipient === "all") meta.push("broadcast");
 		if (receipts.length === 1) meta.push(theme.fg(receiptColor(receipts[0]!.outcome), receipts[0]!.outcome));
 		else if (receipts.length > 1) {
-			if (delivered) meta.push(theme.fg("success", `${delivered} delivered`));
-			if (failed) meta.push(theme.fg("error", `${failed} failed`));
+			if (delivered) meta.push(theme.fg("success", t("tools.proc.delivered", { delivered })));
+			if (failed) meta.push(theme.fg("error", t("tools.proc.failed", { failed })));
 		}
 		const header = renderStatusLine(
 			result === undefined
@@ -123,10 +124,10 @@ export function renderAgentWrite(
 			theme,
 		);
 		if (result?.isError && receipts.length === 0)
-			return [header, formatErrorDetail(firstText(result) || "Message delivery failed.", theme)];
+			return [header, formatErrorDetail(firstText(result) || t("tools.proc_render.message_failed"), theme)];
 		const lines = [header, ...preview(body, expanded, theme, "dim", width)];
 		if (result && receipts.length === 0)
-			lines.push(theme.fg("muted", firstText(result) || "No live peers to broadcast to."));
+			lines.push(theme.fg("muted", firstText(result) || t("tools.proc_render.no_live_peers")));
 		if (receipts.length > 1 || failed > 0) {
 			lines.push(
 				...renderTreeList(
@@ -159,7 +160,7 @@ function daemonMeta(daemon: ServiceView, theme: Theme): string[] {
 /** A service's facts after its state: pid, run time, and what keeps it alive. */
 function serviceFacts(service: ServiceView): string[] {
 	const facts: string[] = [];
-	if (service.pid !== undefined) facts.push(`pid ${service.pid}`);
+	if (service.pid !== undefined) facts.push(t("tools.proc.pid", { pid: service.pid }));
 	facts.push(
 		`${service.exitedAt === undefined ? "up" : "ran"} ${formatDuration(Math.max(0, (service.exitedAt ?? Date.now()) - service.startedAt))}`,
 	);
@@ -204,7 +205,8 @@ export function renderProcWrite(
 			},
 			theme,
 		);
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Process operation failed.", theme)];
+		if (result?.isError)
+			return [header, formatErrorDetail(firstText(result) || t("tools.proc_render.operation_failed"), theme)];
 		const lines = [header];
 		if (content && action === "stdin") lines.push(...preview(content, expanded, theme));
 		if (details && "op" in details && details.op === "cancel") {
@@ -238,7 +240,7 @@ export function renderProcRead(
 	theme: Theme,
 ): Component {
 	return card((_width, expanded) => {
-		const title = id ? `Proc ${safe(id)}` : "Proc jobs & services";
+		const title = id ? `Proc ${safe(id)}` : t("tools.proc_render.jobs_and_services");
 		const daemon = details?.daemon;
 		const header = renderStatusLine(
 			{
@@ -248,7 +250,8 @@ export function renderProcRead(
 			},
 			theme,
 		);
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Process read failed.", theme)];
+		if (result?.isError)
+			return [header, formatErrorDetail(firstText(result) || t("tools.proc_render.read_failed"), theme)];
 		if (!result) return [header];
 		if (details?.job)
 			return [
@@ -270,7 +273,8 @@ export function renderProcRead(
 					line =>
 						`  ${styleTerminalRow(truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE, Ellipsis.Unicode), theme.fg("toolOutput", ""))}`,
 				);
-			if (output.length > limit) visible.unshift(theme.fg("dim", `  … ${output.length - limit} earlier lines`));
+			if (output.length > limit)
+				visible.unshift(theme.fg("dim", t("tools.proc.earlier_lines", { count: output.length - limit })));
 			return [header, ...visible];
 		}
 		if (id && !details?.jobs && !details?.daemons && !details?.agents) {
@@ -280,9 +284,9 @@ export function renderProcRead(
 		const services = (details?.daemons ?? []).map(serviceView);
 		const agents = details?.agents ?? [];
 		const meta = [
-			`${jobs.length} jobs`,
-			`${services.length} services`,
-			...(agents.length ? [`${agents.length} agents`] : []),
+			t("tools.proc.jobs", { count: jobs.length }),
+			t("tools.proc.services", { count: services.length }),
+			...(agents.length ? [t("tools.proc.agents", { count: agents.length })] : []),
 		];
 		const listHeader = renderStatusLine({ icon: "info", title, meta }, theme);
 		const items = [
@@ -306,7 +310,7 @@ export function renderProcRead(
 				},
 				theme,
 			),
-			...(items.length ? [] : [theme.fg("dim", "No background jobs or services.")]),
+			...(items.length ? [] : [theme.fg("dim", t("tools.proc_render.no_background"))]),
 		];
 	}, options);
 }
@@ -371,17 +375,19 @@ export function describeAgentWrite(
 	if (recipient === "all") meta.push(span("broadcast", "muted"));
 	if (receipts.length === 1) meta.push(span(receipts[0]!.outcome, RECEIPT_TONE[receipts[0]!.outcome]));
 	else if (receipts.length > 1) {
-		if (delivered) meta.push(span(`${delivered} delivered`, "success"));
-		if (failed) meta.push(span(`${failed} failed`, "error"));
+		if (delivered) meta.push(span(t("tools.proc.delivered", { delivered }), "success"));
+		if (failed) meta.push(span(t("tools.proc.failed", { failed }), "error"));
 	}
 	const head = toolHead("IRC", span(recipient, "accent"), ...meta);
 	const error = result?.isError === true || (failed > 0 && delivered === 0);
 	if (result?.isError && receipts.length === 0) {
-		return { head, tone: "error", body: [errorText(firstText(result) || "Message delivery failed.")] };
+		return { head, tone: "error", body: [errorText(firstText(result) || t("tools.proc_render.message_failed"))] };
 	}
 	const children = compact<NativeChild>([
 		quotedPreview(body),
-		result !== undefined && receipts.length === 0 && noteText(firstText(result) || "No live peers to broadcast to."),
+		result !== undefined &&
+			receipts.length === 0 &&
+			noteText(firstText(result) || t("tools.proc_render.no_live_peers")),
 		(receipts.length > 1 || failed > 0) &&
 			node(
 				"list",
@@ -419,7 +425,7 @@ export function describeProcWrite(
 		daemon ? daemonMetaText(serviceView(daemon)) : action === "mode" && content ? safe(content) : undefined,
 	);
 	if (result?.isError) {
-		return { head, tone: "error", body: [errorText(firstText(result) || "Process operation failed.")] };
+		return { head, tone: "error", body: [errorText(firstText(result) || t("tools.proc_render.operation_failed"))] };
 	}
 	const body = compact<NativeChild>([content && action === "stdin" ? quotedPreview(content) : undefined]);
 	if (details && "op" in details && details.op === "cancel") {
@@ -456,14 +462,14 @@ export function describeProcRead(
 	details: ProcReadDetails | undefined,
 ): NativeToolView {
 	const daemon = details?.daemon;
-	const title = id ? "Proc" : "Proc jobs & services";
+	const title = id ? "Proc" : t("tools.proc_render.jobs_and_services");
 	const head = toolHead(
 		title,
 		id ? span(safe(id), "accent") : undefined,
 		daemon ? daemonMetaText(serviceView(daemon)) : undefined,
 	);
 	if (result?.isError) {
-		return { head, tone: "error", body: [errorText(firstText(result) || "Process read failed.")] };
+		return { head, tone: "error", body: [errorText(firstText(result) || t("tools.proc_render.read_failed"))] };
 	}
 	if (!result) return { head };
 	if (details?.job) {
@@ -517,10 +523,10 @@ export function describeProcRead(
 			),
 		),
 	];
-	const counts = [`${jobs.length} jobs`, `${services.length} services`];
-	if (agents.length) counts.push(`${agents.length} agents`);
+	const counts = [t("tools.proc.jobs", { count: jobs.length }), t("tools.proc.services", { count: services.length })];
+	if (agents.length) counts.push(t("tools.proc.agents", { count: agents.length }));
 	return {
 		head: toolHead(title, id ? span(safe(id), "accent") : undefined, counts.join(" · ")),
-		body: [node("list", { empty: "No background jobs or services.", role: "omp.tool.proc.table" }, items)],
+		body: [node("list", { empty: t("tools.proc_render.no_background"), role: "omp.tool.proc.table" }, items)],
 	};
 }

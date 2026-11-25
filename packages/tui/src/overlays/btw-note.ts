@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspMenuEntry, TspSpan } from "@oh-my-pi/pi-wire";
 import type { Component, TUI } from "../tui";
 import { sanitizeErrorLine } from "../chrome/error-block";
@@ -140,7 +141,7 @@ export class BtwNoteComponent implements Component {
 				role: "omp.btw.note.folded",
 				gap: "sm",
 				align: "center",
-				title: "Show this side answer",
+				title: t("overlays.btw_note.show_answer"),
 				actions: { click: "btw-expand", menu, hold: menu },
 			},
 		);
@@ -155,7 +156,12 @@ export class BtwNoteComponent implements Component {
 			tools.push(
 				node(
 					"icon",
-					{ name: "copy", role: "omp.btw.note.tool", title: "Copy answer", actions: { click: "btw-copy" } },
+					{
+						name: "copy",
+						role: "omp.btw.note.tool",
+						title: t("overlays.btw_controller.copy_answer"),
+						actions: { click: "btw-copy" },
+					},
 					undefined,
 					"copy",
 				),
@@ -164,7 +170,12 @@ export class BtwNoteComponent implements Component {
 		tools.push(
 			node(
 				"icon",
-				{ name: "x", role: "omp.btw.note.tool", title: "Fold to one line", actions: { click: "btw-fold" } },
+				{
+					name: "x",
+					role: "omp.btw.note.tool",
+					title: t("overlays.btw_controller.fold_line"),
+					actions: { click: "btw-fold" },
+				},
 				undefined,
 				"fold",
 			),
@@ -207,7 +218,10 @@ export class BtwNoteComponent implements Component {
 					? describeBtwInjectAnswer(parts, state === "sent", stream)
 					: turn.answer.trim()
 						? md(sanitizeDisplayText(turn.answer), { stream })
-						: text([span(stream ? "Thinking…" : "No answer text.", "dim")], { role: "omp.btw.pending" }),
+						: text(
+								[span(stream ? t("overlays.btw_note.thinking") : t("overlays.btw_note.no_answer_text"), "dim")],
+								{ role: "omp.btw.pending" },
+							),
 			);
 		}
 		if (turn.error) {

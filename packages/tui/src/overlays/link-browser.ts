@@ -12,6 +12,7 @@
  * as it had come. Like `/copy`, it replays the recent part of a long branch first, and the rest
  * once the view scrolls to its top.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { AssistantMessageComponent } from "../chat/assistant-message";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
@@ -279,14 +280,14 @@ export class LinkBrowserComponent implements Component {
 
 	#compose(contentWidth: number): TranscriptBrowserFrame {
 		const hint = this.#crowded
-			? theme.fg("warning", "Too many links on one row to tag; widen the terminal · PgUp/PgDn scroll · Esc close")
-			: theme.fg("dim", "Type a tag or click a link · PgUp/PgDn scroll · Esc close");
+			? theme.fg("warning", t("overlays.link_browser.link_browser_crowded"))
+			: theme.fg("dim", t("overlays.link_browser.link_browser_controls"));
 		const body = this.#body(contentWidth);
 		if (body.length >= this.#rowFloor) this.#rowFloor = 0;
 		else body.push(...Array<string>(this.#rowFloor - body.length).fill(""));
 		return {
 			header: [
-				`${theme.bold("Extension links")}${theme.sep.dot}${theme.fg("dim", "pick one anywhere in the transcript")}`,
+				`${theme.bold(t("overlays.link_browser.link_browser_title"))}${theme.sep.dot}${theme.fg("dim", t("overlays.link_browser.link_browser_pick_hint"))}`,
 			],
 			body: { lines: body },
 			footer: [hint],

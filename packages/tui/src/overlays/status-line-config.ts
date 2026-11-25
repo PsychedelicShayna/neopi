@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { uiProvenanceSuffix } from "../theme/provenance";
 import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../chrome/overlay-box";
@@ -91,45 +92,98 @@ export interface StatusLineConfigCallbacks {
 const COMPOSER_ROW = "composer";
 const RESET_ROW = "reset";
 const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
-	pi: "NeoPi brand, or the running turn's activity indicator and elapsed time.",
+	get pi() {
+		return t("overlays.status_line_config.desc_pi");
+	},
 	status: "Statuses supplied by extensions, ordered by their registered keys.",
-	model: "Active model and its thinking level.",
-	live: "Live voice microphone phase, mute state, and composer destination.",
-	live_meter: "Live microphone and assistant audio levels.",
-	mode: "Active planning, loop, goal, and other conversation modes.",
-	path: "Working directory, abbreviated according to the path segment options.",
-	git: "Git branch and configured working-tree change indicators.",
-	pr: "Pull request associated with the active repository.",
-	subagents: "Active background agents.",
-	token_in: "Recorded input-token usage.",
-	token_out: "Recorded output-token usage.",
-	token_total: "Total recorded token usage.",
-	token_rate: "Current generation speed in tokens per second.",
-	cost: "Recorded session cost and any active time-based pricing indicator.",
-	context_pct: "Current context usage as a percentage of the model's window.",
-	context_total: "Total context-window capacity.",
-	context_bar:
-		"Context-window gauge with compaction markers. Fills the remaining width in any composer; hidden below eight cells. Uses statusLine.contextLine.",
-	time_spent: "Time the agent has actively worked in this session, excluding idle time.",
-	time: "Current local time, using the configured clock format.",
-	session: "Current session identifier.",
-	hostname: "Name of the machine running this session.",
-	cache_read: "Recorded prompt-cache read tokens.",
-	cache_write: "Recorded prompt-cache write tokens.",
-	cache_hit: "Prompt-cache hit rate.",
-	cache: "Prompt-cache warmth and expected prefix reuse on the next request.",
-	session_name: "Current session title; the band composer places it on its working row.",
-	usage: "Quota summary for the active provider and account.",
-	collab: "Collaboration role and connected participants.",
-	stream: "Streaming response activity.",
-	vim: "Vim editing mode and pending keys.",
+	get model() {
+		return t("overlays.status_line_config.desc_model");
+	},
+	get live() {
+		return t("overlays.status_line_config.desc_live");
+	},
+	get live_meter() {
+		return t("overlays.status_line_config.desc_live_meter");
+	},
+	get mode() {
+		return t("overlays.status_line_config.desc_mode");
+	},
+	get path() {
+		return t("overlays.status_line_config.desc_path");
+	},
+	get git() {
+		return t("overlays.status_line_config.desc_git");
+	},
+	get pr() {
+		return t("overlays.status_line_config.desc_pr");
+	},
+	get subagents() {
+		return t("overlays.status_line_config.desc_subagents");
+	},
+	get token_in() {
+		return t("overlays.status_line_config.desc_token_in");
+	},
+	get token_out() {
+		return t("overlays.status_line_config.desc_token_out");
+	},
+	get token_total() {
+		return t("overlays.status_line_config.desc_token_total");
+	},
+	get token_rate() {
+		return t("overlays.status_line_config.desc_token_rate");
+	},
+	get cost() {
+		return t("overlays.status_line_config.desc_cost");
+	},
+	get context_pct() {
+		return t("overlays.status_line_config.desc_context_pct");
+	},
+	get context_total() {
+		return t("overlays.status_line_config.desc_context_total");
+	},
+	get context_bar() {
+		return t("overlays.status_line_config.desc_context_bar");
+	},
+	get time_spent() {
+		return t("overlays.status_line_config.desc_time_spent");
+	},
+	get time() {
+		return t("overlays.status_line_config.desc_time");
+	},
+	get session() {
+		return t("overlays.status_line_config.desc_session");
+	},
+	get hostname() {
+		return t("overlays.status_line_config.desc_hostname");
+	},
+	get cache_read() {
+		return t("overlays.status_line_config.desc_cache_read");
+	},
+	get cache_write() {
+		return t("overlays.status_line_config.desc_cache_write");
+	},
+	get cache_hit() {
+		return t("overlays.status_line_config.desc_cache_hit");
+	},
+	get cache() {
+		return t("overlays.status_line_config.desc_cache");
+	},
+	get session_name() {
+		return t("overlays.status_line_config.desc_session_name");
+	},
+	get usage() {
+		return t("overlays.status_line_config.desc_usage");
+	},
+	get collab() {
+		return t("overlays.status_line_config.desc_collab");
+	},
+	get stream() {
+		return t("overlays.status_line_config.desc_stream");
+	},
+	get vim() {
+		return t("overlays.status_line_config.desc_vim");
+	},
 };
-const LIST_HINTS =
-	"←/→ move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close · ? help";
-const TEMPLATE_HINTS = "Type the template · Enter/Tab/Esc back to the list";
-const SEARCH_HINTS = "Type to filter · Enter apply · Esc clear and return to the list";
-const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc/c stay";
-const RESET_HINTS = "Reset the draft to the active layout?  y reset · n/Esc keep the draft";
 
 type Side = "left" | "right";
 type ListLine =
@@ -140,10 +194,10 @@ type ListLine =
 	| { kind: "reset"; key: string };
 
 function segmentLabel(id: StatusLineSegmentId): string {
-	if (id === "live_meter") return "Live audio meter";
+	if (id === "live_meter") return t("overlays.status_line_config.live_audio_meter");
 	const bar = parseUsageBarSegmentId(id);
 	if (bar) return usageBarLabel(bar);
-	if (id === "pi") return "Brand";
+	if (id === "pi") return t("overlays.status_line_config.brand");
 	const words = id.replaceAll("_", " ");
 	return words[0]!.toUpperCase() + words.slice(1);
 }
@@ -329,7 +383,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	readonly #titleRow = new PanelRows();
 	readonly #divider = new PanelRows();
 	readonly #footer = new PanelRows();
-	readonly #help = new MenuHelp(undefined, "Left/Right move the selected widget within the layout.");
+	readonly #help = new MenuHelp(undefined, () => t("overlays.status_line_config.move_help"));
 	readonly #bottom = new PanelRows();
 	readonly #split = new SplitPane({
 		left: (width, height) => this.#renderList(width, height ?? this.#bodyRows),
@@ -382,7 +436,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#syncTemplateField();
 		this.#syncFocusFlags();
 		if (draft && holdsEdits && this.#pending) {
-			this.#notify("Restored the unapplied status-line draft. s applies it; R resets to the active layout.");
+			this.#notify(t("overlays.status_line_config.draft_restored"));
 		}
 		this.#cb.preview(this.#layout());
 	}
@@ -472,7 +526,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#draftFailed(error: unknown): void {
 		const message = sanitizeStatusText(String(error));
 		if (this.#draftError === undefined) {
-			this.#notify(`Could not save the status-line draft (kept in this editor): ${message}`, true);
+			this.#notify(t("overlays.status_line_config.draft_save_failed", { message: `${message}` }), true);
 		}
 		this.#draftError = message;
 	}
@@ -644,7 +698,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	#requestReset(): void {
 		if (!this.#pending) {
-			this.#notify("The draft already matches the active status-line layout.");
+			this.#notify(t("overlays.status_line_config.draft_matches"));
 			return;
 		}
 		this.#prompt = "reset";
@@ -662,14 +716,14 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#templates = { ...this.#active.usageTemplates };
 		this.#addCatalogRows();
 		this.#syncTemplateField();
-		this.#notify("Reset the status-line draft to the active layout.");
+		this.#notify(t("overlays.status_line_config.draft_reset"));
 		this.#edited();
 	}
 
 	/** Apply the draft; the editor stays open unless `thenClose`. A failure keeps both the draft and the old layout. */
 	async #apply(thenClose: boolean): Promise<void> {
 		if (!thenClose && !this.#pending) {
-			this.#notify("No status-line changes to apply.");
+			this.#notify(t("overlays.status_line_config.no_changes"));
 			return;
 		}
 		const layout = this.#layout();
@@ -679,7 +733,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			await this.#cb.apply(copyLayout(layout));
 			this.#active = copyLayout(layout);
 			this.#base = copyLayout(layout);
-			this.#notify("Applied the status-line layout and composer.");
+			this.#notify(t("overlays.status_line_config.layout_applied"));
 			// A history reopen may already own a newer draft; never replace it on late completion.
 			if (!this.#closed) {
 				this.#persist();
@@ -687,7 +741,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			}
 		} catch (error) {
 			this.#notify(
-				`Could not apply the status-line layout; the draft is kept: ${sanitizeStatusText(String(error))}`,
+				t("overlays.status_line_config.apply_failed", { error: `${sanitizeStatusText(String(error))}` }),
 				true,
 			);
 		} finally {
@@ -713,7 +767,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#prompt = undefined;
 		this.#persist();
 		this.#cb.preview(undefined);
-		if (this.#pending) this.#cb.notify("Kept the unapplied status-line draft; /statusline reopens it.");
+		if (this.#pending) this.#cb.notify(t("overlays.status_line_config.draft_kept"));
 		this.#cb.close();
 	}
 
@@ -804,7 +858,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				if (defaultWidgetTemplate(this.#selected)) {
 					this.#syncTemplateField();
 					this.#setFocus("template");
-				} else this.#notify("Tab edits the text template of a usage bar or live audio meter.");
+				} else this.#notify(t("overlays.status_line_config.template_edit_help"));
 				return;
 			case "search":
 				this.#setFocus("search");
@@ -920,10 +974,22 @@ export class StatusLineConfigOverlayComponent implements Component {
 		switch (line.kind) {
 			case "composer": {
 				const shape = this.#shapes.find(option => option.value === this.#composerShape);
-				return style(`Composer: ${sanitizeStatusText(shape?.label ?? this.#composerShape)}  ‹ › cycles`);
+				return style(
+					t("overlays.status_line_config.composer_cycle", {
+						label: `${sanitizeStatusText(shape?.label ?? this.#composerShape)}`,
+					}),
+				);
 			}
 			case "header":
-				return truncateToWidth(theme.fg("accent", line.side === "left" ? "Left side" : "Right side"), width);
+				return truncateToWidth(
+					theme.fg(
+						"accent",
+						line.side === "left"
+							? t("overlays.status_line_config.left_side")
+							: t("overlays.status_line_config.right_side"),
+					),
+					width,
+				);
 			case "widget": {
 				const { id, enabled } = line.row;
 				const templated = this.#templates[id] !== undefined ? " ✎" : "";
@@ -935,7 +1001,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			case "blank":
 				return "";
 			case "reset":
-				return style("↺ Reset to Active", !this.#pending);
+				return style(t("overlays.status_line_config.reset_active"), !this.#pending);
 		}
 	}
 
@@ -952,13 +1018,15 @@ export class StatusLineConfigOverlayComponent implements Component {
 		const lines: string[] = [];
 		if (id === COMPOSER_ROW) {
 			const shape = this.#shapes.find(option => option.value === this.#composerShape);
-			lines.push(...wrap(sanitizeStatusText(shape?.description ?? "Space, < and > cycle the composer shape.")));
+			lines.push(
+				...wrap(sanitizeStatusText(shape?.description ?? t("overlays.status_line_config.composer_shape_help"))),
+			);
 		} else if (id === RESET_ROW) {
 			lines.push(
 				...wrap(
 					this.#pending
-						? "Discard the draft's edits and return to the active layout. Widget positions stay where they are."
-						: "The draft matches the active layout; there is nothing to reset.",
+						? t("overlays.status_line_config.reset_description")
+						: t("overlays.status_line_config.nothing_to_reset"),
 				),
 			);
 		} else if (defaultWidgetTemplate(id)) {
@@ -967,33 +1035,42 @@ export class StatusLineConfigOverlayComponent implements Component {
 			lines.push(
 				...wrap(
 					meter
-						? "Two audio-level bars, visible during live calls."
-						: "Provider quota window: percentage used and age of the latest cached report, independent of the selected model. Editing never fetches usage.",
+						? t("overlays.status_line_config.meter_description")
+						: t("overlays.status_line_config.quota_description"),
 				),
 				"",
-				theme.fg(this.#focus === "template" ? "accent" : "muted", "Template"),
+				theme.fg(this.#focus === "template" ? "accent" : "muted", t("overlays.status_line_config.template")),
 				...this.#template.render(Math.max(1, width)),
 				...wrap(
 					theme.fg(
 						"dim",
-						`${tokens.map(token => `{${token}}`).join(" ")} · {{ and }} for braces · empty restores ${defaultWidgetTemplate(id)}`,
+						t("overlays.status_line_config.template_tokens", {
+							join: `${tokens.map(token => `{${token}}`).join(" ")}`,
+							defaultWidgetTemplate: `${defaultWidgetTemplate(id)}`,
+						}),
 					),
 				),
 			);
 		} else {
 			lines.push(
 				...wrap(
-					sanitizeStatusText(SEGMENT_DESCRIPTIONS[id as BuiltinStatusLineSegmentId] ?? "Status-line widget."),
+					sanitizeStatusText(
+						SEGMENT_DESCRIPTIONS[id as BuiltinStatusLineSegmentId] ??
+							t("overlays.status_line_config.widget_description"),
+					),
 				),
 			);
 		}
 		if (this.#focus === "search" || this.#search.value) {
-			lines.push("", theme.fg(this.#focus === "search" ? "accent" : "muted", "Search"));
+			lines.push(
+				"",
+				theme.fg(this.#focus === "search" ? "accent" : "muted", t("overlays.status_line_config.search")),
+			);
 			lines.push(this.#search.render(Math.max(1, width), { muted: text => theme.fg("muted", text) }));
 		}
 		lines.push(
 			"",
-			theme.fg("accent", "Live preview"),
+			theme.fg("accent", t("overlays.status_line_config.live_preview")),
 			"",
 			...(this.#cb.renderPreview?.(this.#composerShape, width) ?? []),
 		);
@@ -1001,21 +1078,24 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#hints(): string {
-		if (this.#applying) return "Applying…";
-		if (this.#prompt === "exit") return PROMPT_HINTS;
-		if (this.#prompt === "reset") return RESET_HINTS;
-		if (this.#focus === "template") return TEMPLATE_HINTS;
-		if (this.#focus === "search") return SEARCH_HINTS;
+		if (this.#applying) return t("settings.selector.applying");
+		if (this.#prompt === "exit") return t("overlays.status_line_config.prompt_hints");
+		if (this.#prompt === "reset") return t("overlays.status_line_config.reset_hints");
+		if (this.#focus === "template") return t("overlays.status_line_config.template_hints");
+		if (this.#focus === "search") return t("overlays.status_line_config.search_hints");
 		const query = sanitizeStatusText(this.#search.value);
-		return query ? `filter "${query}" · ${LIST_HINTS}` : LIST_HINTS;
+		const listHints = t("overlays.status_line_config.list_hints");
+		return query ? t("overlays.status_line_config.filter_hint", { query, listHints }) : listHints;
 	}
 
 	render(width: number): readonly string[] {
 		this.#bodyRows = Math.max(3, (process.stdout.rows || 40) - 4);
 		this.#split.setHeight(this.#bodyRows);
 		const leftWidth = this.#split.measure(width).left?.width ?? 0;
-		const state = `${this.#pending ? " · unapplied draft" : ""}${this.#draftError ? " · draft not saved" : ""}`;
-		this.#titleRow.setLines([topBorderSplit(width, `Status-line configuration${state}`, leftWidth)]);
+		const state = `${this.#pending ? t("overlays.status_line_config.unapplied_draft") : ""}${this.#draftError ? t("overlays.status_line_config.draft_not_saved") : ""}`;
+		this.#titleRow.setLines([
+			topBorderSplit(width, t("overlays.status_line_config.title", { state: `${state}` }), leftWidth),
+		]);
 		this.#divider.setLines([dividerSplit(width, leftWidth)]);
 		const notice = this.#prompt || this.#applying ? undefined : this.#notice;
 		const footer = notice

@@ -1,5 +1,6 @@
 import { Args, type CommandMetadata, Flags } from "@oh-my-pi/pi-utils/cli";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { CLI_THINKING_LEVELS } from "@oh-my-pi/pi-tui/thinking";
 import { SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
@@ -82,7 +83,12 @@ export const launchHelp = {
 		"new-session": Flags.boolean({
 			description: "Start a new session in the default session directory, ignoring autoResume",
 		}),
-		models: Flags.string({ description: `Comma-separated model patterns for ${formatKeyHint("ctrl+p")} cycling` }),
+		models: {
+			kind: "string",
+			get description() {
+				return t("cli.commands.launch.models_flag", { keyHint: formatKeyHint("ctrl+p") });
+			},
+		},
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-judge": Flags.boolean({ description: "Restrict judge calls to the active model's provider" }),
 		"no-spotlight": Flags.boolean({ description: "Restrict Spotlight calls to the active model's provider" }),
@@ -101,10 +107,13 @@ export const launchHelp = {
 		tools: Flags.string({
 			description: "Restrict the session to these comma-separated built-in tools (no extension or MCP tools)",
 		}),
-		thinking: Flags.string({
-			description: `Set thinking level: ${CLI_THINKING_LEVELS.join(", ")}`,
+		thinking: {
+			kind: "string",
+			get description() {
+				return t("cli.commands.launch.thinking_flag", { levels: CLI_THINKING_LEVELS.join(", ") });
+			},
 			options: [...CLI_THINKING_LEVELS],
-		}),
+		},
 		"service-tier": Flags.string({
 			description: "OpenAI service tier for this session (none omits service_tier)",
 			options: [...SERVICE_TIER_OPENAI_VALUES],
@@ -175,18 +184,20 @@ export const launchHelp = {
 			description: "Override tools.approvalMode for this session (always-ask|always-ask-cached|write|yolo)",
 		}),
 	},
-	examples: [
-		`# Interactive mode\n  ${APP_NAME}`,
-		`# Interactive mode with initial prompt\n  ${APP_NAME} "List all .ts files in src/"`,
-		`# Start working on a goal immediately\n  ${APP_NAME} --goal "Investigate the importer"`,
-		`# Include files in initial message\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
-		`# Non-interactive mode (process and exit)\n  ${APP_NAME} -p "List all .ts files in src/"`,
-		`# Continue previous session\n  ${APP_NAME} --continue "What did we discuss?"`,
-		`# Pick a session back up after a crash, subagents included\n  ${APP_NAME} --restore ~/.omp/agent/sessions/--path--/session.jsonl`,
-		`# Create a shell shortcut for a work profile\n  ${APP_NAME} --profile work --alias ${APP_NAME}-work`,
-		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
-		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
-		`# Chat without coding-agent context (chat, erp, or raw)\n  ${APP_NAME} --chat=erp`,
-		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.omp/agent/sessions/--path--/session.jsonl`,
-	],
+	get examples() {
+		return [
+			`# ${t("cli.commands.launch.example.interactive")}\n  ${APP_NAME}`,
+			`# ${t("cli.commands.launch.example.initial_prompt")}\n  ${APP_NAME} "List all .ts files in src/"`,
+			`# ${t("cli.commands.launch.example.goal")}\n  ${APP_NAME} --goal "Investigate the importer"`,
+			`# ${t("cli.commands.launch.example.files")}\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
+			`# ${t("cli.commands.launch.example.print")}\n  ${APP_NAME} -p "List all .ts files in src/"`,
+			`# ${t("cli.commands.launch.example.continue")}\n  ${APP_NAME} --continue "What did we discuss?"`,
+			`# ${t("cli.commands.launch.example.restore")}\n  ${APP_NAME} --restore ~/.omp/agent/sessions/--path--/session.jsonl`,
+			`# ${t("cli.commands.launch.example.alias")}\n  ${APP_NAME} --profile work --alias ${APP_NAME}-work`,
+			`# ${t("cli.commands.launch.example.model")}\n  ${APP_NAME} --model opus "Help me refactor this code"`,
+			`# ${t("cli.commands.launch.example.cycle")}\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
+			`# ${t("cli.commands.launch.example.chat")}\n  ${APP_NAME} --chat=erp`,
+			`# ${t("cli.commands.launch.example.export")}\n  ${APP_NAME} --export ~/.omp/agent/sessions/--path--/session.jsonl`,
+		];
+	},
 } satisfies CommandMetadata;

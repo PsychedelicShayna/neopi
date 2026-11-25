@@ -5,6 +5,7 @@
  */
 import * as path from "node:path";
 import { APP_NAME, PRODUCT_NAME, VERSION } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { probeRelayServer } from "../tools/browser/relay/daemon";
 import { defaultRelayExtensionDir, writeRelayExtension } from "../tools/browser/relay/extension-files";
 import { DEFAULT_RELAY_URL } from "../tools/browser/relay/kind";
@@ -38,21 +39,18 @@ export async function runBrowserRelayCommand(args: BrowserRelayCommandArgs): Pro
 async function runInstall(dirOverride: string | undefined): Promise<void> {
 	const dir = dirOverride ? path.resolve(dirOverride) : defaultRelayExtensionDir();
 	await writeRelayExtension(dir, VERSION);
-	console.log(`Installed the ${PRODUCT_NAME} Browser Relay extension to ${dir}`);
+	console.log(t("cli.commands.browser-relay.installed", { product: PRODUCT_NAME, path: dir }));
 	console.log("");
-	console.log("Finish setup in Chrome:");
-	console.log("  1. Open chrome://extensions and enable Developer mode.");
-	console.log(`  2. Click "Load unpacked" and select: ${dir}`);
-	console.log(`  3. Enable the mode:  ${APP_NAME} config set browser.relay true`);
+	console.log(t("cli.commands.browser-relay.chromeSetup"));
+	console.log(t("cli.commands.browser-relay.developerMode"));
+	console.log(t("cli.commands.browser-relay.loadUnpacked", { path: dir }));
+	console.log(t("cli.commands.browser-relay.enableMode", { app: APP_NAME }));
 	console.log("");
-	console.log(`${APP_NAME} starts the relay automatically when the browser prelude needs it;`);
-	console.log(`run \`${APP_NAME} browser-relay\` yourself only for --token or --no-group.`);
-	console.log("The extension badge shows 'on' once it reaches a relay.");
-	if (!dirOverride)
-		console.log(`Newer ${APP_NAME} versions update the extension in this folder and reload it on their own.`);
-	console.log(
-		"Old connection-refused entries in chrome://extensions > Errors may persist after reconnect; use Clear all.",
-	);
+	console.log(t("cli.commands.browser-relay.startsAutomatically", { app: APP_NAME }));
+	console.log(t("cli.commands.browser-relay.manualStart", { app: APP_NAME }));
+	console.log(t("cli.commands.browser-relay.connectionBadge"));
+	if (!dirOverride) console.log(t("cli.commands.browser-relay.autoUpdate", { app: APP_NAME }));
+	console.log(t("cli.commands.browser-relay.oldErrors"));
 }
 
 async function runServe(args: BrowserRelayCommandArgs): Promise<void> {
@@ -70,37 +68,41 @@ async function runServe(args: BrowserRelayCommandArgs): Promise<void> {
 		if (err instanceof Error && "code" in err && err.code === "EADDRINUSE") {
 			if (await probeRelayServer(`http://127.0.0.1:${args.port}`)) {
 				console.log(
-					`${PRODUCT_NAME} browser relay already running on http://127.0.0.1:${args.port}; nothing to do.`,
+					t("cli.commands.browser-relay.alreadyRunning", {
+						product: PRODUCT_NAME,
+						url: `http://127.0.0.1:${args.port}`,
+					}),
 				);
 				return;
 			}
-			console.error(`Port ${args.port} is in use by something that is not a ${PRODUCT_NAME} browser relay.`);
+			console.error(t("cli.commands.browser-relay.portConflict", { port: args.port, product: PRODUCT_NAME }));
 			process.exit(1);
 		}
 		throw err;
 	}
 
 	console.log(`${PRODUCT_NAME} browser relay listening on http://127.0.0.1:${args.port}`);
-	console.log(`  extension endpoint  ws://127.0.0.1:${args.port}/ext${args.token ? "?token=***" : ""}`);
-	if (args.port === DEFAULT_RELAY_PORT) {
-		console.log(`  enable with         ${APP_NAME} config set browser.relay true`);
-	} else {
-		console.log(
-			`  enable with         ${APP_NAME} config set browser.relay true && ${APP_NAME} config set browser.relayUrl http://127.0.0.1:${args.port}`,
-		);
-	}
 	console.log(
-		`Waiting for the ${PRODUCT_NAME} Browser Relay extension to connect (${APP_NAME} browser-relay install)...`,
+		t("cli.commands.browser-relay.extensionEndpoint", {
+			url: `ws://127.0.0.1:${args.port}/ext${args.token ? "?token=***" : ""}`,
+		}),
 	);
+	const defaultEnable = `${APP_NAME} config set browser.relay true`;
+	const enable =
+		args.port === DEFAULT_RELAY_PORT
+			? defaultEnable
+			: `${defaultEnable} && ${APP_NAME} config set browser.relayUrl http://127.0.0.1:${args.port}`;
+	console.log(t("cli.commands.browser-relay.enableCommand", { command: enable }));
+	console.log(t("cli.commands.browser-relay.waitingExtension", { product: PRODUCT_NAME, app: APP_NAME }));
 
 	let announced = false;
 	const readiness = setInterval(() => {
 		if (relay.bridge.ready && !announced) {
 			announced = true;
-			console.log(`Extension connected. The ${PRODUCT_NAME} browser prelude can now drive your tabs.`);
+			console.log(t("cli.commands.browser-relay.connected", { product: PRODUCT_NAME }));
 		} else if (!relay.bridge.ready && announced) {
 			announced = false;
-			console.log("Extension disconnected; waiting for it to reconnect...");
+			console.log(t("cli.commands.browser-relay.disconnected"));
 		}
 	}, 500);
 

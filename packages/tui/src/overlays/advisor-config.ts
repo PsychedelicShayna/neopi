@@ -15,6 +15,7 @@
  * {@link WatchdogConfigDoc} and only touches disk + the live advisors via the host
  * `save` callback.
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Model, resolveUsedFraction, type UsageLimit, type UsageReport } from "@oh-my-pi/pi-ai";
 import { formatDuration } from "@oh-my-pi/pi-utils";
@@ -253,18 +254,23 @@ export function formatCompactQuota(
 		const windowLabel = limit.window?.label ?? limit.scope.windowId ?? "—";
 		const identity = limit.label.trim();
 		const header = identity && identity !== windowLabel ? `${windowLabel} (${identity})` : windowLabel;
-		const parts = [`${header}: ${pct}% used`];
+		const parts = [t("overlaysModel.advisorConfig.percentUsed", { header, percent: pct })];
 		const window = limit.window;
 		if (window?.resetsAt !== undefined && Number.isFinite(window.resetsAt) && window.resetsAt > nowMs) {
-			parts.push(`${window.resetLabel ?? "resets"} in ${formatDuration(window.resetsAt - nowMs)}`);
+			parts.push(
+				t("overlaysModel.advisorConfig.quotaReset", {
+					label: window.resetLabel ?? t("overlaysModel.advisorConfig.resets"),
+					duration: formatDuration(window.resetsAt - nowMs),
+				}),
+			);
 		}
 		lines.push(parts.join(" · "));
 	}
-	return `Quota: ${lines.join(" │ ")}`;
+	return t("overlaysModel.advisorConfig.quota", { items: lines.join(" │ ") });
 }
 
 function previewLineOrNone(text: string | undefined): string {
-	if (!text?.trim()) return "(none)";
+	if (!text?.trim()) return t("overlaysModel.advisorConfig.none");
 	const first = text.trim().split("\n", 1)[0] ?? "";
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
@@ -290,7 +296,7 @@ function commitTools(
 }
 
 function formatAdvisorTools(tools: readonly string[] | undefined, emptyLabel: string): string {
-	if (tools === undefined) return "read, grep, glob (default)";
+	if (tools === undefined) return t("overlaysModel.advisorConfig.defaultTools");
 	return tools.length > 0 ? tools.join(", ") : emptyLabel;
 }
 
@@ -334,18 +340,21 @@ function sameDeps(a: readonly unknown[], b: readonly unknown[]): boolean {
 /** One-line cadence label: mode plus interval. */
 function formatReviewCadence(advisor: AdvisorConfig): string {
 	const reviewInterval = advisor.reviewInterval ?? 1;
-	return `${advisor.reviewMode ?? "turn"} · every ${reviewInterval} eligible update${reviewInterval === 1 ? "" : "s"}`;
+	const mode = advisor.reviewMode ?? "turn";
+	return reviewInterval === 1
+		? t("overlaysModel.advisorConfig.reviewCadenceOne", { mode, count: reviewInterval })
+		: t("overlaysModel.advisorConfig.reviewCadenceMany", { mode, count: reviewInterval });
 }
 
 /** Picker description for one explicit catch-up policy value. */
 function describeSyncBacklogMode(mode: AdvisorSyncBacklog): string {
 	switch (mode) {
 		case "off":
-			return "Never wait for this advisor's backlog.";
+			return t("overlaysModel.advisorConfig.backlogOff");
 		case "strict":
-			return "Wait for all of this advisor's scheduled reviews; no wall-clock cap.";
+			return t("overlaysModel.advisorConfig.backlogStrict");
 		default:
-			return `Wait until fewer than ${mode} scheduled reviews remain (30s cap).`;
+			return t("overlaysModel.advisorConfig.backlogThreshold", { count: mode });
 	}
 }
 
@@ -405,44 +414,56 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 	switch (screen) {
 		case "list":
 			return [
-				actionHint(["tui.select.up", "tui.select.down"], "move"),
-				actionHint("tui.select.confirm", "select"),
-				{ keys: ["c"], label: "clone advisor" },
-				{ keys: ["delete"], label: "delete advisor" },
-				actionHint("tui.select.cancel", "close"),
+				actionHint(["tui.select.up", "tui.select.down"], t("overlaysModel.advisorConfig.moveHint")),
+				actionHint("tui.select.confirm", t("overlaysModel.advisorConfig.selectHint")),
+				{ keys: ["c"], label: t("overlaysModel.advisorConfig.cloneHint") },
+				{ keys: ["delete"], label: t("overlaysModel.advisorConfig.deleteHint") },
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.closeHint")),
 			];
 		case "detail":
 			return [
-				actionHint("tui.select.confirm", "edit field"),
-				{ keys: ["c"], label: "clone advisor" },
-				{ keys: ["delete"], label: "delete advisor" },
-				actionHint("tui.select.cancel", "back"),
+				actionHint("tui.select.confirm", t("overlaysModel.advisorConfig.editFieldHint")),
+				{ keys: ["c"], label: t("overlaysModel.advisorConfig.cloneHint") },
+				{ keys: ["delete"], label: t("overlaysModel.advisorConfig.deleteHint") },
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.backHint")),
 			];
 		case "delete-confirm":
 		case "copy-target":
 		case "generate-bases":
-			return [actionHint("tui.select.confirm", "choose"), actionHint("tui.select.cancel", "cancel")];
+			return [
+				actionHint("tui.select.confirm", t("overlaysModel.advisorConfig.chooseHint")),
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.cancelHint")),
+			];
 		case "generating":
-			return [actionHint("app.interrupt", "cancel generation")];
+			return [actionHint("app.interrupt", t("overlaysModel.advisorConfig.cancelGenerationHint"))];
 		case "name":
-			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
+			return [
+				actionHint("tui.input.submit", t("overlaysModel.advisorConfig.saveHint")),
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.cancelHint")),
+			];
 		case "model":
 			return [
-				{ keys: ["/"], label: "search" },
-				{ keys: ["enter"], label: "pick" },
-				actionHint("tui.select.cancel", "back"),
+				{ keys: ["/"], label: t("overlaysModel.advisorConfig.searchHint") },
+				{ keys: ["enter"], label: t("overlaysModel.advisorConfig.pickHint") },
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.backHint")),
 			];
 		case "thinking":
 		case "review-mode":
 		case "sync-backlog":
-			return [actionHint("tui.select.confirm", "pick"), actionHint("tui.select.cancel", "back")];
+			return [
+				actionHint("tui.select.confirm", t("overlaysModel.advisorConfig.pickHint")),
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.backHint")),
+			];
 		case "review-interval":
-			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
+			return [
+				actionHint("tui.input.submit", t("overlaysModel.advisorConfig.saveHint")),
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.cancelHint")),
+			];
 		case "tools":
 			return [
-				actionHint("tui.select.confirm", "toggle"),
-				{ keys: [], label: "Done applies (empty = no tools; read/grep/glob = default)" },
-				actionHint("tui.select.cancel", "apply"),
+				actionHint("tui.select.confirm", t("overlaysModel.advisorConfig.toggleHint")),
+				{ keys: [], label: t("overlaysModel.advisorConfig.toolsApplyHint") },
+				actionHint("tui.select.cancel", t("overlaysModel.advisorConfig.applyHint")),
 			];
 		case "instructions":
 		case "generate-comment":
@@ -598,8 +619,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const bodyRows = Math.max(3, height - 4);
 		this.#bodyRowsLast = bodyRows;
-		const state = this.#dirty ? "  ● unsaved" : this.#pendingApply ? "  ◐ saved, not applied" : "";
-		const title = `Advisor configuration · ${sanitizeDisplayLine(this.#deps.filePath ?? this.#scope)}${state}`;
+		const state = this.#dirty
+			? t("overlaysModel.advisorConfig.unsavedMarker")
+			: this.#pendingApply
+				? t("overlaysModel.advisorConfig.pendingApplyMarker")
+				: "";
+		const title = t("overlaysModel.advisorConfig.title", {
+			file: sanitizeDisplayLine(this.#deps.filePath ?? this.#scope),
+			state,
+		});
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -650,22 +678,27 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const advisor = shared ? undefined : doc.advisors[index];
 		const pages: TspPrefsProps["pages"][number][] = doc.advisors.map((a, i) => ({
 			id: `advisor:${i}`,
-			label: a.name || "(unnamed)",
+			label: a.name || t("overlaysModel.advisorConfig.unnamed"),
 			icon: "advisor",
-			group: "Advisors",
+			group: t("overlaysModel.advisorConfig.advisors"),
 		}));
-		pages.push({ id: "shared", label: "Shared instructions", icon: "doc", group: "All advisors" });
+		pages.push({
+			id: "shared",
+			label: t("overlaysModel.advisorConfig.sharedInstructions"),
+			icon: "doc",
+			group: t("overlaysModel.advisorConfig.allAdvisors"),
+		});
 
 		const sections: TspPrefsProps["sections"][number][] = [];
 		if (this.#effectiveRoster.length > 0) {
 			sections.push({
 				id: "effective-roster",
-				title: "Effective roster · all discovered files",
+				title: t("overlaysModel.advisorConfig.effectiveRosterHeading"),
 				rows: this.#effectiveRoster.map((advisor, i) => ({
 					id: `effective:${i}`,
 					label: sanitizeDisplayLine(advisor.name),
 					hint: `${advisor.scope} · ${sanitizeDisplayLine(shortenPath(advisor.sourceFile))}`,
-					disabled: "Read-only overview. Edit the source file to change this advisor.",
+					disabled: t("overlaysModel.advisorConfig.readOnlyOverview"),
 					control: { k: "switch", on: advisor.enabled !== false },
 				})),
 			});
@@ -673,12 +706,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (doc.warnings?.length) {
 			sections.push({
 				id: "warnings",
-				title: "Config problems",
+				title: t("overlaysModel.advisorConfig.configProblems"),
 				rows: sanitizeDisplayWarnings(doc.warnings).map((warning, i) => ({
 					id: `warning:${i}`,
-					label: "Dropped while loading",
+					label: t("overlaysModel.advisorConfig.dropped"),
 					warning,
-					control: { k: "action", label: "Save to rewrite", act: "save" },
+					control: { k: "action", label: t("overlaysModel.advisorConfig.saveToRewrite"), act: "save" },
 				})),
 			});
 		}
@@ -688,23 +721,33 @@ export class AdvisorConfigOverlayComponent implements Component {
 			const rows: TspPrefsRow[] = [
 				{
 					id: "toggleEnabled",
-					label: "Enabled",
-					hint: this.#deps.getActivationNote?.(advisor) ?? "Run this advisor alongside the session.",
+					label: t("overlaysModel.advisorConfig.enabled"),
+					hint: this.#deps.getActivationNote?.(advisor) ?? t("overlaysModel.advisorConfig.enabledHint"),
 					control: { k: "switch", on: advisor.enabled !== false },
 				},
-				{ id: "name", label: "Name", control: { k: "text", value: advisor.name } },
+				{ id: "name", label: t("overlaysModel.advisorConfig.name"), control: { k: "text", value: advisor.name } },
 				{
 					id: "model",
-					label: "Model",
-					hint: model ? undefined : `Uses the advisor role default (${this.#defaultModelLabel ?? "unset"}).`,
+					label: t("overlaysModel.advisorConfig.model"),
+					hint: model
+						? undefined
+						: t("overlaysModel.advisorConfig.usesDefault", {
+								model: this.#defaultModelLabel ?? t("overlaysModel.advisorConfig.unset"),
+							}),
 					changed: model ? true : undefined,
-					defaultLabel: model ? (this.#defaultModelLabel ?? "advisor role default") : undefined,
-					control: { k: "action", label: model || this.#defaultModelLabel || "advisor role default", act: "edit" },
+					defaultLabel: model
+						? (this.#defaultModelLabel ?? t("overlaysModel.advisorConfig.roleDefault"))
+						: undefined,
+					control: {
+						k: "action",
+						label: model || this.#defaultModelLabel || t("overlaysModel.advisorConfig.roleDefault"),
+						act: "edit",
+					},
 				},
 				{
 					id: "reviewMode",
-					label: "Review mode",
-					hint: "turn reviews every primary turn; agent-end reviews only final yields.",
+					label: t("overlaysModel.advisorConfig.reviewMode"),
+					hint: t("overlaysModel.advisorConfig.reviewModeHint"),
 					changed: advisor.reviewMode !== undefined ? true : undefined,
 					control: {
 						k: "choice",
@@ -715,21 +758,21 @@ export class AdvisorConfigOverlayComponent implements Component {
 				},
 				{
 					id: "reviewInterval",
-					label: "Review interval",
-					hint: "Review every Nth eligible update; skipped updates join the next review.",
+					label: t("overlaysModel.advisorConfig.reviewInterval"),
+					hint: t("overlaysModel.advisorConfig.reviewIntervalHint"),
 					changed: advisor.reviewInterval !== undefined ? true : undefined,
 					control: { k: "number", value: advisor.reviewInterval ?? 1, min: 1, step: 1 },
 				},
 				{
 					id: "syncBacklog",
-					label: "Sync backlog",
-					hint: `Catch-up policy; inherit follows advisor.syncBacklog (currently ${this.#deps.syncBacklog ?? "off"}).`,
+					label: t("overlaysModel.advisorConfig.syncBacklog"),
+					hint: t("overlaysModel.advisorConfig.backlogPolicy", { policy: this.#deps.syncBacklog ?? "off" }),
 					changed: advisor.syncBacklog !== undefined ? true : undefined,
 					control: {
 						k: "choice",
 						value: advisor.syncBacklog ?? SYNC_BACKLOG_INHERIT,
 						options: [
-							{ value: SYNC_BACKLOG_INHERIT, label: "inherit" },
+							{ value: SYNC_BACKLOG_INHERIT, label: t("overlaysModel.advisorConfig.inherit") },
 							...ADVISOR_SYNC_BACKLOG_MODES.map(mode => ({
 								value: mode,
 								label: mode,
@@ -741,8 +784,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 				},
 				{
 					id: "tools",
-					label: "Tools",
-					hint: "None means no tools; read, grep and glob are the default.",
+					label: t("overlaysModel.advisorConfig.tools"),
+					hint: t("overlaysModel.advisorConfig.toolsHint"),
 					control: {
 						k: "multi",
 						values: tools,
@@ -751,48 +794,46 @@ export class AdvisorConfigOverlayComponent implements Component {
 				},
 				{
 					id: "instructions",
-					label: "Instructions",
+					label: t("overlaysModel.advisorConfig.instructions"),
 					hint: previewLineOrNone(advisor.instructions),
-					control: { k: "action", label: "Edit…", act: "edit" },
+					control: { k: "action", label: t("overlaysModel.advisorConfig.edit"), act: "edit" },
 				},
 			];
 			if (this.#cb.editActivationSet)
 				rows.push({
 					id: "activationSet",
-					label: "Role activation set",
-					hint:
-						this.#deps.getActivationNote?.(advisor) ??
-						"Edit role membership; a role set replaces individual switches.",
-					control: { k: "action", label: "Edit role set…", act: "edit" },
+					label: t("overlaysModel.advisorConfig.roleSet"),
+					hint: this.#deps.getActivationNote?.(advisor) ?? t("overlaysModel.advisorConfig.roleSetHint"),
+					control: { k: "action", label: t("overlaysModel.advisorConfig.editRoleSet"), act: "edit" },
 				});
 			rows.push({
 				id: "duplicate",
-				label: "Duplicate advisor",
-				control: { k: "action", label: "Duplicate", act: "edit" },
+				label: t("overlaysModel.advisorConfig.duplicateAdvisor"),
+				control: { k: "action", label: t("overlaysModel.advisorConfig.duplicate"), act: "edit" },
 			});
 			if (this.#cb.copyAdvisor && this.#cb.getSources)
 				rows.push({
 					id: "copy",
-					label: "Copy to another scope",
-					control: { k: "action", label: "Choose file…", act: "edit" },
+					label: t("overlaysModel.advisorConfig.copyToScope"),
+					control: { k: "action", label: t("overlaysModel.advisorConfig.chooseFile"), act: "edit" },
 				});
 			if (this.#cb.copyPrompt)
 				rows.push({
 					id: "copyPrompt",
-					label: "Copy full prompt",
-					control: { k: "action", label: "Copy", act: "edit" },
+					label: t("overlaysModel.advisorConfig.copyFullPrompt"),
+					control: { k: "action", label: t("overlaysModel.advisorConfig.copy"), act: "edit" },
 				});
-			sections.push({ id: "advisor", title: advisor.name || "Advisor", rows });
+			sections.push({ id: "advisor", title: advisor.name || t("overlaysModel.advisorConfig.advisor"), rows });
 		} else {
 			sections.push({
 				id: "shared",
-				title: "Shared instructions",
+				title: t("overlaysModel.advisorConfig.sharedInstructions"),
 				rows: [
 					{
 						id: "shared",
-						label: "Instructions",
+						label: t("overlaysModel.advisorConfig.instructions"),
 						hint: previewLineOrNone(doc.instructions),
-						control: { k: "action", label: "Edit…", act: "edit" },
+						control: { k: "action", label: t("overlaysModel.advisorConfig.edit"), act: "edit" },
 					},
 				],
 			});
@@ -803,28 +844,28 @@ export class AdvisorConfigOverlayComponent implements Component {
 			rows: [
 				{
 					id: "save",
-					label: "Save & apply",
-					hint: "Write this file and reload the live advisors without a restart.",
-					warning: this.#dirty ? "Unsaved changes" : undefined,
-					control: { k: "action", label: "Save", act: "save" },
+					label: t("overlaysModel.advisorConfig.saveApply"),
+					hint: t("overlaysModel.advisorConfig.saveApplyHint"),
+					warning: this.#dirty ? t("overlaysModel.advisorConfig.unsavedChanges") : undefined,
+					control: { k: "action", label: t("overlaysModel.advisorConfig.save"), act: "save" },
 				},
 				{
 					id: "add",
-					label: "Add advisor",
-					hint: "Create a new advisor entry, then set its model, tools and instructions.",
-					control: { k: "action", label: "Add", act: "add" },
+					label: t("overlaysModel.advisorConfig.addAdvisor"),
+					hint: t("overlaysModel.advisorConfig.addAdvisorHint"),
+					control: { k: "action", label: t("overlaysModel.advisorConfig.add"), act: "add" },
 				},
 			],
 		});
 		if (this.#cb.generateAdvisor && this.#cb.getSources)
 			sections.push({
 				id: "generation",
-				title: "Authoring",
+				title: t("overlaysModel.advisorConfig.authoring"),
 				rows: [
 					{
 						id: "generate",
-						label: "New advisor from existing definitions",
-						control: { k: "action", label: "Choose advisors…", act: "generate" },
+						label: t("overlaysModel.advisorConfig.fromDefinitions"),
+						control: { k: "action", label: t("overlaysModel.advisorConfig.chooseAdvisors"), act: "generate" },
 					},
 				],
 			});
@@ -857,12 +898,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 				? (this.#active.getSelectedItem()?.value ?? null)
 				: null;
 		const props: TspPrefsProps = {
-			title: this.#dirty ? "Advisors · unsaved" : "Advisors",
+			title: this.#dirty
+				? t("overlaysModel.advisorConfig.advisorsUnsaved")
+				: t("overlaysModel.advisorConfig.advisors"),
 			pages,
 			page: shared ? "shared" : `advisor:${index}`,
-			lead: shared
-				? "Instructions every advisor gets before its own."
-				: "Set this advisor's model, tools and instructions. Press c to clone or Delete to request deletion.",
+			lead: shared ? t("overlaysModel.advisorConfig.sharedLead") : t("overlaysModel.advisorConfig.advisorLead"),
 			sections,
 			focus,
 			editing,
@@ -892,10 +933,14 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const active = this.#active;
 		const memo = this.#nativeEditor;
 		if (active instanceof ModelBrowser) {
-			const order = active.pickerOrder({ providers: false, rest: active.query.trim() ? "Matches" : "All" });
+			const order = active.pickerOrder({
+				providers: false,
+				rest: active.query.trim() ? t("overlaysModel.advisorConfig.matches") : t("overlaysModel.advisorConfig.all"),
+			});
 			const catalogue = active.pickerItems(this.#modelItems);
 			const preview = active.pickerPreview("compact", this.#modelCurrent);
 			const deps = [
+				getLocale(),
 				active,
 				order,
 				catalogue,
@@ -913,11 +958,26 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		if (active instanceof SelectList) {
 			const view = active.pickerView();
-			const deps = [active, view.items, view.selected, view.pending, view.query, view.cursor, active.filterFocused];
+			const deps = [
+				getLocale(),
+				active,
+				view.items,
+				view.selected,
+				view.pending,
+				view.query,
+				view.cursor,
+				active.filterFocused,
+			];
 			if (memo && sameDeps(memo.deps, deps)) return memo.node;
 			const options = this.#sheetOptions ?? {
-				title: this.#screen === "list" ? "Advisors" : "Advisor settings",
-				noun: this.#screen === "list" ? "advisors" : "fields",
+				title:
+					this.#screen === "list"
+						? t("overlaysModel.advisorConfig.advisors")
+						: t("overlaysModel.advisorConfig.advisorSettings"),
+				noun:
+					this.#screen === "list"
+						? t("overlaysModel.advisorConfig.advisorsNoun")
+						: t("overlaysModel.advisorConfig.fieldsNoun"),
 			};
 			const props = selectListPicker(active, options);
 			const sheet = node(
@@ -927,10 +987,14 @@ export class AdvisorConfigOverlayComponent implements Component {
 							...props,
 							items: props.items?.filter(item => item.id !== TOOLS_DONE),
 							actions: [
-								pickerAction("confirm", "Toggle", "enter"),
+								pickerAction("confirm", t("overlaysModel.advisorConfig.toggle"), "enter"),
 								pickerAction(
 									"apply",
-									active.filterFocused ? "Back to list" : view.query ? "Clear search" : "Apply",
+									active.filterFocused
+										? t("overlaysModel.advisorConfig.backToList")
+										: view.query
+											? t("overlaysModel.advisorConfig.clearSearch")
+											: t("overlaysModel.advisorConfig.apply"),
 									"escape",
 									{
 										primary: true,
@@ -944,10 +1008,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#nativeEditor = { deps, node: sheet };
 			return sheet;
 		}
-		if (memo && sameDeps(memo.deps, [active])) return memo.node;
+		const deps = [getLocale(), active];
+		if (memo && sameDeps(memo.deps, deps)) return memo.node;
 		const content = this.#screen === "review-interval" ? this.#intervalCard(active) : active;
 		const card = col([content], { role: "omp.prefs.editor" });
-		this.#nativeEditor = { deps: [active], node: card };
+		this.#nativeEditor = { deps, node: card };
 		return card;
 	}
 
@@ -957,24 +1022,29 @@ export class AdvisorConfigOverlayComponent implements Component {
 		catalogue: ModelPickerCatalogue,
 		preview: readonly NativeChild[],
 	): NativeNode {
-		const name = this.#doc.advisors[this.#detailIndex]?.name || "This advisor";
-		const fallback = this.#defaultModelLabel ?? "the advisor role default";
+		const name = this.#doc.advisors[this.#detailIndex]?.name || t("overlaysModel.advisorConfig.thisAdvisorCaps");
+		const fallback = this.#defaultModelLabel ?? t("overlaysModel.advisorConfig.theRoleDefault");
 		return node(
 			"picker",
 			{
-				title: "Advisor model",
-				subtitle: `${name} reviews with this model. Unset, it uses ${fallback}.`,
+				title: t("overlaysModel.advisorConfig.advisorModel"),
+				subtitle: t("overlaysModel.advisorConfig.modelSubtitle", { name, fallback }),
 				icon: "model",
-				noun: "models",
+				noun: t("overlaysModel.advisorConfig.modelsNoun"),
 				size: "md",
 				layout: "rows",
 				preview: "below",
-				placeholder: "Search models…",
+				placeholder: t("overlaysModel.advisorConfig.searchModels"),
 				...browser.pickerRows(catalogue, order, this.#modelCurrent),
-				empty: "No models available",
+				empty: t("overlaysModel.advisorConfig.noModels"),
 				actions: [
-					pickerAction("use", "Use for advisor", "enter", { primary: true }),
-					{ ...CLOSE_ACTION, label: browser.filterFocused ? "Back to list" : "Back" },
+					pickerAction("use", t("overlaysModel.advisorConfig.useForAdvisor"), "enter", { primary: true }),
+					{
+						...CLOSE_ACTION,
+						label: browser.filterFocused
+							? t("overlaysModel.advisorConfig.backToList")
+							: t("overlaysModel.advisorConfig.back"),
+					},
 				],
 			},
 			preview,
@@ -983,16 +1053,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	/** The review-interval field as a titled card: what the number means, the field, Cancel and Save. */
 	#intervalCard(input: Component): NativeNode {
-		const name = this.#doc.advisors[this.#detailIndex]?.name || "this advisor";
-		return overlayCard("omp.overlay.advisor.interval", `Review interval · ${name}`, [
-			text([span("Review every Nth eligible update; skipped updates join the next review.", "muted")], {
+		const name = this.#doc.advisors[this.#detailIndex]?.name || t("overlaysModel.advisorConfig.thisAdvisor");
+		return overlayCard("omp.overlay.advisor.interval", t("overlaysModel.advisorConfig.intervalTitle", { name }), [
+			text([span(t("overlaysModel.advisorConfig.reviewIntervalHint"), "muted")], {
 				wrap: "word",
 			}),
 			input,
 			actionBar([
 				null,
-				actionButton("Cancel", "field-cancel", { keys: "escape" }),
-				actionButton("Save", "field-save", { keys: "enter", tone: "accent" }),
+				actionButton(t("overlaysModel.advisorConfig.cancel"), "field-cancel", { keys: "escape" }),
+				actionButton(t("overlaysModel.advisorConfig.save"), "field-save", { keys: "enter", tone: "accent" }),
 			]),
 		]);
 	}
@@ -1062,7 +1132,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 				}
 				if (event.act === "save" || event.act === "add" || event.act === "generate") {
 					void this.#onListSelect(event.act).catch(err => {
-						this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
+						this.#cb.notify(
+							t("overlaysModel.advisorConfig.error", {
+								error: err instanceof Error ? err.message : String(err),
+							}),
+						);
 					});
 					return;
 				}
@@ -1122,12 +1196,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#describeCard(): NativeNode {
-		const title = `Advisor configuration · ${sanitizeDisplayLine(this.#deps.filePath ?? this.#scope)}${this.#dirty ? "  ● unsaved" : ""}`;
+		const title = t("overlaysModel.advisorConfig.title", {
+			file: sanitizeDisplayLine(this.#deps.filePath ?? this.#scope),
+			state: this.#dirty ? t("overlaysModel.advisorConfig.unsavedMarker") : "",
+		});
 		const preview = this.#screen === "list" ? this.#describePreview() : undefined;
 		if (this.#nativeHints?.screen !== this.#screen) {
 			const hints = screenHints(this.#screen);
 			if (this.#cb.openConfigFile && (this.#screen === "list" || this.#screen === "detail"))
-				hints.push({ keys: ["ctrl+g"], label: "edit config file" });
+				hints.push({ keys: ["ctrl+g"], label: t("overlaysModel.advisorConfig.editConfigFile") });
 			this.#nativeHints = { screen: this.#screen, node: hints.length > 0 ? hintsRow(hints) : undefined };
 		}
 		const hints = this.#nativeHints.node;
@@ -1142,7 +1219,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return prev.node;
 		}
 		const head: TspSpan[] = [
-			span(`Advisor configuration · ${sanitizeDisplayLine(this.#deps.filePath ?? this.#scope)}`),
+			span(
+				t("overlaysModel.advisorConfig.title", {
+					file: sanitizeDisplayLine(this.#deps.filePath ?? this.#scope),
+					state: "",
+				}),
+			),
 		];
 		if (this.#dirty) head.push(span("  ● unsaved", "warning"));
 		const body: NativeNode = preview
@@ -1172,7 +1254,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 					"col",
 					{ tone: "warning" },
 					[
-						text([span("⚠ Config problems — dropped while loading:", "warning")]),
+						text([span(t("overlaysModel.advisorConfig.droppedHeader"), "warning")]),
 						...sanitizeDisplayWarnings(this.#doc.warnings).map(warning =>
 							text([span(warning, "warning")], { wrap: "word" }),
 						),
@@ -1185,9 +1267,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const value = list instanceof SelectList ? (list.getSelectedItem()?.value ?? "") : "";
 		if (value === "effective") {
 			children.push(
-				text([span("Effective roster · all discovered files", "strong")]),
+				text([span(t("overlaysModel.advisorConfig.effectiveRosterHeading"), "strong")]),
 				...this.#effectiveRoster.map(advisor => text(this.#effectiveAdvisorLabel(advisor), { wrap: "word" })),
-				text([span("Read-only overview. Scope below selects the file to edit.", "muted")], { wrap: "word" }),
+				text([span(t("overlaysModel.advisorConfig.overviewHint"), "muted")], { wrap: "word" }),
 			);
 		}
 		const match = /^advisor:(\d+)$/.exec(value);
@@ -1197,17 +1279,19 @@ export class AdvisorConfigOverlayComponent implements Component {
 		} else if (value === "shared") {
 			const instructions = this.#doc.instructions?.trim();
 			children.push(
-				text([span("Shared instructions", "strong")]),
-				instructions ? text(instructions, { wrap: "word" }) : text([span("(none)", "muted")]),
+				text([span(t("overlaysModel.advisorConfig.sharedInstructions"), "strong")]),
+				instructions
+					? text(instructions, { wrap: "word" })
+					: text([span(t("overlaysModel.advisorConfig.none"), "muted")]),
 			);
 		} else {
 			const help =
 				value === "add"
-					? "Create a new advisor entry, then edit its model, tools, and instructions."
+					? t("overlaysModel.advisorConfig.createPreview")
 					: value === "save"
-						? "Write this scope's WATCHDOG.yml and reload the live advisors without a restart."
+						? t("overlaysModel.advisorConfig.savePreview")
 						: value === "close"
-							? "Close the editor. Unsaved changes are discarded."
+							? t("overlaysModel.advisorConfig.closePreview")
 							: "";
 			if (help) children.push(text([span(help, "muted")], { wrap: "word" }));
 		}
@@ -1219,39 +1303,56 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#describeAdvisorPreview(advisor: AdvisorConfig): NativeNode[] {
-		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
+		const model = advisor.model?.trim() || this.#defaultModelLabel || t("overlaysModel.advisorConfig.roleDefault");
 		const instructions = advisor.instructions?.trim();
 		const out: NativeNode[] = [
-			text([span(advisor.name || "(unnamed)", "strong")]),
+			text([span(advisor.name || t("overlaysModel.advisorConfig.unnamed"), "strong")]),
 			node("kv", {
 				items: [
-					{ k: "Enabled", v: advisor.enabled === false ? "○ off" : "● on" },
-					{ k: "Model", v: model },
-					{ k: "Tools", v: formatAdvisorTools(advisor.tools, "no tools") },
-					{ k: "Review", v: formatReviewCadence(advisor) },
-					{ k: "Sync backlog", v: this.#syncBacklogLabel(advisor) },
+					{
+						k: t("overlaysModel.advisorConfig.enabled"),
+						v:
+							advisor.enabled === false
+								? t("overlaysModel.advisorConfig.offMarker")
+								: t("overlaysModel.advisorConfig.onMarker"),
+					},
+					{ k: t("overlaysModel.advisorConfig.model"), v: model },
+					{
+						k: t("overlaysModel.advisorConfig.tools"),
+						v: formatAdvisorTools(advisor.tools, t("overlaysModel.advisorConfig.noTools")),
+					},
+					{ k: t("overlaysModel.advisorConfig.review"), v: formatReviewCadence(advisor) },
+					{ k: t("overlaysModel.advisorConfig.syncBacklog"), v: this.#syncBacklogLabel(advisor) },
 				],
 			}),
-			text([span("Instructions:", "dim")]),
-			instructions ? text(instructions, { wrap: "word" }) : text([span("(none)", "muted")]),
+			text([span(t("overlaysModel.advisorConfig.instructionsColon"), "dim")]),
+			instructions
+				? text(instructions, { wrap: "word" })
+				: text([span(t("overlaysModel.advisorConfig.none"), "muted")]),
 		];
 		const liveStat = this.#cb.getAdvisorStats?.()?.find(s => s.name === (advisor.name || "default"));
 		if (liveStat && (liveStat.status === "running" || liveStat.status === "quota_exhausted")) {
 			const spendParts = [
-				`${liveStat.tokens.input.toLocaleString()} in`,
-				`${liveStat.tokens.output.toLocaleString()} out`,
+				t("overlaysModel.advisorConfig.tokensIn", { count: liveStat.tokens.input.toLocaleString() }),
+				t("overlaysModel.advisorConfig.tokensOut", { count: liveStat.tokens.output.toLocaleString() }),
 			];
-			if (liveStat.tokens.cacheRead > 0) spendParts.push(`${liveStat.tokens.cacheRead.toLocaleString()} cache`);
-			const usage: { k: string; v: string }[] = [{ k: "Tokens", v: spendParts.join(", ") }];
-			if (liveStat.cost > 0) usage.push({ k: "Cost", v: `$${liveStat.cost.toFixed(4)}` });
+			if (liveStat.tokens.cacheRead > 0)
+				spendParts.push(
+					t("overlaysModel.advisorConfig.tokensCached", { count: liveStat.tokens.cacheRead.toLocaleString() }),
+				);
+			const usage: { k: string; v: string }[] = [
+				{ k: t("overlaysModel.advisorConfig.tokens"), v: spendParts.join(", ") },
+			];
+			if (liveStat.cost > 0)
+				usage.push({ k: t("overlaysModel.advisorConfig.cost"), v: `$${liveStat.cost.toFixed(4)}` });
 			if (liveStat.contextWindow > 0) {
 				const pct = Math.round((liveStat.contextTokens / liveStat.contextWindow) * 100);
 				usage.push({
-					k: "Context",
+					k: t("overlaysModel.advisorConfig.context"),
 					v: `${liveStat.contextTokens.toLocaleString()}/${liveStat.contextWindow.toLocaleString()} (${pct}%)`,
 				});
 			}
-			out.push(text([span("Usage:", "dim")]), node("kv", { items: usage }));
+			out.push(text([span(t("overlaysModel.advisorConfig.usageColon"), "dim")]), node("kv", { items: usage }));
 		}
 		const quotaProvider =
 			(advisor.model?.includes("/") ? advisor.model.split("/")[0] : null) ?? liveStat?.model?.provider;
@@ -1314,7 +1415,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 			matchesKey(data, "ctrl+g")
 		) {
 			void this.#openConfigFile().catch(err => {
-				this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
+				this.#cb.notify(
+					t("overlaysModel.advisorConfig.error", { error: err instanceof Error ? err.message : String(err) }),
+				);
 			});
 			return;
 		}
@@ -1449,8 +1552,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (contentRows < rows) {
 			window.push(
 				start + contentRows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
-					: theme.fg("dim", "  (end)"),
+					? theme.fg("dim", t("overlaysModel.advisorConfig.more", { count: lines.length - contentRows - start }))
+					: theme.fg("dim", t("overlaysModel.advisorConfig.end")),
 			);
 		}
 		return window;
@@ -1462,7 +1565,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		// until a successful save rewrites the file without them.
 		const warnings = this.#doc.warnings?.length
 			? [
-					theme.fg("warning", "⚠ Config problems — dropped while loading:"),
+					theme.fg("warning", t("overlaysModel.advisorConfig.droppedHeader")),
 					...sanitizeDisplayWarnings(this.#doc.warnings).flatMap(warning =>
 						wrap(warning, bodyWidth).map(line => theme.fg("warning", line)),
 					),
@@ -1474,11 +1577,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (value === "effective") {
 			return [
 				...warnings,
-				theme.bold("Effective roster · all discovered files"),
+				theme.bold(t("overlaysModel.advisorConfig.effectiveRosterHeading")),
 				"",
 				...this.#effectiveRoster.flatMap(advisor => wrap(this.#effectiveAdvisorLabel(advisor), bodyWidth)),
 				"",
-				...wrap("Read-only overview. Scope below selects the file to edit.", bodyWidth),
+				...wrap(t("overlaysModel.advisorConfig.overviewHint"), bodyWidth),
 			].map(line => truncateToWidth(line, bodyWidth));
 		}
 		const match = /^advisor:(\d+)$/.exec(value);
@@ -1487,59 +1590,67 @@ export class AdvisorConfigOverlayComponent implements Component {
 			if (advisor) return [...warnings, ...this.#advisorPreview(advisor, bodyWidth)];
 		}
 		if (value === "shared") {
-			const lines = [...warnings, theme.bold("Shared instructions"), ""];
+			const lines = [...warnings, theme.bold(t("overlaysModel.advisorConfig.sharedInstructions")), ""];
 			const text = this.#doc.instructions?.trim();
-			lines.push(...(text ? wrap(text, bodyWidth) : [theme.fg("muted", "(none)")]));
+			lines.push(...(text ? wrap(text, bodyWidth) : [theme.fg("muted", t("overlaysModel.advisorConfig.none"))]));
 			return lines.map(line => truncateToWidth(line, bodyWidth));
 		}
 		const help =
 			value === "add"
-				? "Create a new advisor entry, then edit its model, tools, and instructions."
+				? t("overlaysModel.advisorConfig.createPreview")
 				: value === "save"
-					? "Write this scope's WATCHDOG.yml and reload the live advisors without a restart."
+					? t("overlaysModel.advisorConfig.savePreview")
 					: value === "close"
-						? "Close the editor. Unsaved changes are discarded."
+						? t("overlaysModel.advisorConfig.closePreview")
 						: "";
 		return [...warnings, ...wrap(help, bodyWidth).map(line => truncateToWidth(theme.fg("muted", line), bodyWidth))];
 	}
 
 	#advisorPreview(advisor: AdvisorConfig, bodyWidth: number): string[] {
-		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = formatAdvisorTools(advisor.tools, "no tools");
+		const model = advisor.model?.trim() || this.#defaultModelLabel || t("overlaysModel.advisorConfig.roleDefault");
+		const tools = formatAdvisorTools(advisor.tools, t("overlaysModel.advisorConfig.noTools"));
 		const syncBacklog = this.#syncBacklogLabel(advisor);
 		const activationNote = this.#deps.getActivationNote?.(advisor);
 		const lines = [
-			theme.bold(advisor.name || "(unnamed)"),
+			theme.bold(advisor.name || t("overlaysModel.advisorConfig.unnamed")),
 			"",
-			`${theme.fg("dim", "Enabled:")} ${advisor.enabled === false ? "○ off" : "● on"}`,
+			`${theme.fg("dim", t("overlaysModel.advisorConfig.enabledColon"))} ${advisor.enabled === false ? t("overlaysModel.advisorConfig.offMarker") : t("overlaysModel.advisorConfig.onMarker")}`,
 			...(activationNote ? [activationNote] : []),
-			`${theme.fg("dim", "Read primary reasoning stream:")} ${advisor.includeThinking === false ? "○ off" : "● on"}`,
-			`${theme.fg("dim", "Model:")} ${model}`,
-			`${theme.fg("dim", "Tools:")} ${tools}`,
-			`${theme.fg("dim", "Review:")} ${formatReviewCadence(advisor)}`,
-			`${theme.fg("dim", "Sync backlog:")} ${syncBacklog}`,
+			`${theme.fg("dim", t("overlaysModel.advisorConfig.reasoningColon"))} ${advisor.includeThinking === false ? t("overlaysModel.advisorConfig.offMarker") : t("overlaysModel.advisorConfig.onMarker")}`,
+			`${theme.fg("dim", t("overlaysModel.advisorConfig.modelColon"))} ${model}`,
+			`${theme.fg("dim", t("overlaysModel.advisorConfig.toolsColon"))} ${tools}`,
+			`${theme.fg("dim", t("overlaysModel.advisorConfig.reviewColon"))} ${formatReviewCadence(advisor)}`,
+			`${theme.fg("dim", t("overlaysModel.advisorConfig.backlogColon"))} ${syncBacklog}`,
 			"",
-			theme.fg("dim", "Instructions:"),
+			theme.fg("dim", t("overlaysModel.advisorConfig.instructionsColon")),
 		];
 		const instr = advisor.instructions?.trim();
-		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", "(none)")]));
+		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", t("overlaysModel.advisorConfig.none"))]));
 		// Show live usage stats when available from the session.
 		const liveStat = this.#cb.getAdvisorStats?.()?.find(s => s.name === (advisor.name || "default"));
 		if (liveStat && (liveStat.status === "running" || liveStat.status === "quota_exhausted")) {
-			lines.push("", theme.fg("dim", "Usage:"));
+			lines.push("", theme.fg("dim", t("overlaysModel.advisorConfig.usageColon")));
 			const spendParts: string[] = [
-				`${liveStat.tokens.input.toLocaleString()} in`,
-				`${liveStat.tokens.output.toLocaleString()} out`,
+				t("overlaysModel.advisorConfig.tokensIn", { count: liveStat.tokens.input.toLocaleString() }),
+				t("overlaysModel.advisorConfig.tokensOut", { count: liveStat.tokens.output.toLocaleString() }),
 			];
-			if (liveStat.tokens.cacheRead > 0) spendParts.push(`${liveStat.tokens.cacheRead.toLocaleString()} cache`);
-			lines.push(theme.fg("dim", `  Tokens: ${spendParts.join(", ")}`));
-			if (liveStat.cost > 0) lines.push(theme.fg("dim", `  Cost: $${liveStat.cost.toFixed(4)}`));
+			if (liveStat.tokens.cacheRead > 0)
+				spendParts.push(
+					t("overlaysModel.advisorConfig.tokensCached", { count: liveStat.tokens.cacheRead.toLocaleString() }),
+				);
+			lines.push(theme.fg("dim", t("overlaysModel.advisorConfig.tokensLine", { tokens: spendParts.join(", ") })));
+			if (liveStat.cost > 0)
+				lines.push(theme.fg("dim", t("overlaysModel.advisorConfig.costLine", { cost: liveStat.cost.toFixed(4) })));
 			if (liveStat.contextWindow > 0) {
 				const pct = Math.round((liveStat.contextTokens / liveStat.contextWindow) * 100);
 				lines.push(
 					theme.fg(
 						"dim",
-						`  Context: ${liveStat.contextTokens.toLocaleString()}/${liveStat.contextWindow.toLocaleString()} (${pct}%)`,
+						t("overlaysModel.advisorConfig.contextLine", {
+							used: liveStat.contextTokens.toLocaleString(),
+							total: liveStat.contextWindow.toLocaleString(),
+							percent: pct,
+						}),
 					),
 				);
 			}
@@ -1593,10 +1704,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#active = active;
 		this.#sheetOptions = sheet;
 		const navigation =
-			screen === "list" ? "←/→, Tab panes" : screen === "thinking" ? "←/→ effort" : "← parent · → open";
-		this.#footerHint = active instanceof SelectList ? `${footerHint} · ${navigation} · / search` : footerHint;
+			screen === "list"
+				? t("overlaysModel.advisorConfig.paneNavigation")
+				: screen === "thinking"
+					? t("overlaysModel.advisorConfig.effortNavigation")
+					: t("overlaysModel.advisorConfig.parentNavigation");
+		this.#footerHint =
+			active instanceof SelectList
+				? t("overlaysModel.advisorConfig.listFooter", { footer: footerHint, navigation })
+				: footerHint;
 		if (this.#cb.openConfigFile && (screen === "list" || screen === "detail"))
-			this.#footerHint += " · Ctrl-G edit config file";
+			this.#footerHint += t("overlaysModel.advisorConfig.editConfigSuffix");
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && saved?.previewFocused === true;
 		this.#previewLayoutDirty = true;
@@ -1641,18 +1759,26 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#advisorSummary(advisor: AdvisorConfig): string {
-		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = formatAdvisorTools(advisor.tools, "no tools");
-		return `${model} · ${tools} · review ${advisor.reviewMode ?? "turn"}/${advisor.reviewInterval ?? 1}`;
+		const model = advisor.model?.trim() || this.#defaultModelLabel || t("overlaysModel.advisorConfig.roleDefault");
+		const tools = formatAdvisorTools(advisor.tools, t("overlaysModel.advisorConfig.noTools"));
+		return t("overlaysModel.advisorConfig.advisorSummary", {
+			model,
+			tools,
+			mode: advisor.reviewMode ?? "turn",
+			interval: advisor.reviewInterval ?? 1,
+		});
 	}
 
 	/** The advisor's explicit catch-up override, else the inherited global policy. */
 	#syncBacklogLabel(advisor: AdvisorConfig): string {
-		return advisor.syncBacklog ?? `${this.#deps.syncBacklog ?? "off"} (inherited)`;
+		return (
+			advisor.syncBacklog ??
+			t("overlaysModel.advisorConfig.inheritedBacklog", { policy: this.#deps.syncBacklog ?? "off" })
+		);
 	}
 
 	#effectiveAdvisorLabel(advisor: EffectiveAdvisorConfig): string {
-		return `${sanitizeDisplayLine(advisor.name)} · ${advisor.enabled === false ? "disabled" : "enabled"} · ${advisor.scope} · ${sanitizeDisplayLine(shortenPath(advisor.sourceFile))}`;
+		return `${sanitizeDisplayLine(advisor.name)} · ${advisor.enabled === false ? t("overlaysModel.advisorConfig.stateDisabled") : t("overlaysModel.advisorConfig.stateEnabled")} · ${advisor.scope} · ${sanitizeDisplayLine(shortenPath(advisor.sourceFile))}`;
 	}
 
 	#showList(selectedValue?: string): void {
@@ -1660,26 +1786,28 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#ensureRosterVisible();
 		const items: SelectItem[] = this.#doc.advisors.map((advisor, index) => ({
 			value: `advisor:${index}`,
-			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || "(unnamed)"}`,
+			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || t("overlaysModel.advisorConfig.unnamed")}`,
 			description: this.#deps.getActivationNote?.(advisor) ?? this.#advisorSummary(advisor),
 		}));
 		if (this.#effectiveRoster.length > 0) {
 			items.unshift({
 				value: "effective",
-				label: "Effective roster",
-				description: `${this.#effectiveRoster.length} advisors · all discovered files`,
+				label: t("overlaysModel.advisorConfig.effectiveRoster"),
+				description: t("overlaysModel.advisorConfig.effectiveRosterDescription", {
+					count: this.#effectiveRoster.length,
+				}),
 			});
 		}
-		items.push({ value: "add", label: "+ Add advisor" });
+		items.push({ value: "add", label: t("overlaysModel.advisorConfig.addAdvisorPlus") });
 		if (this.#cb.generateAdvisor && this.#cb.getSources)
-			items.push({ value: "generate", label: "+ Generate from existing advisors…" });
+			items.push({ value: "generate", label: t("overlaysModel.advisorConfig.generateExisting") });
 		items.push({
 			value: "shared",
-			label: "Shared instructions",
+			label: t("overlaysModel.advisorConfig.sharedInstructions"),
 			description: previewLineOrNone(this.#doc.instructions),
 		});
-		items.push({ value: "save", label: "Save & apply" });
-		items.push({ value: "close", label: "Close" });
+		items.push({ value: "save", label: t("overlaysModel.advisorConfig.saveApply") });
+		items.push({ value: "close", label: t("overlaysModel.advisorConfig.close") });
 
 		// Show every row (no internal overflow-search); the split frame supplies height.
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
@@ -1693,7 +1821,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 		// as they always have; key shortcuts keep the cursor where it was.
 		const runSelect = (value: string, keepSelection = false) =>
 			void this.#onListSelect(value, keepSelection ? list.getSelectedItem()?.value : undefined).catch(err => {
-				this.#cb.notify(`Advisor config: ${err instanceof Error ? err.message : String(err)}`);
+				this.#cb.notify(
+					t("overlaysModel.advisorConfig.error", { error: err instanceof Error ? err.message : String(err) }),
+				);
 			});
 		const handleInput = list.handleInput.bind(list);
 		list.handleInput = data => {
@@ -1732,7 +1862,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"list",
 			list,
-			`${editorKeys("tui.select.up", "tui.select.down")} move · Space toggle advisor, else select · ${editorKey("tui.select.confirm")} / click select · c clone · Delete delete advisor · s save · a apply · scroll preview on the right · ${editorKey("tui.select.cancel")} close`,
+			t("overlaysModel.advisorConfig.rosterFooter", {
+				move: editorKeys("tui.select.up", "tui.select.down"),
+				confirm: editorKey("tui.select.confirm"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 		);
 	}
 
@@ -1760,7 +1894,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			// The "Save & apply" row always saves; `a` saves only unsaved edits.
 			if (value === "save" || this.#dirty) await this.#saveDoc();
 			if (!this.#pendingApply) {
-				this.#cb.notify("Advisor config: nothing to apply.");
+				this.#cb.notify(t("overlaysModel.advisorConfig.nothingToApply"));
 				this.#showList(selectedValue);
 				return;
 			}
@@ -1785,7 +1919,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	async #openConfigFile(): Promise<void> {
 		if (!this.#cb.openConfigFile || this.#pendingOperations > 0) return;
 		if (this.#dirty) {
-			this.#cb.notify('Unsaved changes. "Save & apply" or Close before editing the config file.');
+			this.#cb.notify(t("overlaysModel.advisorConfig.saveBeforeEditing"));
 			return;
 		}
 		const scope = this.#scope;
@@ -1842,53 +1976,79 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		this.#detailIndex = index;
-		const modelDescription = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const toolsDescription = formatAdvisorTools(advisor.tools, "no tools");
+		const modelDescription =
+			advisor.model?.trim() || this.#defaultModelLabel || t("overlaysModel.advisorConfig.roleDefault");
+		const toolsDescription = formatAdvisorTools(advisor.tools, t("overlaysModel.advisorConfig.noTools"));
 		const reviewMode = advisor.reviewMode ?? "turn";
 		const reviewInterval = advisor.reviewInterval ?? 1;
 		const items: SelectItem[] = [
-			{ value: "name", label: "Name", description: advisor.name },
+			{ value: "name", label: t("overlaysModel.advisorConfig.name"), description: advisor.name },
 			{
 				value: "toggleEnabled",
-				label: "Enabled",
-				description: this.#deps.getActivationNote?.(advisor) ?? (advisor.enabled === false ? "○ off" : "● on"),
+				label: t("overlaysModel.advisorConfig.enabled"),
+				description:
+					this.#deps.getActivationNote?.(advisor) ??
+					(advisor.enabled === false
+						? t("overlaysModel.advisorConfig.offMarker")
+						: t("overlaysModel.advisorConfig.onMarker")),
 			},
 			{
 				value: "toggleIncludeThinking",
-				label: "Read primary reasoning stream",
-				description: advisor.includeThinking === false ? "○ off" : "● on",
+				label: t("overlaysModel.advisorConfig.readReasoning"),
+				description:
+					advisor.includeThinking === false
+						? t("overlaysModel.advisorConfig.offMarker")
+						: t("overlaysModel.advisorConfig.onMarker"),
 			},
-			{ value: "model", label: "Model", description: modelDescription },
-			{ value: "reviewMode", label: "Review mode", description: reviewMode },
-			{ value: "reviewInterval", label: "Review interval", description: String(reviewInterval) },
+			{ value: "model", label: t("overlaysModel.advisorConfig.model"), description: modelDescription },
+			{ value: "reviewMode", label: t("overlaysModel.advisorConfig.reviewMode"), description: reviewMode },
+			{
+				value: "reviewInterval",
+				label: t("overlaysModel.advisorConfig.reviewInterval"),
+				description: String(reviewInterval),
+			},
 			{
 				value: "syncBacklog",
-				label: "Sync backlog",
+				label: t("overlaysModel.advisorConfig.syncBacklog"),
 				description: this.#syncBacklogLabel(advisor),
 			},
 		];
 		if (this.#cb.editActivationSet)
 			items.push({
 				value: "activationSet",
-				label: "Role activation set",
-				description: this.#deps.getActivationNote?.(advisor) ?? "Edit role membership",
+				label: t("overlaysModel.advisorConfig.roleSet"),
+				description: this.#deps.getActivationNote?.(advisor) ?? t("overlaysModel.advisorConfig.editMembership"),
 			});
 		if (advisor.model?.trim()) {
-			items.push({ value: "resetModel", label: "Reset model to advisor-role default" });
+			items.push({ value: "resetModel", label: t("overlaysModel.advisorConfig.resetModel") });
 		}
 		items.push(
-			{ value: "tools", label: "Tools", description: toolsDescription },
-			{ value: "instructions", label: "Instructions", description: previewLineOrNone(advisor.instructions) },
+			{ value: "tools", label: t("overlaysModel.advisorConfig.tools"), description: toolsDescription },
+			{
+				value: "instructions",
+				label: t("overlaysModel.advisorConfig.instructions"),
+				description: previewLineOrNone(advisor.instructions),
+			},
 			{
 				value: "systemPrompt",
-				label: "System prompt",
+				label: t("overlaysModel.advisorConfig.systemPrompt"),
 				description:
-					advisor.systemPrompt === undefined ? "(bundled default)" : previewLineOrNone(advisor.systemPrompt),
+					advisor.systemPrompt === undefined
+						? t("overlaysModel.advisorConfig.bundledDefault")
+						: previewLineOrNone(advisor.systemPrompt),
 			},
-			{ value: "duplicate", label: "Duplicate advisor", description: "New name and identity in this file" },
-			...(this.#cb.copyAdvisor && this.#cb.getSources ? [{ value: "copy", label: "Copy to another scope…" }] : []),
-			...(this.#cb.copyPrompt ? [{ value: "copyPrompt", label: "Copy full prompt" }] : []),
-			{ value: "back", label: "Back" },
+			{
+				value: "duplicate",
+				label: t("overlaysModel.advisorConfig.duplicateAdvisor"),
+				description: t("overlaysModel.advisorConfig.duplicateDescription"),
+			},
+			...(this.#cb.copyAdvisor && this.#cb.getSources
+				? [{ value: "copy", label: t("overlaysModel.advisorConfig.copyToScopeMenu") }]
+				: []),
+			...(this.#cb.copyPrompt
+				? [{ value: "copyPrompt", label: t("overlaysModel.advisorConfig.copyFullPrompt") }]
+				: []),
+			{ value: "back", label: t("overlaysModel.advisorConfig.back") },
 		);
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedField) list.setSelectedIndex(items.findIndex(item => item.value === selectedField));
@@ -1913,7 +2073,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"detail",
 			list,
-			`Editing "${advisor.name}" · ${editorKey("tui.select.confirm")} / click edit field · c clone · Delete delete advisor · Backspace on System prompt resets · ${editorKey("tui.select.cancel")} back`,
+			t("overlaysModel.advisorConfig.detailsFooter", {
+				name: advisor.name,
+				confirm: editorKey("tui.select.confirm"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 		);
 	}
 
@@ -1931,12 +2095,22 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const fromList = this.#screen === "list";
 		const cancel = () => (fromList ? this.#showList(`advisor:${index}`) : this.#showDetail(index));
 		const file = this.#deps.filePath ?? this.#deps.configFiles?.[this.#scope] ?? `${this.#scope} WATCHDOG.yml`;
-		const title = `Delete "${sanitizeDisplayLine(advisor.name)}"?`;
-		const subtitle = `From ${sanitizeDisplayLine(shortenPath(file))}. Save to persist; apply to update live advisors.`;
+		const title = t("overlaysModel.advisorConfig.deleteTitle", { name: sanitizeDisplayLine(advisor.name) });
+		const subtitle = t("overlaysModel.advisorConfig.deleteSubtitle", {
+			file: sanitizeDisplayLine(shortenPath(file)),
+		});
 		const list = new SelectList(
 			[
-				{ value: "cancel", label: "Cancel", description: "Keep this advisor" },
-				{ value: "confirm", label: "Delete advisor", description: `${advisor.name} · ${file}` },
+				{
+					value: "cancel",
+					label: t("overlaysModel.advisorConfig.cancel"),
+					description: t("overlaysModel.advisorConfig.keepAdvisor"),
+				},
+				{
+					value: "confirm",
+					label: t("overlaysModel.advisorConfig.deleteAdvisor"),
+					description: `${advisor.name} · ${file}`,
+				},
 			],
 			2,
 			getSelectListTheme(),
@@ -1951,7 +2125,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 			this.#showList();
 		};
 		this.#detailIndex = index;
-		this.#setScreen("delete-confirm", list, `${title} ${subtitle} · Enter choose · Esc cancel`, { title, subtitle });
+		this.#setScreen("delete-confirm", list, t("overlaysModel.advisorConfig.deleteFooter", { title, subtitle }), {
+			title,
+			subtitle,
+		});
 		list.setSelectedIndex(0);
 	}
 
@@ -1978,8 +2155,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 					.filter(Boolean)
 					.join("\n\n");
 				void Promise.resolve(this.#cb.copyPrompt?.(prompt)).then(
-					() => this.#cb.notify(`Copied ${advisor.name}'s prompt`),
-					error => this.#cb.notify(`Could not copy prompt: ${String(error)}`),
+					() => this.#cb.notify(t("overlaysModel.advisorConfig.copiedPrompt", { name: advisor.name })),
+					error => this.#cb.notify(t("overlaysModel.advisorConfig.copyPromptError", { error: String(error) })),
 				);
 				return;
 			}
@@ -2049,14 +2226,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 			void this.#cb.copyAdvisor?.(advisor, item.value).then(
 				() => {
 					this.#pendingApply = true;
-					this.#cb.notify(`Copied ${advisor.name} to ${shortenPath(item.value)}`);
+					this.#cb.notify(
+						t("overlaysModel.advisorConfig.copiedAdvisor", { name: advisor.name, file: shortenPath(item.value) }),
+					);
 					if (copyRevision === this.#viewRevision) this.#showDetail(index);
 				},
-				error => this.#cb.notify(`Could not copy advisor: ${String(error)}`),
+				error => this.#cb.notify(t("overlaysModel.advisorConfig.copyAdvisorError", { error: String(error) })),
 			);
 		};
 		list.onCancel = () => this.#showDetail(index);
-		this.#setScreen("copy-target", list, "Enter copy · Esc back");
+		this.#setScreen("copy-target", list, t("overlaysModel.advisorConfig.copyHint"));
 	}
 
 	async #showGenerationBases(): Promise<void> {
@@ -2076,13 +2255,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 				label: `${selected.has(index) ? "[x]" : "[ ]"} ${base.config.name}`,
 				description: shortenPath(base.path),
 			}));
-			items.push({ value: "generate", label: "Generate from selected advisors…" });
+			items.push({ value: "generate", label: t("overlaysModel.advisorConfig.generateSelected") });
 			const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 			list.setSelectedIndex(cursor);
 			list.onSelect = item => {
 				if (item.value === "generate") {
 					if (!selected.size) {
-						this.#cb.notify("Choose at least one advisor");
+						this.#cb.notify(t("overlaysModel.advisorConfig.chooseAtLeastOne"));
 						return;
 					}
 					this.#showGenerationComment([...selected].map(index => bases[index].config));
@@ -2094,7 +2273,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				show(index);
 			};
 			list.onCancel = () => this.#showList("generate");
-			this.#setScreen("generate-bases", list, "Space/Enter select bases · Generate from selected · Esc back");
+			this.#setScreen("generate-bases", list, t("overlaysModel.advisorConfig.generateBasesHint"));
 		};
 		show();
 	}
@@ -2102,7 +2281,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#showGenerationComment(bases: readonly AdvisorConfig[]): void {
 		const editor = new HookEditorComponent(
 			this.#tui,
-			"Describe the new advisor",
+			t("overlaysModel.advisorConfig.describeNewAdvisor"),
 			"",
 			comment => this.#generateAdvisor(bases, comment),
 			() => this.#showList("generate"),
@@ -2115,7 +2294,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#generationAbort?.abort();
 		const abort = new AbortController();
 		this.#generationAbort = abort;
-		const cancel = new SelectList([{ value: "cancel", label: "Generating advisor…" }], 1, getSelectListTheme());
+		const cancel = new SelectList(
+			[{ value: "cancel", label: t("overlaysModel.advisorConfig.generating") }],
+			1,
+			getSelectListTheme(),
+		);
 		cancel.onCancel = cancel.onSelect = () => {
 			abort.abort();
 			this.#showList("generate");
@@ -2138,7 +2321,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			},
 			error => {
 				if (abort.signal.aborted) return;
-				this.#cb.notify(`Could not generate advisor: ${String(error)}`);
+				this.#cb.notify(t("overlaysModel.advisorConfig.generateError", { error: String(error) }));
 				this.#showList("generate");
 			},
 		);
@@ -2159,7 +2342,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"name",
 			input,
-			`Type a name · ${editorKey("tui.input.submit")} save · ${editorKey("tui.select.cancel")} cancel`,
+			t("overlaysModel.advisorConfig.nameFooter", {
+				submit: editorKey("tui.input.submit"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 		);
 	}
 
@@ -2205,14 +2391,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"model",
 			picker,
-			`/ search · ${formatKeyHint("enter")} / click twice picks · h / ${editorKey("tui.select.cancel")} back`,
+			t("overlaysModel.advisorConfig.modelFooter", {
+				enter: formatKeyHint("enter"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 		);
 	}
 
 	#showThinkingPicker(index: number, selector: string, efforts: readonly string[]): void {
 		this.#detailIndex = index;
 		this.#thinking = { selector, efforts: [...efforts] };
-		const items: SelectItem[] = [{ value: "", label: "(model default thinking)" }];
+		const items: SelectItem[] = [{ value: "", label: t("overlaysModel.advisorConfig.defaultThinking") }];
 		for (const effort of efforts) items.push({ value: effort, label: effort });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		// The level the advisor already runs this model at, when it is this model.
@@ -2230,16 +2419,27 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"thinking",
 			list,
-			`Thinking effort for ${selector} · ${editorKey("tui.select.confirm")} / click pick · ${editorKey("tui.select.cancel")} back`,
+			t("overlaysModel.advisorConfig.thinkingFooter", {
+				model: selector,
+				confirm: editorKey("tui.select.confirm"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 			{
-				title: "Thinking level",
-				subtitle: `How hard ${this.#doc.advisors[index]?.name || "the advisor"} reasons on ${selector}.`,
+				title: t("overlaysModel.advisorConfig.thinkingLevel"),
+				subtitle: t("overlaysModel.advisorConfig.thinkingSubtitle", {
+					name: this.#doc.advisors[index]?.name || t("overlaysModel.advisorConfig.theAdvisor"),
+					model: selector,
+				}),
 				icon: "thinking",
-				noun: "levels",
+				noun: t("overlaysModel.advisorConfig.levelsNoun"),
 				current: current === undefined ? [] : [current],
-				confirm: "Use level",
+				confirm: t("overlaysModel.advisorConfig.useLevel"),
 				decorate: item => {
-					if (!item.value) return { label: "Model default", detail: "No level; the provider decides." };
+					if (!item.value)
+						return {
+							label: t("overlaysModel.advisorConfig.modelDefault"),
+							detail: t("overlaysModel.advisorConfig.providerDecides"),
+						};
 					const level = parseThinkingLevel(item.value);
 					const dot = `thinking${item.value.charAt(0).toUpperCase()}${item.value.slice(1)}`;
 					return {
@@ -2263,8 +2463,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 			label: mode === current ? `${mode} (current)` : mode,
 			description:
 				mode === "turn"
-					? "Review every primary turn (tool-call round)."
-					: "Review only at agent end (once per run).",
+					? t("overlaysModel.advisorConfig.reviewEachTurn")
+					: t("overlaysModel.advisorConfig.reviewAtEnd"),
 		}));
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.setSelectedIndex(ADVISOR_REVIEW_MODES.indexOf(current));
@@ -2277,12 +2477,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"review-mode",
 			list,
-			`${editorKey("tui.select.confirm")} / click choose review mode · ${editorKey("tui.select.cancel")} back`,
+			t("overlaysModel.advisorConfig.reviewModeFooter", {
+				confirm: editorKey("tui.select.confirm"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 			{
-				title: "Review mode",
-				subtitle: `When ${advisor.name || "the advisor"} reviews the session.`,
+				title: t("overlaysModel.advisorConfig.reviewMode"),
+				subtitle: t("overlaysModel.advisorConfig.reviewModeSubtitle", {
+					name: advisor.name || t("overlaysModel.advisorConfig.theAdvisor"),
+				}),
 				icon: "review",
-				noun: "modes",
+				noun: t("overlaysModel.advisorConfig.modesNoun"),
 				current: [current],
 				decorate: item => ({ label: item.value }),
 			},
@@ -2301,7 +2506,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		input.onSubmit = value => {
 			const interval = Number(value.trim());
 			if (!Number.isSafeInteger(interval) || interval < 1) {
-				this.#cb.notify("Review interval must be a positive integer.");
+				this.#cb.notify(t("overlaysModel.advisorConfig.invalidInterval"));
 				return;
 			}
 			advisor.reviewInterval = interval === 1 ? undefined : interval;
@@ -2312,7 +2517,10 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"review-interval",
 			input,
-			`Type a positive integer · ${editorKey("tui.input.submit")} save · ${editorKey("tui.select.cancel")} cancel`,
+			t("overlaysModel.advisorConfig.intervalFooter", {
+				submit: editorKey("tui.input.submit"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 		);
 	}
 
@@ -2328,12 +2536,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const items: SelectItem[] = [
 			{
 				value: SYNC_BACKLOG_INHERIT,
-				label: current === undefined ? "inherit (current)" : "inherit",
-				description: `Follow the global advisor.syncBacklog setting (currently "${global}").`,
+				label:
+					current === undefined
+						? t("overlaysModel.advisorConfig.inheritCurrent")
+						: t("overlaysModel.advisorConfig.inherit"),
+				description: t("overlaysModel.advisorConfig.globalBacklog", { policy: global }),
 			},
 			...ADVISOR_SYNC_BACKLOG_MODES.map(mode => ({
 				value: mode,
-				label: mode === current ? `${mode} (current)` : mode,
+				label: mode === current ? t("overlaysModel.advisorConfig.currentMode", { mode }) : mode,
 				description: describeSyncBacklogMode(mode),
 			})),
 		];
@@ -2349,12 +2560,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"sync-backlog",
 			list,
-			`${editorKey("tui.select.confirm")} / click choose catch-up policy · ${editorKey("tui.select.cancel")} back`,
+			t("overlaysModel.advisorConfig.backlogFooter", {
+				confirm: editorKey("tui.select.confirm"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 			{
-				title: "Sync backlog",
-				subtitle: `How long the session waits for ${advisor.name || "the advisor"}'s pending reviews.`,
+				title: t("overlaysModel.advisorConfig.syncBacklog"),
+				subtitle: t("overlaysModel.advisorConfig.backlogSubtitle", {
+					name: advisor.name || t("overlaysModel.advisorConfig.theAdvisor"),
+				}),
 				icon: "time",
-				noun: "policies",
+				noun: t("overlaysModel.advisorConfig.policiesNoun"),
 				current: [current ?? SYNC_BACKLOG_INHERIT],
 				decorate: item => ({ label: item.value }),
 			},
@@ -2369,7 +2585,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			value: name,
 			label: `${selected.has(name) ? "[x]" : "[ ]"} ${name}`,
 		}));
-		items.push({ value: TOOLS_DONE, label: "Done" });
+		items.push({ value: TOOLS_DONE, label: t("overlaysModel.advisorConfig.done") });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.setSelectedIndex(cursor);
 		list.onSelectionChange = () => this.#cb.requestRender();
@@ -2396,12 +2612,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"tools",
 			list,
-			`${editorKey("tui.select.confirm")} / click toggle · select Done or ${editorKey("tui.select.cancel")} to apply (empty = no tools; read/grep/glob = default)`,
+			t("overlaysModel.advisorConfig.toolsFooter", {
+				confirm: editorKey("tui.select.confirm"),
+				cancel: editorKey("tui.select.cancel"),
+			}),
 			{
-				title: "Tools",
-				subtitle: `What ${this.#doc.advisors[index]?.name || "the advisor"} may call. None grants no tools; read, grep and glob are the default.`,
+				title: t("overlaysModel.advisorConfig.tools"),
+				subtitle: t("overlaysModel.advisorConfig.toolsSubtitle", {
+					name: this.#doc.advisors[index]?.name || t("overlaysModel.advisorConfig.theAdvisor"),
+				}),
 				icon: "tools",
-				noun: "tools",
+				noun: t("overlaysModel.advisorConfig.toolsNoun"),
 				current: [...selected],
 				decorate: item => ({ label: item.value }),
 			},
@@ -2413,7 +2634,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const advisor = this.#doc.advisors[index];
 		const editor = new HookEditorComponent(
 			this.#tui,
-			`System prompt — ${advisor.name}`,
+			t("overlaysModel.advisorConfig.systemPromptTitle", { name: advisor.name }),
 			advisor.systemPrompt ?? this.#deps.getDefaultSystemPrompt(advisor, this.#doc),
 			value => {
 				advisor.systemPrompt = value;
@@ -2431,7 +2652,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const shared = index < 0;
 		this.#detailIndex = index;
 		const current = shared ? this.#doc.instructions : this.#doc.advisors[index].instructions;
-		const title = shared ? "Shared advisor instructions" : `Instructions — ${this.#doc.advisors[index].name}`;
+		const title = shared
+			? t("overlaysModel.advisorConfig.sharedEditorTitle")
+			: t("overlaysModel.advisorConfig.instructionsTitle", { name: this.#doc.advisors[index].name });
 		const editor = new HookEditorComponent(
 			this.#tui,
 			title,

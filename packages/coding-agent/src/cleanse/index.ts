@@ -1,4 +1,5 @@
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getLocale, t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type CleanseTargetChoice,
 	pickCleanseTarget,
@@ -57,13 +58,15 @@ export async function runCleanse(
 	signal: AbortSignal,
 ): Promise<CleanseCommandResult> {
 	const maxAgents = options.maxAgents ?? 32;
-	if (!Number.isInteger(maxAgents) || maxAgents <= 0) throw new Error("--agents must be a positive integer");
+	if (!Number.isInteger(maxAgents) || maxAgents <= 0) throw new Error(t("cli.commands.cleanse.agentsPositive"));
 	const model = options.model?.trim() || DEFAULT_MODEL;
 	const cwd = getProjectDir();
 	let runtime: CleanseAgentRuntime | undefined;
 	let runtimePromise: Promise<CleanseAgentRuntime> | undefined;
 	let loopResult: CleanseLoopResult | undefined;
 	const board = ui.board;
+	const boardText = (key: string, values?: TranslationValues) =>
+		t(board.interactive ? getLocale() : "en", key, values);
 	const hooks: CleanseAgentHooks = {
 		onStart: (name, assignment) => board.agentStarted(name, assignment),
 		onProgress: (name, _assignment, progress) => board.agentProgress(name, progress),
@@ -75,14 +78,14 @@ export async function runCleanse(
 	};
 	const ensureRuntime = async (): Promise<CleanseAgentRuntime> => {
 		runtimePromise ??= (async () => {
-			board.phase(`Resolving model ${model}...`);
+			board.phase(boardText("cli.commands.cleanse.resolvingModel", { model }));
 			try {
 				runtime = await createCleanseAgentRuntime({ cwd, model, hooks });
 			} finally {
 				board.phase(undefined);
 			}
-			board.log(`Model: ${runtime.model}`);
-			board.log(`Session: ${shortenPath(runtime.sessionFile)}`);
+			board.log(boardText("cli.commands.cleanse.modelLine", { model: runtime.model }));
+			board.log(boardText("cli.commands.cleanse.sessionLine", { path: shortenPath(runtime.sessionFile) }));
 			return runtime;
 		})();
 		return runtimePromise;
@@ -92,7 +95,7 @@ export async function runCleanse(
 		let request = options.request?.trim() || undefined;
 		let suite: CleanseDiagnosticSuite | undefined;
 		if (!request) {
-			board.phase("Detecting configured project checkers...");
+			board.phase(boardText("cli.commands.cleanse.detectingCheckers"));
 			suite = await discoverCleanseDiagnosticSuite(cwd, { includeTests: options.includeTests });
 			board.phase(undefined);
 			const pickTarget = options.all === true ? undefined : ui.pickTarget;
@@ -100,7 +103,7 @@ export async function runCleanse(
 				if (suite.checkers.length > 0) {
 					const choice = await pickTarget(suite.checkers);
 					if (choice.kind === "cancel") {
-						ui.printError("Cleanse cancelled.");
+						ui.printError(t("cli.commands.cleanse.cancelled"));
 						return {
 							exitCode: 130,
 							status: "cancelled",
@@ -114,7 +117,7 @@ export async function runCleanse(
 					}
 				} else {
 					printSkippedChecks(ui, { checks: [], diagnostics: [], skipped: [...suite.skipped] });
-					ui.print("No supported checker with an available executable was found.");
+					ui.print(t("cli.commands.cleanse.noChecker"));
 					const answer = (await ui.promptRequest?.()) ?? null;
 					if (answer === null) {
 						return {
@@ -130,7 +133,7 @@ export async function runCleanse(
 		}
 		if (request) {
 			const activeRuntime = await ensureRuntime();
-			board.phase(`Discovering checkers for "${request}"...`);
+			board.phase(boardText("cli.commands.cleanse.discoveringCheckers", { request }));
 			try {
 				const specs = await activeRuntime.discoverCheckers(request, signal);
 				suite = await buildCustomCleanseSuite(cwd, specs);
@@ -144,11 +147,7 @@ export async function runCleanse(
 		if (!suite || suite.checkers.length === 0) {
 			const report: CleanseDiagnosticReport = { checks: [], diagnostics: [], skipped: [...(suite?.skipped ?? [])] };
 			printSkippedChecks(ui, report);
-			ui.printError(
-				request
-					? "Checker discovery produced no runnable command."
-					: "No supported checker with an available executable was found.",
-			);
+			ui.printError(t(request ? "cli.commands.cleanse.noDiscoveredCommand" : "cli.commands.cleanse.noChecker"));
 			return { exitCode: 1, status: "unsupported", report, sessionFile: runtime?.sessionFile };
 		}
 		printSkippedChecks(ui, { checks: [], diagnostics: [], skipped: [...suite.skipped] });
@@ -176,8 +175,12 @@ export async function runCleanse(
 				followUp: async (worker, diagnostics) => {
 					const delivered = (await runtime?.followUp(worker, diagnostics)) ?? false;
 					if (delivered) {
+						const count = diagnostics.length;
 						board.log(
-							`CleanseA${worker} ← ${diagnostics.length} follow-up diagnostic${diagnostics.length === 1 ? "" : "s"}`,
+							boardText(
+								count === 1 ? "cli.commands.cleanse.followUp.one" : "cli.commands.cleanse.followUp.many",
+								{ worker, count },
+							),
 						);
 					}
 					return delivered;
@@ -186,14 +189,30 @@ export async function runCleanse(
 					if (report.diagnostics.length === 0) return;
 					const groups = groupDiagnosticsByFile(report.diagnostics);
 					const fileCount = groups.filter(group => group.file !== undefined).length;
+					const diagnosticCount = report.diagnostics.length;
 					board.log(
-						`Checkers done: ${report.diagnostics.length} diagnostic${report.diagnostics.length === 1 ? "" : "s"} across ${fileCount} file${fileCount === 1 ? "" : "s"}.`,
+						boardText("cli.commands.cleanse.completedCheckers", {
+							diagnostics: boardText(
+								diagnosticCount === 1
+									? "cli.commands.cleanse.diagnostic.one"
+									: "cli.commands.cleanse.diagnostic.many",
+								{ count: diagnosticCount },
+							),
+							files: boardText(
+								fileCount === 1 ? "cli.commands.cleanse.file.one" : "cli.commands.cleanse.file.many",
+								{ count: fileCount },
+							),
+						}),
 					);
 				},
 				onVerified(report) {
 					board.repairFinished();
+					const count = report.diagnostics.length;
 					board.log(
-						`Verification: ${report.diagnostics.length} diagnostic${report.diagnostics.length === 1 ? "" : "s"} remaining.`,
+						boardText(
+							count === 1 ? "cli.commands.cleanse.verification.one" : "cli.commands.cleanse.verification.many",
+							{ count },
+						),
 					);
 				},
 			},
@@ -201,7 +220,7 @@ export async function runCleanse(
 		board.close();
 		await runtime?.close(loopResult);
 		if (loopResult.status === "cancelled") {
-			ui.printError("Cleanse cancelled.");
+			ui.printError(t("cli.commands.cleanse.cancelled"));
 			return {
 				exitCode: 130,
 				status: "cancelled",
@@ -210,10 +229,13 @@ export async function runCleanse(
 			};
 		}
 		if (loopResult.status === "clean") {
+			const count = loopResult.report.checks.length;
 			ui.print(
 				loopResult.workers === 0
-					? `Clean: ${loopResult.report.checks.length} checker${loopResult.report.checks.length === 1 ? "" : "s"} passed.`
-					: "Clean: all detected diagnostics are resolved.",
+					? t(count === 1 ? "cli.commands.cleanse.cleanPassed.one" : "cli.commands.cleanse.cleanPassed.many", {
+							count,
+						})
+					: t("cli.commands.cleanse.allResolved"),
 			);
 			return { exitCode: 0, status: "clean", report: loopResult.report, sessionFile: runtime?.sessionFile };
 		}
@@ -223,7 +245,7 @@ export async function runCleanse(
 		if (!signal.aborted) throw error;
 		const report: CleanseDiagnosticReport = loopResult?.report ?? { checks: [], diagnostics: [], skipped: [] };
 		board.close();
-		ui.printError("Cleanse cancelled.");
+		ui.printError(t("cli.commands.cleanse.cancelled"));
 		return { exitCode: 130, status: "cancelled", report, sessionFile: runtime?.sessionFile };
 	} finally {
 		board.close();
@@ -255,17 +277,20 @@ export async function runCleanseCommand(options: CleanseCommandOptions = {}): Pr
 
 function printSkippedChecks(ui: CleanseRunUi, report: CleanseDiagnosticReport): void {
 	for (const skipped of report.skipped) {
-		ui.print(`- ${skipped.label}: skipped (${skipped.reason})`);
+		ui.print(t("cli.commands.cleanse.skipped", { label: skipped.label, reason: skipped.reason }));
 	}
 }
 
 function printRemaining(ui: CleanseRunUi, report: CleanseDiagnosticReport): void {
 	const groups = groupDiagnosticsByFile(report.diagnostics);
-	ui.printError(`Unresolved: ${report.diagnostics.length} diagnostic${report.diagnostics.length === 1 ? "" : "s"}.`);
+	const count = report.diagnostics.length;
+	ui.printError(
+		t(count === 1 ? "cli.commands.cleanse.unresolved.one" : "cli.commands.cleanse.unresolved.many", { count }),
+	);
 	for (const group of groups.slice(0, DISPLAY_FILE_LIMIT)) {
 		ui.printError(`- ${group.file ?? "<project>"}: ${group.diagnostics.length}`);
 	}
 	if (groups.length > DISPLAY_FILE_LIMIT) {
-		ui.printError(`- ... ${groups.length - DISPLAY_FILE_LIMIT} more files`);
+		ui.printError(t("cli.commands.cleanse.moreFiles", { count: groups.length - DISPLAY_FILE_LIMIT }));
 	}
 }

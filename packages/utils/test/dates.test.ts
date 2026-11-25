@@ -88,6 +88,16 @@ describe("formatDistanceToNow", () => {
 		}
 	});
 
+	it("uses the same amount, unit, and direction at a threshold in Spanish", () => {
+		const now = new Date(2024, 6, 1, 12, 0, 0).getTime();
+		Date.now = () => now;
+		const before = now - (44 * 60 + 29) * 1_000;
+		const after = now + (44 * 60 + 30) * 1_000;
+
+		expect(formatDistanceToNow(before, { addSuffix: true, locale: "es" })).toBe("hace 44 minutos");
+		expect(formatDistanceToNow(after, { addSuffix: true, locale: "es" })).toBe("dentro de aproximadamente 1 hora");
+	});
+
 	it("matches future suffixes and year-range wording", () => {
 		const now = new Date(2024, 6, 1, 12, 0, 0);
 		Date.now = () => now.getTime();

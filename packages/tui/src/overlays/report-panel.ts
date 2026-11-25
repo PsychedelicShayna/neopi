@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { editorKey } from "../chrome/keybinding-hints";
@@ -78,7 +79,7 @@ export class ReportPanel extends OverlayPanel {
 		this.#body = options.body;
 		this.#onClose = options.onClose;
 		this.#maxRows = options.maxRows;
-		this.#closeHint = `${options.closeKey} to close`;
+		this.#closeHint = t("overlays.report_panel.close_hint", { closeKey: `${options.closeKey}` });
 		this.#view = new ScrollView(options.body, {
 			height: 0,
 			scrollbar: "auto",
@@ -87,7 +88,10 @@ export class ReportPanel extends OverlayPanel {
 		});
 		this.#footer = new MenuHints(
 			() =>
-				`${this.#overflows ? `${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · ` : ""}${this.#closeHint} · ? help`,
+				t("overlays.report_panel.help_hint", {
+					value: `${this.#overflows ? t("overlays.report_panel.scroll_hint", { editorKey: `${editorKey("tui.select.pageUp")}`, editorKey2: `${editorKey("tui.select.pageDown")}` }) : ""}`,
+					closeHint: `${this.#closeHint}`,
+				}),
 			text => theme.fg("muted", text),
 			"jk gg/G C-u d e y",
 		);
@@ -102,7 +106,7 @@ export class ReportPanel extends OverlayPanel {
 	 * its own {@link handleInput} closes it, so the hint names that key.
 	 */
 	holdFocus(): void {
-		this.#closeHint = `${editorKey("tui.select.cancel")} to close`;
+		this.#closeHint = t("overlays.report_panel.close_hint_2", { editorKey: `${editorKey("tui.select.cancel")}` });
 	}
 
 	navigationSnapshot(): unknown {
@@ -127,7 +131,11 @@ export class ReportPanel extends OverlayPanel {
 		const rows = this.#body.render(innerWidth).length;
 		const cap = this.#maxRows?.();
 		const footerRows = menuHintLines(
-			`${editorKey("tui.select.pageUp")}/${editorKey("tui.select.pageDown")} scroll · ${this.#closeHint} · ? help`,
+			t("overlays.report_panel.scroll_help_hint", {
+				editorKey: `${editorKey("tui.select.pageUp")}`,
+				editorKey2: `${editorKey("tui.select.pageDown")}`,
+				closeHint: `${this.#closeHint}`,
+			}),
 			innerWidth,
 			"jk gg/G C-u d e y",
 		).length;
@@ -159,7 +167,9 @@ export class ReportPanel extends OverlayPanel {
 		const scroll = this.#scroll;
 		if (this.#native && this.#native.scroll === scroll) return this.#native.node;
 		const body: NativeNode = { ...col([this.#body], { role: "omp.report.body" }), key: "body", scroll };
-		const node = col([body, actionBar([null, actionButton("Close", "close", { keys: "escape" })])], { gap: "md" });
+		const node = col([body, actionBar([null, actionButton(t("tui.picker.close"), "close", { keys: "escape" })])], {
+			gap: "md",
+		});
 		this.#native = { scroll, node };
 		return node;
 	}

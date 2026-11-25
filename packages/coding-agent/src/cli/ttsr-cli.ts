@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { AstMatchStrictness, astMatch, FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	BUILTIN_DEFAULTS_PROVIDER_ID,
 	compileRuleCondition,
@@ -170,13 +171,13 @@ async function readSnippet(opts: { snippet?: string; file?: string }): Promise<s
 		const resolved = path.resolve(opts.file);
 		const file = Bun.file(resolved);
 		if (!(await file.exists())) {
-			throw new Error(`Snippet file not found: ${resolved}`);
+			throw new Error(t("cli.commands.ttsr.snippetFileMissing", { path: resolved }));
 		}
 		return await file.text();
 	}
 	if (opts.snippet !== undefined) return opts.snippet;
 	if (process.stdin.isTTY === false) return await Bun.stdin.text();
-	throw new Error("No snippet provided. Pass inline text, --file <path>, or pipe via --file -.");
+	throw new Error(t("cli.commands.ttsr.missingSnippet"));
 }
 
 function previewSnippet(text: string): string {
@@ -260,7 +261,7 @@ async function evaluate(
 			agents: rule.agents,
 		};
 		if (!astEligible && (rule.astCondition ?? []).length > 0) {
-			detail.skippedAst = "astCondition requires --source tool and a --path with a file extension";
+			detail.skippedAst = t("en", "cli.commands.ttsr.astSourceRequired");
 		}
 		(hitNames.has(rule.name) ? triggered : notTriggered).push(detail);
 	}
@@ -323,7 +324,7 @@ async function readIsolatedRule(rulePath: string): Promise<Rule> {
 	const resolved = path.resolve(rulePath);
 	const file = Bun.file(resolved);
 	if (!(await file.exists())) {
-		throw new Error(`Rule file not found: ${resolved}`);
+		throw new Error(t("cli.commands.ttsr.ruleFileMissing", { path: resolved }));
 	}
 	const content = await file.text();
 	const name = path.basename(resolved).replace(/\.(md|mdc)$/, "");
@@ -335,12 +336,17 @@ async function readIsolatedRule(rulePath: string): Promise<Rule> {
 async function loadIsolatedRule(
 	rulePath: string,
 	agentName: string,
+	locale: Locale,
 ): Promise<{ ok: true; rules: Rule[]; manager: TtsrManager } | { ok: false; unavailableMsg: string }> {
 	const rule = await readIsolatedRule(rulePath);
 	if (!ruleAppliesToAgent(rule, agentName)) {
 		return {
 			ok: false,
-			unavailableMsg: `Rule "${rule.name}" is scoped to agents [${(rule.agents ?? []).join(", ")}] and does not apply to agent "${agentName}". Re-run with --agent <one of those names>.`,
+			unavailableMsg: t(locale, "cli.commands.ttsr.ruleScoped", {
+				rule: rule.name,
+				agents: (rule.agents ?? []).join(", "),
+				agent: agentName,
+			}),
 		};
 	}
 	const manager = await createTtsrManager({
@@ -353,9 +359,7 @@ async function loadIsolatedRule(
 		disabledRules: [],
 	});
 	if (!manager.addRule(rule)) {
-		throw new Error(
-			`Rule "${rule.name}" has no usable TTSR condition. Add a \`condition\` (regex), \`astCondition\` (ast-grep pattern), or \`question\` (judged) to its frontmatter.`,
-		);
+		throw new Error(t("cli.commands.ttsr.noUsableCondition", { rule: rule.name }));
 	}
 	return { ok: true, rules: manager.getRules(), manager };
 }
@@ -366,8 +370,10 @@ async function loadIsolatedScanRule(rulePath: string): Promise<Rule[]> {
 }
 
 async function runTest(args: TtsrTestArgs, json: boolean, cwd: string): Promise<void> {
+	// Machine-readable reports keep English diagnostics regardless of the UI language.
+	const locale = json ? "en" : getLocale();
 	if (args.source && !TTSR_SOURCES.includes(args.source)) {
-		throw new Error(`Invalid --source: ${args.source}. Expected one of: ${TTSR_SOURCES.join(", ")}`);
+		throw new Error(t("cli.commands.ttsr.invalidSource", { source: args.source, sources: TTSR_SOURCES.join(", ") }));
 	}
 
 	const snippet = await readSnippet(args);
@@ -385,7 +391,7 @@ async function runTest(args: TtsrTestArgs, json: boolean, cwd: string): Promise<
 	// that so a false negative reads as a context mismatch, not a bad regex.
 	const inferenceNote =
 		!args.source && filePath && source === "text"
-			? `inferred --source text from '${path.extname(filePath) || filePath}' (not in the source-file extension set); pass --source tool --tool edit to evaluate tool-scoped rules`
+			? t(locale, "cli.commands.ttsr.inferredSource", { extension: path.extname(filePath) || filePath })
 			: undefined;
 
 	const context: TtsrMatchContext = {
@@ -396,7 +402,7 @@ async function runTest(args: TtsrTestArgs, json: boolean, cwd: string): Promise<
 
 	const agent = (args.agent ?? "").trim().toLowerCase() || MAIN_AGENT_RULE_NAME;
 	const loaded = args.rule
-		? await loadIsolatedRule(args.rule, agent)
+		? await loadIsolatedRule(args.rule, agent, locale)
 		: { ok: true as const, ...(await loadProjectTtsrRules(cwd, agent)) };
 
 	if (!loaded.ok) {
@@ -412,8 +418,8 @@ async function runTest(args: TtsrTestArgs, json: boolean, cwd: string): Promise<
 
 	if (rules.length === 0) {
 		const msg = args.rule
-			? "Rule registered but produced no TTSR entry."
-			: `No TTSR rules registered for this project as agent "${agent}". Rules scoped to other agents via \`agents\` are excluded — run \`${APP_NAME} ttsr list\` to see every rule, or pass --agent <name>.`;
+			? t(locale, "cli.commands.ttsr.noEntry")
+			: t(locale, "cli.commands.ttsr.noAgentRules", { agent, bin: APP_NAME });
 		if (json) {
 			process.stdout.write(`${JSON.stringify({ error: msg })}\n`);
 		} else {
@@ -449,22 +455,28 @@ function renderTestReport(report: TestReport, verbose: boolean, isolated: boolea
 	const ctxLabel = report.source === "tool" ? `tool:${report.tool ?? "?"}` : report.source;
 	const pathLabel = report.filePath ? ` path=${report.filePath}` : "";
 	process.stdout.write(
-		`${chalk.bold("TTSR test")} — source=${chalk.cyan(ctxLabel)}${pathLabel} agent=${chalk.cyan(report.agent)} snippet=${chalk.dim(`${report.snippetBytes}b`)}\n`,
+		`${chalk.bold(t("cli.commands.ttsr.testTitle"))} — source=${chalk.cyan(ctxLabel)}${pathLabel} agent=${chalk.cyan(report.agent)} snippet=${chalk.dim(`${report.snippetBytes}b`)}\n`,
 	);
 	process.stdout.write(`${chalk.dim(`  "${report.snippetPreview}"`)}\n\n`);
 	if (report.inferenceNote) {
-		process.stdout.write(`${chalk.yellow(`note: ${report.inferenceNote}`)}\n\n`);
+		process.stdout.write(`${chalk.yellow(t("cli.commands.ttsr.note", { note: report.inferenceNote }))}\n\n`);
 	}
 
 	if (report.triggered.length === 0) {
-		process.stdout.write(`${chalk.red("No rules triggered.")} (evaluated ${report.evaluated})\n`);
+		process.stdout.write(
+			`${chalk.red(t("cli.commands.ttsr.noTrigger"))} ${t("cli.commands.ttsr.evaluated", { count: report.evaluated })}\n`,
+		);
 	} else {
-		process.stdout.write(`${chalk.green.bold(`Triggered (${report.triggered.length})`)}\n`);
+		process.stdout.write(
+			`${chalk.green.bold(t("cli.commands.ttsr.triggered", { count: report.triggered.length }))}\n`,
+		);
 		for (const detail of report.triggered) renderRuleDetail(detail, true);
 	}
 
 	if (verbose && report.notTriggered.length > 0) {
-		process.stdout.write(`\n${chalk.dim(`Not triggered (${report.notTriggered.length})`)}\n`);
+		process.stdout.write(
+			`\n${chalk.dim(t("cli.commands.ttsr.notTriggered", { count: report.notTriggered.length }))}\n`,
+		);
 		for (const detail of report.notTriggered) renderRuleDetail(detail, false);
 	}
 
@@ -490,12 +502,12 @@ function renderRuleDetail(detail: RuleMatchDetail, hit: boolean): void {
 		condParts.push(`agents: ${detail.agents!.join(", ")}`);
 	}
 	if (detail.skippedAst) {
-		condParts.push(chalk.dim(`astCondition: ${detail.skippedAst}`));
+		condParts.push(chalk.dim(`astCondition: ${t("cli.commands.ttsr.astSourceRequired")}`));
 	}
 	if (detail.question) {
-		condParts.push(chalk.dim(`question (judged at runtime, not tested): ${detail.question}`));
+		condParts.push(chalk.dim(t("cli.commands.ttsr.judgedQuestion", { question: detail.question })));
 	}
-	const condLabel = condParts.length > 0 ? condParts.join("  ") : chalk.dim("no active conditions");
+	const condLabel = condParts.length > 0 ? condParts.join("  ") : chalk.dim(t("cli.commands.ttsr.noActive"));
 	const provider = detail.sourceProvider ? chalk.dim(` [${detail.sourceProvider}]`) : "";
 	process.stdout.write(`  ${mark} ${chalk.bold(detail.name)}  ${condLabel}${provider}\n`);
 }
@@ -524,11 +536,11 @@ async function runList(json: boolean, cwd: string): Promise<void> {
 	}
 
 	if (rules.length === 0) {
-		process.stdout.write(`${chalk.yellow("No TTSR rules registered for this project.")}\n`);
+		process.stdout.write(`${chalk.yellow(t("cli.commands.ttsr.noRules"))}\n`);
 		return;
 	}
 
-	process.stdout.write(`${chalk.bold(`TTSR rules (${rules.length})`)}\n`);
+	process.stdout.write(`${chalk.bold(t("cli.commands.ttsr.rulesCount", { count: rules.length }))}\n`);
 	for (const rule of rules) {
 		const condParts: string[] = [];
 		if ((rule.condition ?? []).length > 0) condParts.push(`condition: ${rule.condition!.join(", ")}`);
@@ -539,7 +551,7 @@ async function runList(json: boolean, cwd: string): Promise<void> {
 		if ((rule.agents ?? []).length > 0) condParts.push(`agents: ${rule.agents!.join(", ")}`);
 		const provider = rule._source?.provider ? chalk.dim(` [${rule._source.provider}]`) : "";
 		process.stdout.write(
-			`  ${chalk.bold(rule.name)}${provider} ${chalk.dim(condParts.join("  ") || "no conditions")}\n`,
+			`  ${chalk.bold(rule.name)}${provider} ${chalk.dim(condParts.join("  ") || t("cli.commands.ttsr.noConditions"))}\n`,
 		);
 		if (rule.description) process.stdout.write(`${chalk.dim(`    ${rule.description}`)}\n`);
 	}
@@ -851,12 +863,13 @@ function countSkipped(skipped: ScanSkipSummary): number {
 }
 
 async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<void> {
+	const locale = json ? "en" : getLocale();
 	const scanDir = args.directory ? path.resolve(cwd, args.directory) : cwd;
 	if (!fs.existsSync(scanDir)) {
 		if (json) {
 			process.stdout.write(`${JSON.stringify({ error: `Directory not found: ${scanDir}` })}\n`);
 		} else {
-			process.stderr.write(`${chalk.red(`error: scan directory not found: ${scanDir}`)}\n`);
+			process.stderr.write(`${chalk.red(t("cli.commands.ttsr.scanDirMissing", { path: scanDir }))}\n`);
 		}
 		process.exit(1);
 	}
@@ -864,9 +877,7 @@ async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<
 	const rules = args.rule ? await loadIsolatedScanRule(args.rule) : await loadProjectScanRules(cwd);
 
 	if (rules.length === 0) {
-		const msg = args.rule
-			? "Rule registered but produced no TTSR entry."
-			: "No TTSR rules registered for this project.";
+		const msg = args.rule ? t(locale, "cli.commands.ttsr.noEntry") : t(locale, "cli.commands.ttsr.noRules");
 		if (json) {
 			process.stdout.write(`${JSON.stringify({ error: msg })}\n`);
 		} else {
@@ -880,8 +891,8 @@ async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<
 	);
 	if (scanRulePlans.length === 0) {
 		const msg = args.rule
-			? "Rule registered but produced no usable TTSR condition."
-			: "No usable TTSR rules registered for this project.";
+			? t(locale, "cli.commands.ttsr.noUsableEntry")
+			: t(locale, "cli.commands.ttsr.noUsableRules");
 		if (json) {
 			process.stdout.write(`${JSON.stringify({ error: msg })}\n`);
 		} else {
@@ -896,7 +907,6 @@ async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<
 	const files = await discoverScanFiles(scanDir, cwd, gitignore);
 	const emptySkipped: ScanSkipSummary = { binary: 0, large: 0, unreadable: 0, noRelevantRules: 0 };
 	if (files.length === 0) {
-		const msg = `No files found to scan in ${scanDir}`;
 		if (json) {
 			process.stdout.write(
 				`${JSON.stringify({
@@ -915,7 +925,7 @@ async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<
 				})}\n`,
 			);
 		} else {
-			process.stdout.write(`${chalk.yellow(msg)}\n`);
+			process.stdout.write(`${chalk.yellow(t("cli.commands.ttsr.scanNoFiles", { path: scanDir }))}\n`);
 		}
 		return;
 	}
@@ -1013,24 +1023,24 @@ async function runScan(args: TtsrScanArgs, json: boolean, cwd: string): Promise<
 		);
 	} else {
 		process.stdout.write(
-			`${chalk.bold("TTSR scan")} — directory=${chalk.cyan(scanDir)} files=${chalk.dim(files.length)} scanned=${chalk.dim(scannedFiles)} rules=${chalk.dim(scanRulePlans.length)} gitignore=${chalk.dim(gitignore ? "on" : "off")} max-bytes=${chalk.dim(maxBytes === 0 ? "off" : String(maxBytes))}\n`,
+			`${chalk.bold(t("cli.commands.ttsr.scanTitle"))} — directory=${chalk.cyan(scanDir)} files=${chalk.dim(files.length)} scanned=${chalk.dim(scannedFiles)} rules=${chalk.dim(scanRulePlans.length)} gitignore=${chalk.dim(gitignore ? "on" : "off")} max-bytes=${chalk.dim(maxBytes === 0 ? "off" : String(maxBytes))}\n`,
 		);
 		if (countSkipped(skipped) > 0) {
 			process.stdout.write(
-				`${chalk.dim(`  skipped: binary=${skipped.binary} large=${skipped.large} unreadable=${skipped.unreadable} no-relevant-rules=${skipped.noRelevantRules}`)}\n`,
+				`${chalk.dim(`  ${t("cli.commands.ttsr.skipped")}: binary=${skipped.binary} large=${skipped.large} unreadable=${skipped.unreadable} no-relevant-rules=${skipped.noRelevantRules}`)}\n`,
 			);
 		}
 
 		if (matchedFiles === 0) {
 			process.stdout.write(
-				`${chalk.green.bold("No rule matches found.")} (evaluated ${rules.length} rules on ${scannedFiles}/${files.length} files)\n`,
+				`${chalk.green.bold(t("cli.commands.ttsr.noMatches"))} ${t("cli.commands.ttsr.noMatchesSummary", { rules: rules.length, scanned: scannedFiles, files: files.length })}\n`,
 			);
 		} else {
 			process.stdout.write(
-				`${chalk.red.bold("Found violations/matches:")} (${totalMatches} matches across ${matchedFiles} files)\n`,
+				`${chalk.red.bold(t("cli.commands.ttsr.matches"))} ${t("cli.commands.ttsr.matchesSummary", { matches: totalMatches, files: matchedFiles })}\n`,
 			);
 			if (!includeDetails) {
-				process.stdout.write(`${chalk.dim("  rerun with --verbose to list matched files and conditions")}\n`);
+				process.stdout.write(`${chalk.dim(t("cli.commands.ttsr.verboseHint"))}\n`);
 				return;
 			}
 
@@ -1050,7 +1060,7 @@ export async function runTtsrCommand(cmd: TtsrCommandArgs): Promise<void> {
 	const cwd = getProjectDir();
 	if (cmd.action === "test") {
 		if (!cmd.test) {
-			process.stderr.write(`${chalk.red("error: `ttsr test` requires a snippet, --file, or piped stdin")}\n`);
+			process.stderr.write(`${chalk.red(t("cli.commands.ttsr.testArgsMissing"))}\n`);
 			process.exit(1);
 		}
 		await runTest(cmd.test, cmd.json ?? false, cwd);
@@ -1062,7 +1072,7 @@ export async function runTtsrCommand(cmd: TtsrCommandArgs): Promise<void> {
 	}
 	if (cmd.action === "scan") {
 		if (!cmd.scan) {
-			process.stderr.write(`${chalk.red("error: scan arguments missing")}\n`);
+			process.stderr.write(`${chalk.red(t("cli.commands.ttsr.scanArgsMissing"))}\n`);
 			process.exit(1);
 		}
 		await runScan(cmd.scan, cmd.json ?? false, cwd);

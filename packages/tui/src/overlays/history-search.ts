@@ -1,3 +1,4 @@
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Ellipsis, Input, matchesKey, padding, Spacer, truncateToWidth, visibleWidth } from "../index";
 import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
@@ -47,6 +48,7 @@ function nativeEntryKey(entry: HistorySearchEntry): string {
 }
 
 interface HistoryNativeMemo {
+	locale: Locale;
 	picker: boolean;
 	items: readonly HistorySearchEntry[];
 	selected: HistorySearchEntry | undefined;
@@ -150,7 +152,10 @@ class HistoryResultsList implements Component {
 		const items = this.#menu.visibleItems;
 
 		if (items.length === 0) {
-			const message = this.#tokens.length > 0 ? "No matching history" : "No history yet";
+			const message =
+				this.#tokens.length > 0
+					? t("overlays.history_search.history_search_no_matches")
+					: t("overlays.history_search.history_search_empty");
 			lines.push(theme.fg("muted", `  ${theme.status.info} ${message}`));
 			return lines;
 		}
@@ -217,7 +222,7 @@ export class HistorySearchComponent extends OverlayPanel {
 	#onRequestRender?: () => void;
 
 	constructor(historyStorage: HistorySource, onSelect: (prompt: string) => void, onCancel: () => void) {
-		super("History", "omp.overlay.history");
+		super(t("overlays.history_search.history_search_title"), "omp.overlay.history");
 		this.#historyStorage = historyStorage;
 		this.#onSelect = prompt => {
 			this.#cancelPendingSearch();
@@ -238,9 +243,9 @@ export class HistorySearchComponent extends OverlayPanel {
 
 		const dot = theme.fg("dim", theme.sep.dot);
 		const hint = [
-			rawKeyHint("enter", "select"),
-			rawKeyHint("delete", "delete entry"),
-			"/ search · Tab field/list · Esc field/list/close · ? help",
+			rawKeyHint("enter", t("tui.ask.hint.select")),
+			rawKeyHint("delete", t("overlays.history_search.history_search_delete_entry")),
+			t("overlays.history_search.history_search_controls"),
 		].join(dot);
 
 		this.addChild(new Spacer(1));
@@ -380,11 +385,13 @@ export class HistorySearchComponent extends OverlayPanel {
 		const items = this.#menu.visibleItems;
 		const selected = this.#menu.selectedItem;
 		const usePicker = cx.supports("picker");
+		const locale = getLocale();
 		const query = this.#searchInput.getValue();
 		const cursor = this.#searchInput.getCursor();
 		const memo = this.#nativeMemo;
 		if (
 			memo &&
+			memo.locale === locale &&
 			memo.picker === usePicker &&
 			memo.items === items &&
 			memo.selected === selected &&
@@ -398,6 +405,7 @@ export class HistorySearchComponent extends OverlayPanel {
 		if (usePicker) {
 			const root = col([keyed(this.#describePicker(items, selected, query), PICKER_KEY)]);
 			this.#nativeMemo = {
+				locale,
 				picker: true,
 				items,
 				selected,
@@ -427,7 +435,9 @@ export class HistorySearchComponent extends OverlayPanel {
 				{
 					selected: selected ? nativeEntryKey(selected) : null,
 					filter: this.#search.query || undefined,
-					empty: this.#search.query ? "No matching history" : "No history yet",
+					empty: this.#search.query
+						? t("overlays.history_search.history_search_no_matches")
+						: t("overlays.history_search.history_search_empty"),
 					max: { lines: MAX_VISIBLE },
 					virtual: true,
 				},
@@ -437,11 +447,16 @@ export class HistorySearchComponent extends OverlayPanel {
 			scroll: this.#nativeScroll,
 		};
 		this.#nativeHints = hintsRow([
-			{ keys: ["up", "down"], label: "navigate" },
-			{ keys: ENTER_KEYS, label: "select" },
-			{ keys: ["delete"], label: "delete entry" },
-			{ keys: ["/"], label: "search" },
-			{ keys: ["escape"], label: this.#search.focused ? "back to list" : "close" },
+			{ keys: ["up", "down"], label: t("overlays.native_hint.navigate") },
+			{ keys: ENTER_KEYS, label: t("tui.ask.hint.select") },
+			{ keys: ["delete"], label: t("overlays.history_search.history_search_delete_entry") },
+			{ keys: ["/"], label: t("overlays.history_search.history_search_search") },
+			{
+				keys: ["escape"],
+				label: this.#search.focused
+					? t("overlays.history_search.history_search_back_to_list")
+					: t("settings.selector.close"),
+			},
 		]);
 		const queryError = compileMenuRegex(query)?.error;
 		const root = overlayCard(this.nativeRole, this.title, [
@@ -451,6 +466,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			this.#nativeHints,
 		]);
 		this.#nativeMemo = {
+			locale,
 			picker: false,
 			items,
 			selected,
@@ -483,16 +499,16 @@ export class HistorySearchComponent extends OverlayPanel {
 			layout: "rows",
 			preview: "none",
 			...pickerQuery(this.#searchInput),
-			placeholder: "Search prompts…",
+			placeholder: t("overlays.history_search.history_search_placeholder"),
 			columns: [{ id: "when", format: "time" }],
 			items: rows.rows,
 			selected: selected ? nativeEntryKey(selected) : null,
-			empty: "No history yet",
+			empty: t("overlays.history_search.history_search_empty"),
 			actions: [
-				pickerAction("insert", "Insert", "enter", { primary: true }),
+				pickerAction("insert", t("overlays.history_search.history_search_insert"), "enter", { primary: true }),
 				pickerAction(
 					"close",
-					this.#search.focused ? "Back to list" : "Close",
+					this.#search.focused ? t("tui.picker.back_to_list") : t("tui.picker.close"),
 					boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape",
 					{ end: true },
 				),

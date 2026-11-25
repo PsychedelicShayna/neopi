@@ -12,21 +12,22 @@ import { copyToClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
 
-const USAGE = [
-	"Usage: /todo <verb> [args]",
-	"  /todo                              Show current todos",
-	"  /todo edit                         Open todos in $EDITOR",
-	"  /todo copy                         Copy todos as Markdown to clipboard",
-	"  /todo expand                       Show every phase and task in the HUD",
-	"  /todo collapse                     Restore the bounded HUD preview",
-	"  /todo export [<path>]              Write todos to file (default: TODO.md)",
-	"  /todo import [<path>]              Replace todos from file (default: TODO.md)",
-	"  /todo append [<phase>] <task...>   Append a task; phase fuzzy-matched or auto-created",
-	"  /todo start  <task>                Mark task in_progress (fuzzy content match)",
-	"  /todo done   [<task|phase>]        Mark task/phase/all completed",
-	"  /todo drop   [<task|phase>]        Mark task/phase/all abandoned",
-	"  /todo rm     [<task|phase>]        Remove task/phase/all",
-].join("\n");
+const usage = () =>
+	[
+		t("overlays.todo_command_controller.usage"),
+		t("overlays.todo_command_controller.help_show"),
+		t("overlays.todo_command_controller.help_edit"),
+		t("overlays.todo_command_controller.help_copy"),
+		t("overlays.todo_command_controller.help_expand"),
+		t("overlays.todo_command_controller.help_collapse"),
+		t("overlays.todo_command_controller.help_export"),
+		t("overlays.todo_command_controller.help_import"),
+		t("overlays.todo_command_controller.help_append"),
+		t("overlays.todo_command_controller.help_start"),
+		t("overlays.todo_command_controller.help_done"),
+		t("overlays.todo_command_controller.help_drop"),
+		t("overlays.todo_command_controller.help_remove"),
+	].join("\n");
 
 // =============================================================================
 // Argument tokenizer (respects double-quoted strings)
@@ -176,7 +177,7 @@ export class TodoCommandController {
 				return;
 			case "help":
 			case "?":
-				this.ctx.showStatus(USAGE);
+				this.ctx.showStatus(usage());
 				return;
 			case "append":
 				this.#append(rest);
@@ -194,14 +195,16 @@ export class TodoCommandController {
 				this.#remove(rest);
 				return;
 			default:
-				this.ctx.showError(`Unknown /todo verb "${verb}".\n${USAGE}`);
+				this.ctx.showError(
+					t("overlays.todo_command_controller.unknown_verb", { part1: `${verb}`, part2: `${usage()}` }),
+				);
 		}
 	}
 
 	#showCurrent(): void {
 		const phases = this.#currentPhases();
 		if (phases.length === 0) {
-			this.ctx.showStatus("No todos. Use /todo append <task> to start one.");
+			this.ctx.showStatus(t("overlays.todo_command_controller.none"));
 			return;
 		}
 		this.ctx.showStatus(phasesToMarkdown(phases).trimEnd());
@@ -210,12 +213,12 @@ export class TodoCommandController {
 	#copyMarkdown(): void {
 		const phases = this.#currentPhases();
 		if (phases.length === 0) {
-			this.ctx.showWarning("No todos to copy.");
+			this.ctx.showWarning(t("overlays.todo_command_controller.nothing_to_copy"));
 			return;
 		}
 		try {
 			copyToClipboard(phasesToMarkdown(phases));
-			this.ctx.showStatus("Copied todos as Markdown to clipboard.");
+			this.ctx.showStatus(t("overlays.todo_command_controller.copied"));
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -228,15 +231,19 @@ export class TodoCommandController {
 	async #exportToFile(rest: string): Promise<void> {
 		const phases = this.#currentPhases();
 		if (phases.length === 0) {
-			this.ctx.showWarning("No todos to export.");
+			this.ctx.showWarning(t("overlays.todo_command_controller.nothing_to_export"));
 			return;
 		}
 		try {
 			const target = this.#resolveTodoPath(rest);
 			await fs.writeFile(target, phasesToMarkdown(phases), "utf8");
-			this.ctx.showStatus(`Wrote todos to ${target}`);
+			this.ctx.showStatus(t("overlays.todo_command_controller.exported", { part1: `${target}` }));
 		} catch (error) {
-			this.ctx.showError(`Failed to write todos: ${error instanceof Error ? error.message : String(error)}`);
+			this.ctx.showError(
+				t("overlays.todo_command_controller.write_failed", {
+					part1: `${error instanceof Error ? error.message : String(error)}`,
+				}),
+			);
 		}
 	}
 
@@ -247,17 +254,29 @@ export class TodoCommandController {
 			source = this.#resolveTodoPath(rest);
 			content = await fs.readFile(source, "utf8");
 		} catch (error) {
-			this.ctx.showError(`Failed to read todos: ${error instanceof Error ? error.message : String(error)}`);
+			this.ctx.showError(
+				t("overlays.todo_command_controller.read_failed", {
+					part1: `${error instanceof Error ? error.message : String(error)}`,
+				}),
+			);
 			return;
 		}
 		const { phases, errors } = markdownToPhases(content);
 		if (errors.length > 0) {
-			this.ctx.showError(`Could not parse ${source}:\n  ${errors.join("\n  ")}`);
+			this.ctx.showError(
+				t("overlays.todo_command_controller.parse_failed", { part1: `${source}`, part2: `${errors.join("\n  ")}` }),
+			);
 			return;
 		}
 		this.#commit(phases, `/todo import ${source}`);
 		const taskCount = phases.reduce((sum, p) => sum + p.tasks.length, 0);
-		this.ctx.showStatus(`Imported ${phases.length} phase(s), ${taskCount} task(s) from ${source}.`);
+		this.ctx.showStatus(
+			t("overlays.todo_command_controller.imported", {
+				part1: `${phases.length}`,
+				part2: `${taskCount}`,
+				part3: `${source}`,
+			}),
+		);
 	}
 
 	// ------------------------------------------------------------- append
@@ -265,7 +284,7 @@ export class TodoCommandController {
 	#append(rest: string): void {
 		const tokens = tokenize(rest);
 		if (tokens.length === 0) {
-			this.ctx.showError("Usage: /todo append [<phase>] <task...>");
+			this.ctx.showError(t("overlays.todo_command_controller.append_usage"));
 			return;
 		}
 
@@ -303,20 +322,22 @@ export class TodoCommandController {
 		});
 
 		this.#commit(next, `/todo append → ${targetPhase.name}`);
-		this.ctx.showStatus(`Appended to ${targetPhase.name}: ${finalContent}`);
+		this.ctx.showStatus(
+			t("overlays.todo_command_controller.appended", { part1: `${targetPhase.name}`, part2: `${finalContent}` }),
+		);
 	}
 
 	// ------------------------------------------------------------- start / done / drop / rm
 
 	#start(rest: string): void {
 		if (!rest) {
-			this.ctx.showError("Usage: /todo start <task>");
+			this.ctx.showError(t("overlays.todo_command_controller.start_usage"));
 			return;
 		}
 		const current = this.#currentPhases();
 		const hit = findTaskFuzzy(current, rest);
 		if (!hit) {
-			this.ctx.showError(`No task matched "${rest}". Use /todo to list current tasks.`);
+			this.ctx.showError(t("overlays.todo_command_controller.task_not_found", { part1: `${rest}` }));
 			return;
 		}
 		const { phases, errors } = applyOpsToPhases(current, [{ op: "start", task: hit.task.content }]);
@@ -325,7 +346,7 @@ export class TodoCommandController {
 			return;
 		}
 		this.#commit(phases, `/todo start ${hit.task.content}`);
-		this.ctx.showStatus(`Started: ${hit.task.content}`);
+		this.ctx.showStatus(t("overlays.todo_command_controller.started", { part1: `${hit.task.content}` }));
 	}
 
 	#mutateStatus(rest: string, target: "completed" | "abandoned"): void {
@@ -342,7 +363,7 @@ export class TodoCommandController {
 				return;
 			}
 			this.#commit(phases, `/todo ${op} (all)`);
-			this.ctx.showStatus(`Marked all tasks ${target}.`);
+			this.ctx.showStatus(t("overlays.todo_command_controller.marked_all", { part1: `${target}` }));
 			return;
 		}
 
@@ -354,7 +375,9 @@ export class TodoCommandController {
 				return;
 			}
 			this.#commit(phases, `/todo ${op} ${taskHit.task.content}`);
-			this.ctx.showStatus(`Marked ${target}: ${taskHit.task.content}`);
+			this.ctx.showStatus(
+				t("overlays.todo_command_controller.marked_one", { part1: `${target}`, part2: `${taskHit.task.content}` }),
+			);
 			return;
 		}
 
@@ -366,11 +389,13 @@ export class TodoCommandController {
 				return;
 			}
 			this.#commit(phases, `/todo ${op} ${phaseHit.name}`);
-			this.ctx.showStatus(`Marked phase ${phaseHit.name} ${target}.`);
+			this.ctx.showStatus(
+				t("overlays.todo_command_controller.marked_phase", { part1: `${phaseHit.name}`, part2: `${target}` }),
+			);
 			return;
 		}
 
-		this.ctx.showError(`No task or phase matched "${trimmed}".`);
+		this.ctx.showError(t("overlays.todo_command_controller.task_phase_not_found", { part1: `${trimmed}` }));
 	}
 
 	#remove(rest: string): void {
@@ -378,7 +403,7 @@ export class TodoCommandController {
 		const trimmed = rest.trim();
 		if (!trimmed) {
 			this.#commit([], "/todo rm (all)", { removed: true });
-			this.ctx.showStatus("Cleared all todos.");
+			this.ctx.showStatus(t("overlays.todo_command_controller.cleared"));
 			return;
 		}
 		const taskHit = findTaskFuzzy(current, trimmed);
@@ -389,7 +414,7 @@ export class TodoCommandController {
 				return;
 			}
 			this.#commit(phases, `/todo rm ${taskHit.task.content}`, { removed: true });
-			this.ctx.showStatus(`Removed: ${taskHit.task.content}`);
+			this.ctx.showStatus(t("overlays.todo_command_controller.removed", { part1: `${taskHit.task.content}` }));
 			return;
 		}
 		const phaseHit = findPhaseFuzzy(current, trimmed);
@@ -400,10 +425,10 @@ export class TodoCommandController {
 				return;
 			}
 			this.#commit(phases, `/todo rm ${phaseHit.name}`, { removed: true });
-			this.ctx.showStatus(`Removed phase: ${phaseHit.name}`);
+			this.ctx.showStatus(t("overlays.todo_command_controller.removed_phase", { part1: `${phaseHit.name}` }));
 			return;
 		}
-		this.ctx.showError(`No task or phase matched "${trimmed}".`);
+		this.ctx.showError(t("overlays.todo_command_controller.task_phase_not_found", { part1: `${trimmed}` }));
 	}
 
 	// ------------------------------------------------------------- editor
@@ -424,20 +449,26 @@ export class TodoCommandController {
 		try {
 			const result = await openInEditor(editorCmd, initialMarkdown, { extension: ".todo.md", env });
 			if (result === null) {
-				this.ctx.showWarning("Editor exited without saving; todos unchanged.");
+				this.ctx.showWarning(t("overlays.todo_command_controller.editor_no_save"));
 				return;
 			}
 			const { phases: parsed, errors } = markdownToPhases(result);
 			if (errors.length > 0) {
-				this.ctx.showError(`Could not parse Markdown:\n  ${errors.join("\n  ")}`);
+				this.ctx.showError(
+					t("overlays.todo_command_controller.markdown_invalid", { part1: `${errors.join("\n  ")}` }),
+				);
 				return;
 			}
 			this.#commit(parsed, "/todo edit");
 			const taskCount = parsed.reduce((sum, p) => sum + p.tasks.length, 0);
-			this.ctx.showStatus(`Todos updated from editor: ${parsed.length} phase(s), ${taskCount} task(s).`);
+			this.ctx.showStatus(
+				t("overlays.todo_command_controller.editor_updated", { part1: `${parsed.length}`, part2: `${taskCount}` }),
+			);
 		} catch (error) {
 			this.ctx.showWarning(
-				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
+				t("overlays.todo_command_controller.editor_failed", {
+					part1: `${error instanceof Error ? error.message : String(error)}`,
+				}),
 			);
 		} finally {
 			this.ctx.ui.start();

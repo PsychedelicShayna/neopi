@@ -3,6 +3,7 @@
  * (Tern) and the rows of `/session`'s Prompt Cache section.
  */
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeStatusText } from "../chrome/shared";
 import type { PromptCacheColdReason, PromptCacheStatus, PromptCacheWarming } from "./host";
 
@@ -27,14 +28,17 @@ function when(at: number, nowMs: number): string {
 /** ` (in 41 min)` / ` (3 h ago)` / ` (12 days ago)`. */
 function relative(at: number, nowMs: number): string {
 	const minutes = Math.round(Math.abs(at - nowMs) / 60_000);
-	if (minutes === 0) return at >= nowMs ? " (in under a minute)" : " (just now)";
+	if (minutes === 0)
+		return at >= nowMs ? t("status.cache.relative.under_minute") : t("status.cache.relative.just_now");
 	const span =
 		minutes < 60
 			? `${minutes} min`
 			: minutes < 48 * 60
 				? `${Math.round(minutes / 60)} h`
-				: `${Math.round(minutes / (24 * 60))} days`;
-	return at >= nowMs ? ` (in ${span})` : ` (${span} ago)`;
+				: t("status.cache.days", { count: Math.round(minutes / (24 * 60)) });
+	return at >= nowMs
+		? t("status.cache.relative.future", { time: span })
+		: t("status.cache.relative.past", { time: span });
 }
 
 /**
@@ -44,22 +48,31 @@ function relative(at: number, nowMs: number): string {
 function coldReasonText(reason: PromptCacheColdReason, nowMs?: number): string {
 	switch (reason.kind) {
 		case "expired":
-			if (nowMs === undefined) return "expired";
-			return `expired ${sameDay(reason.at, nowMs) ? "at " : ""}${when(reason.at, nowMs)}${relative(reason.at, nowMs)}`;
+			if (nowMs === undefined) return t("status.cache.expired");
+			return t(sameDay(reason.at, nowMs) ? "status.cache.expired_at" : "status.cache.expired_on", {
+				time: when(reason.at, nowMs),
+				relative: relative(reason.at, nowMs),
+			});
 		case "refresh-missed":
-			return "omp's refresh found the entry gone";
+			return t("status.cache.refresh_missed");
 		case "model":
-			return `model changed: ${sanitizeStatusText(reason.from)} → ${sanitizeStatusText(reason.to)}`;
+			return t("status.cache.model_changed", {
+				from: sanitizeStatusText(reason.from),
+				to: sanitizeStatusText(reason.to),
+			});
 		case "thinking":
-			return `thinking level changed: ${sanitizeStatusText(reason.from)} → ${sanitizeStatusText(reason.to)}`;
+			return t("status.cache.thinking_changed", {
+				from: sanitizeStatusText(reason.from),
+				to: sanitizeStatusText(reason.to),
+			});
 		case "tools":
-			return "tool set changed";
+			return t("status.cache.tools_changed");
 		case "system-prompt":
-			return "system prompt changed";
+			return t("status.cache.prompt_changed");
 		case "retention":
-			return "cache retention setting changed";
+			return t("status.cache.retention_changed");
 		case "compaction":
-			return "context was compacted";
+			return t("status.cache.compacted");
 	}
 }
 
@@ -67,14 +80,18 @@ function warmingText(warming: PromptCacheWarming, nowMs: number): string {
 	switch (warming.state) {
 		case "scheduled": {
 			const next =
-				warming.nextWarmAt === undefined ? "refresh scheduled" : `next refresh ${when(warming.nextWarmAt, nowMs)}`;
-			return warming.stopsAt === undefined ? next : `${next}, gives up by ${when(warming.stopsAt, nowMs)}`;
+				warming.nextWarmAt === undefined
+					? t("status.cache.refresh_scheduled")
+					: t("status.cache.next_refresh", { time: when(warming.nextWarmAt, nowMs) });
+			return warming.stopsAt === undefined
+				? next
+				: t("status.cache.refresh_until", { next, time: when(warming.stopsAt, nowMs) });
 		}
 		case "refreshing":
-			return "refreshing now";
+			return t("status.cache.refreshing");
 		case "inactive": {
 			const reason = warming.reason === undefined ? "" : sanitizeStatusText(warming.reason);
-			return reason ? `off: ${reason}` : "off";
+			return reason ? t("status.cache.off_reason", { reason }) : t("status.cache.off");
 		}
 	}
 }
@@ -92,9 +109,9 @@ function resendText(status: PromptCacheStatus): string {
 		case "refresh-missed":
 		case "model":
 		case "tools":
-			return `re-sends ${tokens}`;
+			return t("status.cache.resends", { tokens });
 		default:
-			return `re-sends up to ${tokens}`;
+			return t("status.cache.resends_up_to", { tokens });
 	}
 }
 
@@ -105,50 +122,71 @@ function resendText(status: PromptCacheStatus): string {
 export function promptCacheBrief(status: PromptCacheStatus, nowMs: number): readonly [string, string] {
 	if (status.state === "cold") {
 		const why = status.reason ? ` — ${coldReasonText(status.reason)}` : "";
-		return [`Not cached${why}`, `Next message ${resendText(status)}`];
+		return [
+			t("status.cache.cold_header", { why }),
+			t("status.cache.next_message_resend", { resend: resendText(status) }),
+		];
 	}
-	const cached = status.inferred ? "Likely cached" : "Cached";
-	const until = status.ttlMs === undefined ? ", no expiry" : ` until ${when(status.touchedAt + status.ttlMs, nowMs)}`;
+	const cached = status.inferred ? t("status.cache.likely_cached") : t("status.cache.cached");
+	const until =
+		status.ttlMs === undefined
+			? t("status.cache.no_expiry_suffix")
+			: t("status.cache.until", { time: when(status.touchedAt + status.ttlMs, nowMs) });
 	const reads = formatNumber(Math.min(status.cachedTokens, status.nextTokens));
-	return [`${cached}${until}`, `Next message reads ~${reads} from cache`];
+	return [`${cached}${until}`, t("status.cache.next_read", { reads })];
 }
 
 /** The `/session` rows, in display order; times say how long ago or ahead of `nowMs` they are. */
 export function promptCacheDetails(status: PromptCacheStatus, nowMs: number): PromptCacheDetailRow[] {
 	const tier: PromptCacheDetailRow = {
-		label: "Tier",
-		value: status.ttlMs === undefined ? "no expiry" : formatDuration(status.ttlMs),
+		label: t("status.cache.tier"),
+		value: status.ttlMs === undefined ? t("status.cache.no_expiry") : formatDuration(status.ttlMs),
 	};
 	const warming: PromptCacheDetailRow[] = status.warming
-		? [{ label: "Warming", value: warmingText(status.warming, nowMs) }]
+		? [{ label: t("status.cache.warming"), value: warmingText(status.warming, nowMs) }]
 		: [];
 	if (status.state === "cold") {
 		return [
-			{ label: "State", value: "Not cached", tone: "warning" },
+			{ label: t("status.cache.state"), value: t("status.cache.not_cached"), tone: "warning" },
 			...(status.reason
-				? [{ label: "Why not cached", value: coldReasonText(status.reason, nowMs), tone: "warning" as const }]
+				? [
+						{
+							label: t("status.cache.why_not_cached"),
+							value: coldReasonText(status.reason, nowMs),
+							tone: "warning" as const,
+						},
+					]
 				: []),
 			tier,
 			...warming,
-			{ label: "Next message", value: `${resendText(status)} uncached` },
+			{
+				label: t("status.cache.next_message"),
+				value: t("status.cache.resend_uncached", { resend: resendText(status) }),
+			},
 		];
 	}
 	const expiresAt = status.ttlMs === undefined ? undefined : status.touchedAt + status.ttlMs;
 	const reads = Math.min(status.cachedTokens, status.nextTokens);
 	return [
-		{ label: "State", value: status.inferred ? "Likely cached" : "Cached" },
 		{
-			label: "Expires",
+			label: t("status.cache.state"),
+			value: status.inferred ? t("status.cache.likely_cached") : t("status.cache.cached"),
+		},
+		{
+			label: t("status.cache.expires"),
 			value:
 				expiresAt === undefined
-					? "never (the provider keeps it)"
+					? t("status.cache.never")
 					: `${when(expiresAt, nowMs)}${relative(expiresAt, nowMs)}`,
 		},
 		tier,
 		...warming,
 		{
-			label: "Next message",
-			value: `reads ~${formatNumber(reads)} from cache, sends ~${formatNumber(status.nextTokens - reads)} new`,
+			label: t("status.cache.next_message"),
+			value: t("status.cache.read_send", {
+				reads: formatNumber(reads),
+				newTokens: formatNumber(status.nextTokens - reads),
+			}),
 		},
 	];
 }

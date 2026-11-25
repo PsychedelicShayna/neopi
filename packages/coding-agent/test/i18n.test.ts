@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
+import * as i18n from "@oh-my-pi/pi-utils/i18n";
 import { getCatalog, getLocale, setLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import { getSettingDef, type SettingsDisplayEntry } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { cfgLanguage } from "../src/modes/settings";
 
-afterEach(() => setLocale("en"));
+afterEach(() => {
+	vi.restoreAllMocks();
+	setLocale("en");
+});
 
 describe("localization catalogs", () => {
 	test("defaults to English and resolves bundled catalogs", () => {
@@ -57,6 +61,13 @@ describe("localization catalogs", () => {
 			},
 		];
 		setLocale("es");
+		const spanish = i18n.getCatalogOverrides("es");
+		const {
+			"settings.setting.git.enabled.label": _label,
+			"settings.setting.git.enabled.description": _description,
+			...withoutGit
+		} = spanish;
+		vi.spyOn(i18n, "getCatalogOverrides").mockReturnValue(withoutGit);
 		expect(getSettingDef(entries, "git.enabled")).toMatchObject({
 			label: "Git integration",
 			description: "Current host description",

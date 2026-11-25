@@ -29,17 +29,22 @@ import type {
 	MixtureTraceDetails,
 	TransitPartName,
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import type { TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import type { RoleChainCandidate } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import type { JudgeKind, JudgmentUsage } from "../judgment";
 import type { MixtureRunStore } from "./run-store";
 import type { PreparedDocumentPresets } from "./validate";
 
+/** Interpolation metadata survives path-prefix spreads but is not serialized on existing issue payloads. */
+export const mixtureIssueValues = Symbol("mixtureIssueValues");
+
 /** A validation or resolution finding. */
 export interface MixtureIssue {
 	code: string;
 	path: string;
 	message: string;
+	[mixtureIssueValues]?: TranslationValues;
 }
 
 /** Effective tool policy of a model member: none, all caller tools, or an allow-list. */

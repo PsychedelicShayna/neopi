@@ -13,7 +13,7 @@ import { code, col, keyed } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { getLanguageFromPath } from "../lang-from-path";
 import { fileHyperlink, uriHyperlink } from "../render/hyperlink";
-import { FILE_NAME_COLOR, formatMoreItems, formatStyledPath, replaceTabs } from "../render/render-utils";
+import { formatMoreItems, FILE_NAME_COLOR, formatStyledPath, replaceTabs } from "../render/render-utils";
 import { highlightCode, isHighlightLanguage, type Theme, type ThemeColor } from "../theme/theme";
 import { formatHashlineHeader, HASHLINE_TAG_SUFFIX_RE } from "./hashline-format";
 import { fileRow } from "./native-view";

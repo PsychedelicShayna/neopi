@@ -1,4 +1,8 @@
-const USAGE = "Usage: /marketplace install [--force] [--scope user|project] <name@marketplace>";
+import { t } from "@oh-my-pi/pi-utils/i18n";
+
+function marketplaceInstallUsage(): string {
+	return t("commands.marketplaceParser.usage");
+}
 
 export interface MarketplaceInstallArgs {
 	force: boolean;
@@ -32,23 +36,30 @@ export function parseMarketplaceInstallArgs(rest: string): MarketplaceInstallArg
 			if (s === "user" || s === "project") {
 				scope = s;
 			} else {
-				return { error: `Invalid --scope value: "${s}". Must be "user" or "project".` };
+				return { error: t("commands.marketplaceParser.invalidScope", { scope: s }) };
 			}
 		} else if (tokens[i] === "--scope") {
 			// --scope with no value, or next token is another flag
-			return { error: '--scope requires a value: "user" or "project".' };
+			return { error: t("commands.marketplaceParser.missingScope") };
 		} else if (tokens[i].startsWith("-")) {
-			return { error: `Unknown flag: "${tokens[i]}". ${USAGE}` };
+			return {
+				error: t("commands.marketplaceParser.unknownFlag", { flag: tokens[i], usage: marketplaceInstallUsage() }),
+			};
 		} else {
 			if (installSpec) {
-				return { error: `Unexpected argument: "${tokens[i]}". ${USAGE}` };
+				return {
+					error: t("commands.marketplaceParser.unexpectedArgument", {
+						argument: tokens[i],
+						usage: marketplaceInstallUsage(),
+					}),
+				};
 			}
 			installSpec = tokens[i];
 		}
 	}
 
 	if (!installSpec.includes("@")) {
-		return { error: USAGE };
+		return { error: marketplaceInstallUsage() };
 	}
 
 	return { force, scope, installSpec };
@@ -78,14 +89,16 @@ export function parsePluginScopeArgs(rest: string, usageHint: string): PluginSco
 			if (s === "user" || s === "project") {
 				scope = s;
 			} else {
-				return { error: `Invalid --scope value: "${s}". Must be "user" or "project".` };
+				return { error: t("commands.marketplaceParser.invalidScope", { scope: s }) };
 			}
 		} else if (tokens[i] === "--scope") {
-			return { error: '--scope requires a value: "user" or "project".' };
+			return { error: t("commands.marketplaceParser.missingScope") };
 		} else if (tokens[i].startsWith("-")) {
-			return { error: `Unknown flag: "${tokens[i]}". ${usageHint}` };
+			return { error: t("commands.marketplaceParser.unknownFlag", { flag: tokens[i], usage: usageHint }) };
 		} else if (pluginId) {
-			return { error: `Unexpected argument: "${tokens[i]}". ${usageHint}` };
+			return {
+				error: t("commands.marketplaceParser.unexpectedArgument", { argument: tokens[i], usage: usageHint }),
+			};
 		} else {
 			pluginId = tokens[i];
 		}

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { BackgroundTanDispatchDetails, CustomMessage } from "./messages";
 import { replaceTabs } from "../render/render-utils";
 import { theme } from "../theme";
@@ -23,12 +24,19 @@ export function createBackgroundTanDispatchBlock(message: CustomMessage<unknown>
 	const details = (message as CustomMessage<Partial<BackgroundTanDispatchDetails>>).details;
 	const jobId = details?.jobId ?? "unknown";
 	const work = details?.work ? previewWork(details.work) : undefined;
-	const spans = [span("Tangent dispatched"), span(" · ", "dim"), span(`task ${jobId}`, "dim")];
+	const spans = [
+		span(t("overlays.background_tan_message.tangent_dispatched")),
+		span(" · ", "dim"),
+		span(t("overlays.background_tan_message.task_id", { jobId: `${jobId}` }), "dim"),
+	];
 	if (work) spans.push(span(" · ", "dim"), span(work, "dim"));
 	return new TranscriptStatusBlock([
 		{
 			parts: [
-				{ text: `${theme.icon.output} Tangent dispatched`, color: "muted" },
+				{
+					text: t("overlays.background_tan_message.tangent_dispatched_icon", { output: `${theme.icon.output}` }),
+					color: "muted",
+				},
 				{ text: "[task]", color: "dim" },
 				{ text: jobId, color: "accent" },
 				work ? { text: `${theme.format.dash} ${work}`, color: "dim" } : undefined,

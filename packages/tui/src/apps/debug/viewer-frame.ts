@@ -24,7 +24,7 @@ export interface DebugViewerFrameContext {
 }
 
 export interface DebugViewerFrameOptions {
-	readonly title: string;
+	readonly title: string | (() => string);
 	readonly getHeight: () => number;
 	readonly headerRows: number;
 	readonly footerRows: number;
@@ -69,7 +69,7 @@ export class DebugViewerFrame implements Component {
 			followTail: this.#followTail,
 			theme: { track: text => theme.fg("muted", text), thumb: text => theme.fg("accent", text) },
 		});
-		this.#panel = new OverlayPanel(options.title);
+		this.#panel = new OverlayPanel(typeof options.title === "string" ? options.title : "");
 		this.#panel.addChild(this.#header);
 		this.#panel.addChild(new PanelDivider());
 		this.#panel.addChild(this.#viewport);
@@ -175,6 +175,7 @@ export class DebugViewerFrame implements Component {
 			? { ...frame.body.anchor, oversized: "start" }
 			: undefined;
 		if (this.#viewport.revealRange(anchor, context.contentWidth)) this.setFollowTail(false);
+		this.#panel.title = typeof this.#options.title === "function" ? this.#options.title() : this.#options.title;
 		return this.#panel.render(frameWidth);
 	}
 

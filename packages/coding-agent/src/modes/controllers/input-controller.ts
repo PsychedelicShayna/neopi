@@ -10,7 +10,6 @@ import {
 	emergencyTerminalRestore,
 	isKeyRelease,
 	isKeyRepeat,
-	type KeyId,
 	matchesKey,
 	parseKey,
 	parseSgrMouse,
@@ -18,7 +17,7 @@ import {
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
 import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
-import { t } from "@oh-my-pi/pi-utils/i18n";
+import { t, t as translate } from "@oh-my-pi/pi-utils/i18n";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
@@ -69,7 +68,6 @@ import type { DequeuedMessage, RestoredQueuedMessage } from "../../session/agent
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { PINNED_HUD_TOGGLE_ID } from "../../task/output-manager";
 import { pickRecentFocusableAgentId } from "./session-focus-controller";
-import type { SidePanelView } from "./side-panel-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
@@ -124,9 +122,6 @@ import { cfgChainingActive, cfgChainingAuto } from "../../chains/settings";
 
 /** Bare words that quit (as `/<word>`) when typed alone into a session with no messages. */
 const BARE_EXIT_WORDS: Record<string, true> = { exit: true, quit: true, q: true };
-
-const REMOTE_CLIPBOARD_STATUS =
-	"Clipboard here belongs to the SSH host — use your terminal's paste shortcut to paste from your machine";
 
 function cancelsDeferredInput(command: ReturnType<typeof parseSlashCommand>): boolean {
 	return command?.name === "defer" && /^cancel(?:\s|$)/.test(command.args);
@@ -269,17 +264,8 @@ function safeAbort(label: string, fn: () => void): void {
 // Three or more rapid taps are likewise treated as a burst, not a gesture. A
 // deliberate human double-tap is always tens of milliseconds apart.
 /** Status when a submit holds because a voice handoff of the same speech just landed. */
-const LIVE_HANDOFF_HOLD_STATUS = "A voice handoff just reached the main agent; review the draft before sending";
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
-/** How long `app.sidebar.toggle` waits for the view key before the chord lapses. */
-const SIDEBAR_CHORD_TIMEOUT_MS = 2000;
-/** View keys after the chord prefix; the alt form works while the modifier is still held. */
-const SIDEBAR_CHORD_KEYS: readonly (readonly [SidePanelView, readonly KeyId[]])[] = [
-	["todo", ["t", "alt+t"]],
-	["agents", ["a", "alt+a"]],
-	["irc", ["i", "alt+i"]],
-];
 
 /** Chain step outputs longer than this show as a collapsed paste chip while the lock holds them. */
 const CHAIN_DISPLAY_COLLAPSE_CHARS = 8_000;
@@ -399,9 +385,6 @@ export class InputController {
 	#submissionHookOrder: Promise<void> = Promise.resolve();
 	/** Submissions (Enter or the follow-up key) the session has not admitted yet and that still dispatch locally. */
 	readonly #submissionDispatches = new Set<Promise<void>>();
-
-	/** Expiry timer of a pending `app.sidebar.toggle` chord prefix; undefined when none is pending. */
-	#sidebarChordTimer: NodeJS.Timeout | undefined;
 
 	/** Return the last full editor snapshot delivered by its change contract. */
 	getDraftText(): string {
@@ -524,12 +507,8 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
-				const chordView = this.#takeSidebarChord(data);
-				if (chordView === "cancel") return { consume: true };
-				if (chordView !== undefined) {
-					this.ctx.sidePanel.showView(chordView);
-					return { consume: true };
-				}
+				const panel = this.ctx.sidePanel;
+				if (panel?.active && panel.handleChordInput(data)) return { consume: true };
 				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
 					// The inline tree selector binds Alt+T to its no-tools filter; its
 					// own binding stays authoritative, as for Alt+L above.
@@ -538,7 +517,7 @@ export class InputController {
 					// overlay; under any other overlay, including a dialog stacked above
 					// the form, the focused component keeps the key.
 					if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenActive) return undefined;
-					this.#startSidebarChord();
+					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.ctx.sidePanel.openWithChord();
 					return { consume: true };
 				}
 				if (
@@ -851,12 +830,13 @@ export class InputController {
 		// The ask above the composer answers to its keys from here too, in every composer state.
 		for (const key of this.ctx.keybindings.getKeys("app.ask.hide")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (!this.ctx.toggleAskHidden()) this.ctx.showStatus("No question is waiting");
+				if (!this.ctx.toggleAskHidden())
+					this.ctx.showStatus(translate("overlays.input_controller.no_question_waiting"));
 			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.ask.cancel")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (!this.ctx.cancelAsk()) this.ctx.showStatus("No question is waiting");
+				if (!this.ctx.cancelAsk()) this.ctx.showStatus(translate("overlays.input_controller.no_question_waiting"));
 			});
 		}
 
@@ -1055,37 +1035,6 @@ export class InputController {
 		}
 	}
 
-	/** Arm the side-panel chord: the next key picks a view, until it expires. */
-	#startSidebarChord(): void {
-		clearTimeout(this.#sidebarChordTimer);
-		this.#sidebarChordTimer = setTimeout(() => {
-			this.#sidebarChordTimer = undefined;
-		}, SIDEBAR_CHORD_TIMEOUT_MS);
-		this.#sidebarChordTimer.unref?.();
-		const prefix = appKey(this.ctx.keybindings, "app.sidebar.toggle");
-		this.ctx.showStatus(`Side panel (${prefix}): t todo · a agents · i IRC · esc cancel`);
-	}
-
-	/**
-	 * Resolve the key after an armed chord prefix: the view it picks, `"cancel"`
-	 * for Escape (consumed), or undefined when no chord is pending or the key is
-	 * not a view key. Any other key ends the chord and keeps its usual meaning.
-	 * Mouse reports and key releases pass through without ending it.
-	 */
-	#takeSidebarChord(data: string): SidePanelView | "cancel" | undefined {
-		if (this.#sidebarChordTimer === undefined) return undefined;
-		if (data.startsWith("\x1b[<") || isKeyRelease(data)) return undefined;
-		clearTimeout(this.#sidebarChordTimer);
-		this.#sidebarChordTimer = undefined;
-		// An overlay that opened meanwhile owns its keys, except the fullscreen panel.
-		if (this.ctx.ui.hasOverlay() && !this.ctx.sidePanel.fullscreenActive) return undefined;
-		if (matchesKey(data, "escape")) return "cancel";
-		for (const [view, keys] of SIDEBAR_CHORD_KEYS) {
-			if (keys.some(key => matchesKey(data, key))) return view;
-		}
-		return undefined;
-	}
-
 	#handleFocusedLeftTap(): void {
 		if (this.#detectLeftDoubleTap()) {
 			void this.ctx.unfocusSession();
@@ -1147,7 +1096,8 @@ export class InputController {
 		}
 		if (this.ctx.keybindings.matches(data, "app.links.hint") || matchesKey(data, "pageUp")) {
 			// Leaves link-hint mode whether or not the browser opens.
-			if (!this.ctx.openLinkBrowser()) this.ctx.showStatus("No extension links in the transcript");
+			if (!this.ctx.openLinkBrowser())
+				this.ctx.showStatus(translate("overlays.input_controller.no_extension_links"));
 			return { consume: true };
 		}
 		const key = parseKey(data);
@@ -1218,7 +1168,7 @@ export class InputController {
 		// what the click displayed.
 		const nextId = pickRecentFocusableAgentId(scoped, this.ctx.focusedAgentId);
 		if (nextId === undefined) {
-			this.ctx.showStatus("That subagent is gone — open the hub for live agents");
+			this.ctx.showStatus(translate("overlays.input_controller.subagent_gone"));
 			return;
 		}
 		this.#focusResolvedAgent(nextId);
@@ -1273,18 +1223,21 @@ export class InputController {
 			pasteText: text => {
 				const focused = this.ctx.ui.getFocused();
 				if ((!focused || focused === this.ctx.editor) && this.ctx.editor.chainLocked) {
-					this.ctx.showStatus("The composer is locked while a chain runs");
+					this.ctx.showStatus(translate("overlays.input_controller.composer_chain_locked"));
 					return;
 				}
 				this.#pasteTextIntoFocus(text);
 			},
 			pasteImage: async image => {
 				if (this.ctx.editor.chainLocked && this.ctx.ui.getFocused() === this.ctx.editor) {
-					this.ctx.showStatus("The composer is locked while a chain runs");
+					this.ctx.showStatus(translate("overlays.input_controller.composer_chain_locked"));
 					return;
 				}
 				await this.#pasteImageIntoFocus(sink =>
-					sink.attach(image, `Unsupported pasted image format: ${image.mimeType}`),
+					sink.attach(
+						image,
+						translate("overlays.input_controller.unsupported_pasted_image", { mimeType: `${image.mimeType}` }),
+					),
 				);
 			},
 			// Styled text goes where images do: the composer, or a prompt that takes them.
@@ -1294,7 +1247,7 @@ export class InputController {
 			},
 			pasteHtml: html => {
 				if (this.ctx.editor.chainLocked && this.ctx.ui.getFocused() === this.ctx.editor) {
-					this.ctx.showStatus("The composer is locked while a chain runs");
+					this.ctx.showStatus(translate("overlays.input_controller.composer_chain_locked"));
 					return;
 				}
 				void this.#pasteHtml(html);
@@ -1556,7 +1509,10 @@ export class InputController {
 				this.#armedBareCommand = { text, sessionId: this.ctx.sessionManager.getSessionId() };
 				this.ctx.editor.setText(text);
 				this.ctx.showStatus(
-					`Press Enter again to run ${bareSlashCommand.command}; add a leading space to send "${text}" as a message`,
+					translate("overlays.input_controller.confirm_command", {
+						command: `${bareSlashCommand.command}`,
+						text: `${text}`,
+					}),
 				);
 				if (forceChain) this.#chainNextSubmit = true;
 				return;
@@ -1575,16 +1531,24 @@ export class InputController {
 					: undefined;
 			if (unknownSlash) {
 				this.#unknownSlashWarned = text;
-				const hint = unknownSlash.suggestion ? ` Did you mean /${unknownSlash.suggestion}?` : "";
+				const hint = unknownSlash.suggestion
+					? translate("overlays.input_controller.command_suggestion", { suggestion: `${unknownSlash.suggestion}` })
+					: "";
 				if (this.ctx.editor.getText()) {
 					// An input hook may have awaited while the operator started a new draft.
 					this.ctx.editor.addToHistory(text);
 					this.ctx.showWarning(
-						`Unknown command /${unknownSlash.name}.${hint} New draft kept; previous command saved to history (Up) for confirmation.`,
+						translate("overlays.input_controller.unknown_command_draft", {
+							name: `${unknownSlash.name}`,
+							hint: `${hint}`,
+						}),
 					);
 				} else {
 					this.ctx.showWarning(
-						`Unknown command /${unknownSlash.name}.${hint} Press Enter again to send it as a message.`,
+						translate("overlays.input_controller.unknown_command_confirm", {
+							name: `${unknownSlash.name}`,
+							hint: `${hint}`,
+						}),
 					);
 					if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 				}
@@ -1635,7 +1599,9 @@ export class InputController {
 			// executeBuiltinSlashCommand, which already consumed allowed ones).
 			if (this.ctx.collabGuest) {
 				if (text.startsWith("/")) {
-					this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+					this.ctx.showStatus(
+						translate("overlays.input_controller.command_host_only", { value: `${text.split(/\s+/, 1)[0]}` }),
+					);
 					this.ctx.editor.setText(deferred ? text : "");
 					return;
 				}
@@ -1643,13 +1609,13 @@ export class InputController {
 					text.startsWith("!") ||
 					parseReplEvalInput(text, this.ctx.session.extensionRunner?.getEvalBackendAliases())
 				) {
-					this.ctx.showStatus("Local execution is host-only during a collab session");
+					this.ctx.showStatus(translate("overlays.input_controller.execution_host_only"));
 					this.ctx.editor.setText(deferred ? text : "");
 					return;
 				}
 				if (this.ctx.collabGuest.readOnly) {
 					// Keep the typed text: the prompt was not consumed.
-					this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+					this.ctx.showStatus(translate("overlays.input_controller.collab_read_only"));
 					if (deferred) this.ctx.editor.setText(text);
 					return;
 				}
@@ -1708,7 +1674,9 @@ export class InputController {
 				if (command) {
 					if (this.ctx.session.isBashRunning) {
 						this.ctx.showWarning(
-							`A bash command is already running. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+							translate("overlays.input_controller.bash_running", {
+								appKey: `${appKey(this.ctx.keybindings, "app.interrupt")}`,
+							}),
 						);
 						this.ctx.editor.setText(text);
 						return;
@@ -1726,7 +1694,10 @@ export class InputController {
 			if (evalCommand) {
 				if (this.ctx.session.isEvalLanguageRunning(evalCommand.language)) {
 					this.ctx.showWarning(
-						`The ${evalCommand.language} kernel is busy. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+						translate("overlays.input_controller.kernel_busy", {
+							language: `${evalCommand.language}`,
+							appKey: `${appKey(this.ctx.keybindings, "app.interrupt")}`,
+						}),
 					);
 					this.ctx.editor.setText(text);
 					return;
@@ -1955,7 +1926,7 @@ export class InputController {
 		// The draft as displayed, spoken spans included, so the landing handoff can still remove
 		// its speech from it.
 		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
-		this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
+		this.ctx.showStatus(translate("overlays.input_controller.voice_handoff_hold"));
 	}
 
 	/** Chain keybinding: submit the composer through the active chain once. */
@@ -1968,7 +1939,7 @@ export class InputController {
 		if (target === "agent") return;
 		const restore = () => this.ctx.editor.setText(code);
 		if (this.ctx.collabGuest) {
-			this.ctx.showStatus("Local execution is host-only during a collab session");
+			this.ctx.showStatus(translate("overlays.input_controller.execution_host_only"));
 			restore();
 			return;
 		}
@@ -1979,7 +1950,9 @@ export class InputController {
 		if (target === "bash") {
 			if (this.ctx.session.isBashRunning) {
 				this.ctx.showWarning(
-					`A bash command is already running. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+					translate("overlays.input_controller.bash_running", {
+						appKey: `${appKey(this.ctx.keybindings, "app.interrupt")}`,
+					}),
 				);
 				restore();
 				return;
@@ -1991,7 +1964,10 @@ export class InputController {
 		}
 		if (this.ctx.session.isEvalLanguageRunning(target)) {
 			this.ctx.showWarning(
-				`The ${target} kernel is busy. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+				translate("overlays.input_controller.kernel_busy_2", {
+					target: `${target}`,
+					appKey: `${appKey(this.ctx.keybindings, "app.interrupt")}`,
+				}),
 			);
 			restore();
 			return;
@@ -2033,7 +2009,7 @@ export class InputController {
 		// displayed so the lock has something to shimmer.
 		if (this.ctx.editor.getText().trim()) {
 			this.ctx.editor.rememberDraft();
-			this.ctx.showStatus("Text typed during submit saved to history (Up)");
+			this.ctx.showStatus(translate("overlays.input_controller.submit_text_saved"));
 		}
 		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.editor.setChainLock({
@@ -2101,13 +2077,17 @@ export class InputController {
 			return { text: result, send: true };
 		} catch (error) {
 			if (control.signal.aborted) {
-				this.ctx.showStatus("Chain aborted; draft restored");
+				this.ctx.showStatus(translate("overlays.input_controller.chain_aborted"));
 				return { text, send: false };
 			}
 			const failedStep = sanitizeStatusText(progress?.step ?? enabledChainSteps(chain)[0]?.name ?? "");
 			// Not showError: it clears the loading state of a primary turn that may be streaming.
 			this.ctx.showWarning(
-				`Chain ${sanitizeStatusText(chain.name)} failed at step "${failedStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}`,
+				translate("overlays.input_controller.chain_failed", {
+					name: `${sanitizeStatusText(chain.name)}`,
+					failedStep: `${failedStep}`,
+					message: `${error instanceof Error ? error.message : String(error)}`,
+				}),
 			);
 			return { text: lastOutput, send: false };
 		} finally {
@@ -2122,19 +2102,19 @@ export class InputController {
 		const { chains, warnings } = await discoverChains(this.ctx.sessionManager.getCwd(), getAgentDir());
 		if (warnings.length > 0) this.ctx.showWarning(`CHAINS.yml: ${warnings.join("; ")}`);
 		if (chains.length === 0) {
-			this.ctx.showWarning("No post-processing chains defined. Create one with /chain configure.");
+			this.ctx.showWarning(translate("overlays.input_controller.no_chains"));
 			return undefined;
 		}
 		const activeName = cfgChainingActive.get(settings);
 		const active = chains.find(chain => chain.name === activeName);
 		if (active) return active;
-		const choice = await this.ctx.showHookSelector("Post-processing chain", [
-			...chains.map(chain => chain.name),
-			SEND_WITHOUT_CHAIN,
+		const choice = await this.ctx.showHookSelector(translate("overlays.input_controller.chain_selector"), [
+			...chains.map(chain => ({ value: `chain:${chain.name}`, label: chain.name })),
+			{ value: "without-chain", label: translate("overlays.input_controller.send_without_chain") },
 		]);
 		if (choice === undefined) return undefined;
-		if (choice === SEND_WITHOUT_CHAIN) return SEND_WITHOUT_CHAIN;
-		const picked = chains.find(chain => chain.name === choice);
+		if (choice === "without-chain") return SEND_WITHOUT_CHAIN;
+		const picked = chains.find(chain => `chain:${chain.name}` === choice);
 		if (picked) cfgChainingActive.set(settings, picked.name);
 		return picked;
 	}
@@ -2352,7 +2332,10 @@ export class InputController {
 				parseReplEvalInput(text, this.ctx.session.extensionRunner?.getEvalBackendAliases()))
 		) {
 			this.ctx.showStatus(
-				`Only ${FOCUSED_VIEW_COMMAND_LIST} run here; other commands run in the main session — press ${formatDoubleTap("left")} to return first`,
+				translate("overlays.input_controller.focused_commands", {
+					FOCUSED_VIEW_COMMAND_LIST: `${FOCUSED_VIEW_COMMAND_LIST}`,
+					value: `${formatDoubleTap("left")}`,
+				}),
 			);
 			return; // editor text not cleared: Editor does not auto-clear on submit
 		}
@@ -2496,7 +2479,9 @@ export class InputController {
 		// shape for SIGSTOP). No-op on platforms that cannot suspend.
 		if (process.platform === "win32") {
 			this.ctx.showStatus(
-				`Suspend (${appKey(this.ctx.keybindings, "app.suspend")}) is not supported on this platform`,
+				translate("overlays.input_controller.suspend_unsupported", {
+					appKey: `${appKey(this.ctx.keybindings, "app.suspend")}`,
+				}),
 			);
 			return;
 		}
@@ -2550,14 +2535,14 @@ export class InputController {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
 			const reason = err instanceof Error ? err.message : String(err);
-			this.ctx.showError(`Failed to suspend: ${reason}`);
+			this.ctx.showError(translate("overlays.input_controller.suspend_failed", { reason: `${reason}` }));
 		}
 	}
 
 	handleDequeue(): void {
 		const popped = this.#popLastQueuedMessage();
 		if (!popped) {
-			this.ctx.showStatus("No queued messages to restore");
+			this.ctx.showStatus(translate("overlays.input_controller.no_queued_messages"));
 			return;
 		}
 		// Drop only the popped message's local-submission signature; the messages
@@ -2565,7 +2550,7 @@ export class InputController {
 		// as local and does not blank the editor the dequeue just restored to.
 		this.ctx.locallySubmittedUserSignatures.delete(`${popped.text}\u0000${popped.images?.length ?? 0}`);
 		this.#restoreEntriesToEditor([popped], { queued: this.#restoresAsQueued(popped) });
-		this.ctx.showStatus("Restored last queued message to editor");
+		this.ctx.showStatus(translate("overlays.input_controller.queued_message_restored"));
 	}
 
 	/**
@@ -2669,13 +2654,13 @@ export class InputController {
 
 	async handleRetry(): Promise<void> {
 		if (this.ctx.collabGuest) {
-			this.ctx.showStatus("/retry is host-only during a collab session");
+			this.ctx.showStatus(translate("overlays.input_controller.retry_host_only"));
 			return;
 		}
 		const didRetry = await this.ctx.viewSession.retry();
 		// Composer text is an unsent draft, not the request retry() resends.
 		if (!didRetry) {
-			this.ctx.showStatus("Nothing to retry");
+			this.ctx.showStatus(translate("overlays.input_controller.nothing_to_retry"));
 		}
 	}
 
@@ -2711,7 +2696,7 @@ export class InputController {
 		// Queue shorthand reaches this helper before the normal guest input gate.
 		// Like /queue, it must not submit to the guest's local session.
 		if (this.ctx.collabGuest) {
-			this.ctx.showStatus("/queue is host-only during a collab session");
+			this.ctx.showStatus(translate("overlays.input_controller.queue_host_only"));
 			this.ctx.editor.setText(options.detachedText ?? options.historyText ?? text);
 			return [];
 		}
@@ -2719,7 +2704,7 @@ export class InputController {
 		const splitMessages = splitQueuedMessages(text);
 		if (splitMessages.length === 0 && !options.images?.length) {
 			if (options.detachedText === undefined) this.ctx.editor.clearDraft();
-			this.ctx.showWarning("Usage: /queue <message> (or start a prompt with -> / =>)");
+			this.ctx.showWarning(translate("overlays.input_controller.queue_usage"));
 			return [];
 		}
 
@@ -2745,8 +2730,8 @@ export class InputController {
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.showStatus(
 				messages.length === 1
-					? "Queued message for after compaction"
-					: `Queued ${messages.length} messages for after compaction`,
+					? translate("overlays.input_controller.queued_after_compaction")
+					: translate("overlays.input_controller.queued_after_compaction_count", { length: `${messages.length}` }),
 			);
 			this.ctx.ui.requestRender();
 			return messages;
@@ -2828,11 +2813,11 @@ export class InputController {
 			this.ctx.showStatus(
 				startImmediately
 					? queuedCount === 1
-						? "Sent queued message"
-						: `Sent first message; queued ${queuedCount - 1} for later yields`
+						? translate("overlays.input_controller.sent_queued")
+						: translate("overlays.input_controller.sent_first_queued_rest", { value: `${queuedCount - 1}` })
 					: queuedCount === 1
-						? "Queued message for when the agent yields"
-						: `Queued ${queuedCount} messages for when the agent yields`,
+						? translate("overlays.input_controller.queued_agent_yield")
+						: translate("overlays.input_controller.queued_agent_yield_count", { queuedCount: `${queuedCount}` }),
 			);
 		}
 		this.ctx.ui.requestRender();
@@ -2856,7 +2841,7 @@ export class InputController {
 		// Sending the composer is the operator's handoff on this path too. The draft is still in
 		// the composer here, so holding only needs the status.
 		if (this.ctx.liveCallActive && !this.ctx.discardLiveSpeech()) {
-			this.ctx.showStatus(LIVE_HANDOFF_HOLD_STATUS);
+			this.ctx.showStatus(translate("overlays.input_controller.voice_handoff_hold"));
 			return;
 		}
 
@@ -3065,7 +3050,7 @@ export class InputController {
 	 * the request, or input typed while a compaction runs) back to the editor: the conversation it was
 	 * queued for is no longer the one that will receive it.
 	 */
-	restoreCompactionQueueToEditor(status = "Conversation changed: queued input returned to the editor"): void {
+	restoreCompactionQueueToEditor(status = translate("overlays.input_controller.conversation_changed_queue")): void {
 		const request = this.ctx.yieldCompaction;
 		const held = this.ctx.compactionQueuedMessages;
 		this.ctx.compactionQueueOrigin = undefined;
@@ -3089,7 +3074,7 @@ export class InputController {
 	/** Esc stopped the run: a queued `/compact` and the follow-ups behind it go back to the editor. */
 	#restoreYieldCompactionOnStop(): void {
 		if (this.ctx.yieldCompaction) {
-			this.restoreCompactionQueueToEditor("Run stopped: queued compaction returned to the editor");
+			this.restoreCompactionQueueToEditor(translate("overlays.input_controller.stopped_compaction_queue"));
 		}
 	}
 
@@ -3176,7 +3161,7 @@ export class InputController {
 		// A paste still normalizing when a chain took the composer would attach an image the
 		// chain's submission never sends and its dispatch then clears.
 		if (this.ctx.editor.chainLocked) {
-			this.ctx.showStatus("The composer is locked while a chain runs");
+			this.ctx.showStatus(translate("overlays.input_controller.composer_chain_locked"));
 			return;
 		}
 		const image: ImageContent = source
@@ -3336,7 +3321,7 @@ export class InputController {
 			const sheet = await buildVideoContactSheetPng(absolutePath, meta);
 			const preview = await this.#normalizePastedImage(
 				{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-				"Unsupported pasted video preview format",
+				translate("overlays.input_controller.unsupported_video_preview"),
 			);
 			if (preview) await this.#insertPendingImage(preview, { path: absolutePath, kind: "video" });
 		} catch (error) {
@@ -3375,7 +3360,7 @@ export class InputController {
 	async #pasteHtml(html: string): Promise<void> {
 		const parts = htmlToPaste(html);
 		if (!parts) {
-			this.ctx.showStatus("Clipboard paste was empty");
+			this.ctx.showStatus(translate("overlays.input_controller.paste_empty"));
 			return;
 		}
 		if (parts.every(part => typeof part === "string")) {
@@ -3385,7 +3370,11 @@ export class InputController {
 		await this.#pasteImageIntoFocus(async sink => {
 			for (const part of parts) {
 				if (typeof part === "string") sink.pasteText(part);
-				else await sink.attach(part, `Unsupported pasted image format: ${part.mimeType}`);
+				else
+					await sink.attach(
+						part,
+						translate("overlays.input_controller.unsupported_pasted_image", { mimeType: `${part.mimeType}` }),
+					);
 			}
 		});
 	}
@@ -3405,7 +3394,7 @@ export class InputController {
 			return;
 		}
 		if (!hasPasteText(focused) || !focused.acceptsImages) {
-			this.ctx.showStatus("Image paste is not supported in this prompt");
+			this.ctx.showStatus(translate("overlays.input_controller.image_paste_unsupported"));
 			return;
 		}
 		const promptPaste = this.#beginPromptImagePaste(focused);
@@ -3459,7 +3448,7 @@ export class InputController {
 			if (!image) return false;
 			await sink.attach(
 				{ type: "image", data: image.data.toBase64(), mimeType: image.mimeType },
-				`Unsupported clipboard image format: ${image.mimeType}`,
+				translate("overlays.input_controller.unsupported_clipboard_image", { mimeType: `${image.mimeType}` }),
 			);
 			return true;
 		} catch {
@@ -3480,7 +3469,7 @@ export class InputController {
 				}
 				// Image-only prompts keep the path as text, like other unattachable pastes.
 				sink.pasteText(path);
-				this.ctx.showStatus("Video paste is not supported in this prompt");
+				this.ctx.showStatus(translate("overlays.input_controller.video_paste_unsupported"));
 				return;
 			}
 			const image = await loadImageInput({
@@ -3493,12 +3482,12 @@ export class InputController {
 				// locked transient screenshot file). Prefer the clipboard bytes.
 				if (await this.#tryPasteClipboardImage(sink)) return;
 				sink.pasteText(path);
-				this.ctx.showStatus("Pasted path is not a supported image");
+				this.ctx.showStatus(translate("overlays.input_controller.pasted_path_not_image"));
 				return;
 			}
 			await sink.attach(
 				{ type: "image", data: image.data, mimeType: image.mimeType },
-				`Unsupported pasted image format: ${image.mimeType}`,
+				translate("overlays.input_controller.unsupported_pasted_image", { mimeType: `${image.mimeType}` }),
 				image.resolvedPath,
 			);
 		} catch (error) {
@@ -3530,20 +3519,20 @@ export class InputController {
 				);
 				this.ctx.showStatus(
 					overSsh
-						? `Image not found at ${displayPath}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.`
-						: `Image not found at ${displayPath}`,
+						? translate("overlays.input_controller.image_not_found_ssh", { displayPath: `${displayPath}` })
+						: translate("overlays.input_controller.image_not_found", { displayPath: `${displayPath}` }),
 				);
 				return;
 			}
 			if (await this.#tryPasteClipboardImage(sink)) return;
 			sink.pasteText(path);
-			this.ctx.showStatus("Failed to read pasted image path");
+			this.ctx.showStatus(translate("overlays.input_controller.pasted_image_path_failed"));
 		}
 	}
 
 	async handleImagePaste(): Promise<boolean> {
 		if (!this.#clipboardIsTerminalLocal()) {
-			this.ctx.showStatus(REMOTE_CLIPBOARD_STATUS);
+			this.ctx.showStatus(translate("overlays.input_controller.remote_clipboard"));
 			return false;
 		}
 		let finishPaste: ((text: string | undefined) => boolean) | undefined;
@@ -3609,7 +3598,7 @@ export class InputController {
 			const image = await this.clipboard.readImage();
 			if (image) {
 				if (textOnlyFocus) {
-					this.ctx.showStatus("Image paste is not supported in this prompt");
+					this.ctx.showStatus(translate("overlays.input_controller.image_paste_unsupported"));
 					return false;
 				}
 				return await sink.attach(
@@ -3618,7 +3607,7 @@ export class InputController {
 						data: image.data.toBase64(),
 						mimeType: image.mimeType,
 					},
-					`Unsupported clipboard image format: ${image.mimeType}`,
+					translate("overlays.input_controller.unsupported_clipboard_image", { mimeType: `${image.mimeType}` }),
 				);
 			}
 			// Smart paste (#1628): no image on the clipboard — fall back to
@@ -3628,7 +3617,7 @@ export class InputController {
 			// this keypress, so a miss here must not dead-end.
 			const text = await textPromise;
 			if (!text) {
-				this.ctx.showStatus("Clipboard is empty");
+				this.ctx.showStatus(translate("overlays.input_controller.clipboard_empty"));
 				return false;
 			}
 			// #3506: when the clipboard text is an explicit image file path,
@@ -3660,7 +3649,7 @@ export class InputController {
 			this.ctx.ui.requestRender();
 			return true;
 		} catch {
-			this.ctx.showStatus("Failed to read clipboard");
+			this.ctx.showStatus(translate("overlays.input_controller.clipboard_read_failed"));
 			return false;
 		} finally {
 			promptPaste?.finish();
@@ -3670,7 +3659,7 @@ export class InputController {
 
 	async handleClipboardTextRawPaste(): Promise<void> {
 		if (!this.#clipboardIsTerminalLocal()) {
-			this.ctx.showStatus(REMOTE_CLIPBOARD_STATUS);
+			this.ctx.showStatus(translate("overlays.input_controller.remote_clipboard"));
 			return;
 		}
 		try {
@@ -3679,10 +3668,10 @@ export class InputController {
 				this.ctx.editor.insertText(text);
 				this.ctx.ui.requestRender();
 			} else {
-				this.ctx.showStatus("No text in clipboard to paste raw");
+				this.ctx.showStatus(translate("overlays.input_controller.no_raw_clipboard_text"));
 			}
 		} catch {
-			this.ctx.showStatus("Failed to paste raw text from clipboard");
+			this.ctx.showStatus(translate("overlays.input_controller.raw_paste_failed"));
 		}
 	}
 
@@ -3713,20 +3702,32 @@ export class InputController {
 	 * inline paste marker, so the pasted content is never lost.
 	 */
 	async presentLargePasteMenu(text: string, lineCount: number): Promise<void> {
-		const WRAPPED_BLOCK = "Attach as a wrapped block";
-		const LOCAL_FILE = "Attach as local file";
-		const INLINE = "Paste inline";
-
 		let choice: string | undefined;
 		try {
 			choice = await this.ctx.showHookSelector(
-				`Pasted ${lineCount} lines`,
+				translate("overlays.input_controller.pasted_lines", { lineCount: `${lineCount}` }),
 				[
-					{ label: WRAPPED_BLOCK, description: "Wrap the text in <attachment> tags, collapsed to a marker" },
-					{ label: LOCAL_FILE, description: "Save the text to a local://paste file" },
-					{ label: INLINE, description: "Collapse the text to an inline paste marker" },
+					{
+						value: "wrapped",
+						label: translate("overlays.input_controller.attach_wrapped"),
+						description: translate("overlays.input_controller.wrapped_description"),
+					},
+					{
+						value: "file",
+						label: translate("overlays.input_controller.attach_local_file"),
+						description: translate("overlays.input_controller.local_file_description"),
+					},
+					{
+						value: "inline",
+						label: translate("overlays.input_controller.paste_inline"),
+						description: translate("overlays.input_controller.inline_description"),
+					},
 				],
-				{ helpText: `${editorKey("tui.select.cancel")} to paste inline` },
+				{
+					helpText: translate("overlays.input_controller.paste_inline_help", {
+						editorKey: `${editorKey("tui.select.cancel")}`,
+					}),
+				},
 			);
 		} catch (error) {
 			logger.warn("large-paste menu failed", { error: error instanceof Error ? error.message : String(error) });
@@ -3734,13 +3735,13 @@ export class InputController {
 		}
 
 		switch (choice) {
-			case WRAPPED_BLOCK:
+			case "wrapped":
 				this.ctx.editor.insertTextAttachment(text, wrapPasteInAttachmentBlock(text));
 				break;
-			case LOCAL_FILE:
+			case "file":
 				await this.#attachPasteAsFile(text, lineCount);
 				break;
-			case INLINE:
+			case "inline":
 				this.ctx.editor.insertTextAttachment(text);
 				break;
 			default:
@@ -3774,13 +3775,15 @@ export class InputController {
 			} while (await Bun.file(filePath).exists());
 			await Bun.write(filePath, text);
 			this.ctx.editor.insertText(`local://${name} `);
-			this.ctx.showStatus(`Saved ${lineCount} pasted lines to local://${name}`);
+			this.ctx.showStatus(
+				translate("overlays.input_controller.paste_saved", { lineCount: `${lineCount}`, name: `${name}` }),
+			);
 		} catch (error) {
 			logger.warn("failed to save large paste to file", {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			this.ctx.editor.insertTextAttachment(text);
-			this.ctx.showError("Failed to save paste to a file — attached as a text chip instead");
+			this.ctx.showError(translate("overlays.input_controller.paste_save_failed"));
 		}
 	}
 
@@ -3876,7 +3879,7 @@ export class InputController {
 				? await cycleSubagentThinkingLevel(target)
 				: target.cycleThinkingLevel();
 			if (newLevel === undefined) {
-				this.ctx.showStatus("Current model does not support thinking");
+				this.ctx.showStatus(translate("overlays.input_controller.thinking_unsupported"));
 			} else {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
@@ -3891,7 +3894,7 @@ export class InputController {
 			const cycleOrder = cfgCycleOrder.get(settings);
 			const result = await this.ctx.viewSession.cycleRoleModels(cycleOrder, direction);
 			if (!result) {
-				this.ctx.showStatus("Only one role model available");
+				this.ctx.showStatus(translate("overlays.input_controller.one_role_model"));
 				return;
 			}
 
@@ -3914,12 +3917,20 @@ export class InputController {
 	toggleToolOutputExpansion(): void {
 		if (this.ctx.hideToolActivity) {
 			const visibilityKey = appKey(this.ctx.keybindings, "app.tools.toggleVisibility");
-			const visibilityHint = visibilityKey ? `${visibilityKey} or /settings` : "/settings";
-			this.ctx.showStatus(`Tool activity is hidden — show it with ${visibilityHint} before expanding`);
+			const visibilityHint = visibilityKey
+				? translate("overlays.input_controller.visibility_hint", { visibilityKey: `${visibilityKey}` })
+				: "/settings";
+			this.ctx.showStatus(
+				translate("overlays.input_controller.tool_activity_hidden", { visibilityHint: `${visibilityHint}` }),
+			);
 			return;
 		}
 		this.setToolsExpanded(!this.ctx.toolOutputExpanded);
-		this.ctx.showStatus(`Tool output expansion: ${this.ctx.toolOutputExpanded ? "enabled" : "disabled"}`);
+		this.ctx.showStatus(
+			translate("overlays.input_controller.tool_output_expansion", {
+				value: `${this.ctx.toolOutputExpanded ? translate("overlays.input_controller.enabled") : translate("overlays.input_controller.disabled")}`,
+			}),
+		);
 	}
 
 	toggleToolActivityVisibility(): void {
@@ -3945,7 +3956,11 @@ export class InputController {
 		if (this.ctx.hideToolActivity) this.ctx.ui.clearInlineImages();
 		// A viewport-only repaint leaves tool rows already retired to terminal history unchanged.
 		this.ctx.ui.resetDisplay();
-		this.ctx.showStatus(`Tool activity: ${this.ctx.hideToolActivity ? "hidden" : "visible"}`);
+		this.ctx.showStatus(
+			translate("overlays.input_controller.tool_activity", {
+				value: `${this.ctx.hideToolActivity ? "hidden" : "visible"}`,
+			}),
+		);
 	}
 
 	setToolsExpanded(expanded: boolean): void {
@@ -3970,7 +3985,7 @@ export class InputController {
 		const thinkingOff =
 			((this.ctx.viewSession ?? this.ctx.session)?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
 		if (thinkingOff && !this.ctx.hasDisplayableThinkingContent) {
-			this.ctx.showStatus("Thinking is off — enable thinking to show blocks");
+			this.ctx.showStatus(translate("overlays.input_controller.thinking_off"));
 			return;
 		}
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
@@ -3996,7 +4011,11 @@ export class InputController {
 		this.ctx.chatContainer.resetStableEmission();
 		this.ctx.ui.resetDisplay();
 
-		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
+		this.ctx.showStatus(
+			translate("overlays.input_controller.thinking_blocks", {
+				value: `${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`,
+			}),
+		);
 	}
 
 	async openExternalEditor(): Promise<void> {
@@ -4010,7 +4029,7 @@ export class InputController {
 				if (result !== null) {
 					const message = extractExternalEditorMessage(result);
 					if (message === null)
-						this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
+						this.ctx.showWarning(translate("overlays.input_controller.external_editor_marker_removed"));
 					else this.ctx.editor.setText(message);
 				}
 			},

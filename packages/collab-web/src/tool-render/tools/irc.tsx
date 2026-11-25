@@ -1,5 +1,6 @@
 /** `irc` — inter-agent messaging: send/wait/inbox/list ops with delivery receipts. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import type { Tone } from "../parts";
 import { Badge, Badges, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -106,6 +107,7 @@ function statusTone(status: string): Tone | undefined {
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const op = str(args.op) ?? "?";
 	const d = detailsRecord(result);
 	const opBadge = <Badge tone={result?.isError ? "err" : op === "send" ? "accent" : undefined}>{op}</Badge>;
@@ -127,7 +129,9 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 				<>
 					{opBadge} <span className="tv-pattern">← {senders}</span>{" "}
 					<span className="tv-muted">
-						{waited.length === 1 ? truncate(normalizeWs(waited[0]!.body), 80) : `${waited.length} messages`}
+						{waited.length === 1
+							? truncate(normalizeWs(waited[0]!.body), 80)
+							: t("guesttools.count.message.many", "{count} messages", { count: waited.length })}
 					</span>
 				</>
 			);
@@ -135,11 +139,11 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 		const from = str(args.from);
 		return (
 			<>
-				{opBadge} <span className="tv-pattern">← {from ?? "anyone"}</span>
+				{opBadge} <span className="tv-pattern">← {from ?? t("guesttools.irc.anyone", "anyone")}</span>
 				{d?.waited === null && (
 					<>
 						{" "}
-						<Badge tone="warn">timed out</Badge>
+						<Badge tone="warn">{t("guesttools.irc.timed_out", "timed out")}</Badge>
 					</>
 				)}
 			</>
@@ -152,7 +156,11 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 				{opBadge} {args.peek === true && <Badge>peek</Badge>}{" "}
 				{d && (
 					<span className="tv-muted">
-						{inbox.length === 0 ? "empty" : `${inbox.length} ${inbox.length === 1 ? "message" : "messages"}`}
+						{inbox.length === 0
+							? t("guesttools.irc.empty", "empty")
+							: inbox.length === 1
+								? t("guesttools.count.message.one", "{count} message", { count: inbox.length })
+								: t("guesttools.count.message.many", "{count} messages", { count: inbox.length })}
 					</span>
 				)}
 			</>
@@ -164,11 +172,18 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 		for (const peer of peers) unread += peer.unread;
 		return (
 			<>
-				{opBadge} {d && <span className="tv-muted">{peers.length === 1 ? "1 peer" : `${peers.length} peers`}</span>}
+				{opBadge}{" "}
+				{d && (
+					<span className="tv-muted">
+						{peers.length === 1
+							? t("guesttools.irc.peer_one", "1 peer")
+							: t("guesttools.irc.peers", "{count} peers", { count: peers.length })}
+					</span>
+				)}
 				{unread > 0 && (
 					<>
 						{" "}
-						<Badge tone="warn">{unread} unread</Badge>
+						<Badge tone="warn">{t("guesttools.irc.unread", "{count} unread", { count: unread })}</Badge>
 					</>
 				)}
 			</>
@@ -178,6 +193,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const op = str(args.op);
 	const to = str(args.to);
 	const from = str(args.from);
@@ -194,11 +210,11 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			<Badges
 				items={[
 					op ?? "?",
-					to && `to ${to}`,
-					op === "wait" && from && `from ${from}`,
-					to === "all" && "broadcast",
-					args.await === true && "await reply",
-					str(args.replyTo) && "reply",
+					to && t("guesttools.irc.recipient", "to {name}", { name: to }),
+					op === "wait" && from && t("guesttools.irc.sender", "from {name}", { name: from }),
+					to === "all" && t("guesttools.irc.broadcast", "broadcast"),
+					args.await === true && t("guesttools.irc.await_reply", "await reply"),
+					str(args.replyTo) && t("guesttools.irc.reply", "reply"),
 					args.peek === true && "peek",
 				]}
 			/>
@@ -221,14 +237,18 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 							{msg.replyTo && (
 								<>
 									{" "}
-									<Badge>reply</Badge>
+									<Badge>{t("guesttools.irc.reply", "reply")}</Badge>
 								</>
 							)}
 						</Row>
 					))}
 				</div>
 			)}
-			{timedOut && <Note tone="warn">No reply yet — they may answer later; check inbox or wait again.</Note>}
+			{timedOut && (
+				<Note tone="warn">
+					{t("guesttools.irc.no_reply", "No reply yet — they may answer later; check inbox or wait again.")}
+				</Note>
+			)}
 			{inbox.length > 0 && (
 				<div className="tv-list">
 					{inbox.map((msg, i) => (
@@ -237,7 +257,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 							{msg.replyTo && (
 								<>
 									{" "}
-									<Badge>reply</Badge>
+									<Badge>{t("guesttools.irc.reply", "reply")}</Badge>
 								</>
 							)}
 						</Row>
@@ -255,7 +275,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 							{peer.unread > 0 && (
 								<>
 									{" "}
-									<Badge tone="warn">{peer.unread} unread</Badge>
+									<Badge tone="warn">
+										{t("guesttools.irc.unread", "{count} unread", { count: peer.unread })}
+									</Badge>
 								</>
 							)}
 						</Row>

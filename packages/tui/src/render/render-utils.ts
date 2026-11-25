@@ -8,15 +8,17 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Ellipsis } from "@oh-my-pi/pi-natives";
 import { expandWindowsLongPath, getWindowsShortPath } from "@oh-my-pi/pi-natives/path";
-import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { getKeybindings } from "../keybindings";
 import type { Theme, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import { replaceTabs, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { Hasher } from "./utils";
+import { localizedNoun } from "../tools/localized-count";
 
 export { Ellipsis } from "@oh-my-pi/pi-natives";
 export { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
@@ -321,7 +323,7 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 export function formatExpandHint(theme: Theme, expanded?: boolean, hasMore?: boolean): string {
 	if (expanded) return "";
 	if (hasMore === false) return "";
-	return theme.fg("dim", wrapBrackets(`${expandKeyHint()}: Expand`, theme));
+	return theme.fg("dim", wrapBrackets(t("tools.common.expand", { key: expandKeyHint() }), theme));
 }
 
 /**
@@ -339,7 +341,7 @@ export function formatBadge(label: string, color: ToolUIColor, theme: Theme): st
  */
 export function formatMoreItems(remaining: number, itemType: string): string {
 	const safeRemaining = Number.isFinite(remaining) ? remaining : 0;
-	return `… ${safeRemaining} more ${pluralize(itemType, safeRemaining)}`;
+	return t("tools.count.more", { count: safeRemaining, noun: localizedNoun(itemType, safeRemaining) });
 }
 
 /**
@@ -384,13 +386,16 @@ export function capPreviewLines(
 	const visible = max <= 1 ? [] : lines.slice(lines.length - (max - 1));
 	const hidden = lines.length - visible.length;
 	const hint = options.expandHint === false ? "" : formatExpandHint(theme, false, true);
-	const marker = `… ${hidden} earlier ${pluralize("line", hidden)}${hint ? ` ${hint}` : ""}`;
+	const wording = t(hidden === 1 ? "tools.common.earlier_lines.one" : "tools.common.earlier_lines.many", {
+		count: hidden,
+	});
+	const marker = `${wording}${hint ? ` ${hint}` : ""}`;
 	return [`${options.prefix ?? ""}${theme.fg("dim", marker)}`, ...visible];
 }
 
 function sanitizeErrorText(message: string | undefined): string {
 	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
-	return clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
+	return clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : t("tools.common.unknown_error");
 }
 
 /**
@@ -410,7 +415,7 @@ export function sanitizeDisplayLines(text: string): string[] {
 
 /** Render a sanitized error message with its status icon. */
 export function formatErrorMessage(message: string | undefined, theme: Theme): string {
-	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${sanitizeErrorText(message)}`)}`;
+	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", t("tools.common.error_detail", { message: sanitizeErrorText(message) }))}`;
 }
 
 /**
@@ -671,7 +676,7 @@ export function formatDiagnostics(
 		const remaining = totalDiags - diagsShown;
 		output += `\n ${theme.fg("dim", theme.tree.last)} ${theme.fg(
 			"muted",
-			`… ${remaining} more`,
+			t("tools.common.more", { count: remaining }),
 		)} ${formatExpandHint(theme)}`;
 	}
 
@@ -1070,7 +1075,7 @@ export function sanitizeDisplayWarnings(warnings: readonly string[]): string[] {
 		.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)
 		.map(warning => truncateToWidth(sanitizeDisplayWarning(warning), TRUNCATE_LENGTHS.LONG));
 	const hidden = warnings.length - visible.length;
-	if (hidden > 0) visible.push(`… ${hidden} more ${pluralize("warning", hidden)}`);
+	if (hidden > 0) visible.push(formatMoreItems(hidden, "warning"));
 	return visible;
 }
 
@@ -1268,7 +1273,7 @@ export function appendParseErrorsBulletList(
 		lines.push(theme.fg("warning", `  - ${err}`));
 	}
 	if (fullCount > capped.length) {
-		lines.push(theme.fg("dim", `  … ${fullCount - capped.length} more`));
+		lines.push(theme.fg("dim", t("tools.common.more_indented", { count: fullCount - capped.length })));
 	}
 }
 
@@ -1279,8 +1284,8 @@ export function appendParseErrorsBulletList(
 export function formatParseErrorsCountLabel(parseErrors: readonly string[], total?: number): string {
 	const fullCount = total ?? parseErrors.length;
 	return fullCount > PARSE_ERRORS_LIMIT
-		? `${PARSE_ERRORS_LIMIT} / ${fullCount} parse issues`
-		: `${fullCount} parse issue${fullCount !== 1 ? "s" : ""}`;
+		? t("tools.common.parse_issues_capped", { max: PARSE_ERRORS_LIMIT, total: fullCount })
+		: t(fullCount === 1 ? "tools.common.parse_issues.one" : "tools.common.parse_issues.many", { count: fullCount });
 }
 
 /**

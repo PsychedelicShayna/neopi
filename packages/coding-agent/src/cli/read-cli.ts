@@ -7,6 +7,7 @@
  */
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { initializeWithSettings } from "../discovery";
@@ -39,7 +40,7 @@ const SKILL_URL_RE = /skill:\/\//i;
 
 export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	if (!cmd.path) {
-		process.stderr.write(chalk.red("error: path is required\n"));
+		process.stderr.write(chalk.red(`${t("cli.commands.read.missingPath")}\n`));
 		process.exit(1);
 	}
 
@@ -119,7 +120,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 			} else if (block.type === "image") {
 				const decodedBytes = Buffer.from(block.data, "base64").byteLength;
 				process.stdout.write(
-					chalk.dim(`[image content: ${block.mimeType}, ${decodedBytes} bytes base64-decoded]\n`),
+					chalk.dim(`${t("cli.commands.read.imageContent", { mimeType: block.mimeType, bytes: decodedBytes })}\n`),
 				);
 			}
 		}

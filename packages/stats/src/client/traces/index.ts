@@ -3,3 +3,4 @@ export type { SessionTrace } from "../types";
 export type { TraceEntryLoader } from "./SpanDrawer";
 export { SessionTraceView, type SessionTraceViewProps } from "./TraceView";
 export { TraceThemeRoot } from "./trace-colors";
+export { TraceLocaleScope } from "../i18n";

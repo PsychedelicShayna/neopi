@@ -10,6 +10,7 @@
  * card), the device name supplies the default action.
  */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import type { Tone } from "../parts";
 import { Badge, Badges, Kv, KvGrid, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -19,10 +20,10 @@ type ResolveKind = "apply" | "discard" | "propose";
 
 /** Short badge word (summary) and full transition badge (body) per card kind. */
 const KIND_WORD: Record<ResolveKind, string> = { apply: "apply", discard: "discard", propose: "propose" };
-const KIND_TRANSITION: Record<ResolveKind, string> = {
-	apply: "proposed → resolved",
-	discard: "proposed → rejected",
-	propose: "plan proposed",
+const KIND_TRANSITION: Record<ResolveKind, readonly [messageKey: string, english: string]> = {
+	apply: ["guesttools.resolve.apply", "proposed → resolved"],
+	discard: ["guesttools.resolve.discard", "proposed → rejected"],
+	propose: ["guesttools.resolve.propose", "plan proposed"],
 };
 const KIND_TONE: Record<ResolveKind, Tone> = { apply: "ok", discard: "warn", propose: "accent" };
 
@@ -80,6 +81,7 @@ function Summary(props: ToolRenderProps): ReactNode {
 }
 
 function Body(props: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const { result } = props;
 	const card = cardModel(props);
 	const extraRows: ReactNode[] = [];
@@ -107,7 +109,7 @@ function Body(props: ToolRenderProps): ReactNode {
 			<Badges
 				items={[
 					<Badge key="action" tone={card.tone}>
-						{KIND_TRANSITION[card.kind]}
+						{t(...KIND_TRANSITION[card.kind])}
 					</Badge>,
 					card.sourceToolName && <Badge key="source">{card.sourceToolName}</Badge>,
 					card.label && <span key="label">{truncate(normalizeWs(card.label), 120)}</span>,
@@ -119,7 +121,7 @@ function Body(props: ToolRenderProps): ReactNode {
 			{card.kind !== "propose" && card.reason && <Note>{card.reason}</Note>}
 			{card.kind === "propose" && card.planFilePath && (
 				<KvGrid>
-					<Kv k="plan">{card.planFilePath}</Kv>
+					<Kv k={t("guesttools.label.plan", "plan")}>{card.planFilePath}</Kv>
 				</KvGrid>
 			)}
 			{extraRows.length > 0 && <KvGrid>{extraRows}</KvGrid>}

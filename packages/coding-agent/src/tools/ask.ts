@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import type { AskItemNote, AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 /**
@@ -606,7 +607,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		if (method === "off") return;
 		TERMINAL.sendNotification({
 			title: PRODUCT_NAME,
-			body: "Waiting for input",
+			body: t("tools.notification.waiting_for_input"),
 			type: "ask",
 			urgency: "normal",
 			actions: "focus",

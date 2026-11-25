@@ -1,5 +1,6 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthPrompt } from "@oh-my-pi/pi-ai/oauth/types";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Container, getKeybindings, Spacer, Text, type TUI, wrapTextWithAnsi } from "../index";
 import { theme } from "../theme/theme";
 import { urlHyperlinkAlways, WidthAwareText } from "../render/index";
@@ -18,17 +19,11 @@ import { plainText } from "../native/spans";
 /** `Enter code: ABCD-1234` style device-flow instructions: the lead-in and the code. */
 const DEVICE_CODE_INSTRUCTIONS = /^(.*\bcode:?\s+)([A-Za-z0-9][A-Za-z0-9-]{3,})\s*$/s;
 
-/** A prompt's trailing `, then press Enter:` — the sheet's Continue button says it. */
-const PRESS_KEY_SUFFIX = /,?\s*then press\s+\S+\s*:?\s*$/i;
+/** Remove keyboard-submit help (including localized host prompts); the sheet has Continue. */
+const PRESS_KEY_SUFFIX = /,?\s*(?:then press|y luego presiona)\s+\S+\s*:?\s*$/i;
 
 /** Progress that reports a problem rather than a finished stage. */
 const PROGRESS_PROBLEM = /\b(?:fail(?:ed|ure)?|error|unavailable|in use|could ?n[o']t|unable)\b/i;
-
-/** Shown on the field when the flow asks for the manual code again: the last paste had no usable code. */
-const RETRY_MESSAGE = "Couldn't read a code from that. Paste the authorization code or the full redirect URL.";
-
-/** Shown while the browser half of the flow runs and the provider reports nothing. */
-const BROWSER_WAIT = "Waiting for you to finish in the browser…";
 
 /** The sign-in link from `showAuth`: the provider's instructions, or the device code split out of them. */
 interface LoginAuth {
@@ -41,7 +36,7 @@ interface LoginAuth {
 /** One native step after the sign-in link: a text answer (live or given) or a progress message. */
 type LoginStep =
 	| { kind: "input"; message: string; field: TextFormField; answer?: string }
-	| { kind: "progress"; message: string };
+	| { kind: "progress"; message: string | (() => string) };
 
 /** Sheet copy: plain text, a trailing ASCII ellipsis as `…`. */
 function sheetText(message: string): string {
@@ -85,6 +80,9 @@ export class LoginDialogComponent extends OverlayPanel {
 	/** Native steps after the link, in arrival order; the live input field is embedded by identity. */
 	#nativeSteps: LoginStep[] = [];
 	#nativeRoot: NativeNode | undefined;
+	readonly #localizedLines = new Map<Text, () => string>();
+	#retryingManualInput = false;
+	#locale = getLocale();
 
 	constructor(
 		tui: Pick<TUI, "requestRender">,
@@ -94,7 +92,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	) {
 		const providerInfo = getOAuthProviders().find(p => p.id === providerId);
 		const providerName = providerInfo?.name || providerId;
-		super(`Login to ${providerName}`, "omp.overlay.login");
+		super(t("overlaysModel.loginDialog.title.terminal", { provider: providerName }), "omp.overlay.login");
 		this.#providerName = providerName;
 		this.#tui = tui;
 		this.#onComplete = onComplete;
@@ -105,6 +103,33 @@ export class LoginDialogComponent extends OverlayPanel {
 		this.addChild(this.#contentContainer);
 
 		this.#input = this.#createInput();
+	}
+
+	#addLocalizedLine(format: () => string): void {
+		const line = new Text(format(), 0, 0);
+		this.#localizedLines.set(line, format);
+		this.#contentContainer.addChild(line);
+	}
+
+	#addCancelHint(): void {
+		this.#addLocalizedLine(() =>
+			theme.fg("dim", t("overlaysModel.loginDialog.hint.cancel", { key: interruptKey() })),
+		);
+	}
+
+	#syncLocale(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		this.#locale = locale;
+		this.title = t("overlaysModel.loginDialog.title.terminal", { provider: this.#providerName });
+		for (const [line, format] of this.#localizedLines) line.setText(format());
+		if (this.#retryingManualInput) this.#input.setError(t("overlaysModel.loginDialog.retry"));
+		this.#nativeRoot = undefined;
+	}
+
+	override render(width: number): readonly string[] {
+		this.#syncLocale();
+		return super.render(width);
 	}
 
 	/** Focus reaches the live field: it draws the caret (the hardware cursor when the terminal's is on). */
@@ -125,6 +150,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	/** A fresh field for the next answer; the previous one stops drawing a caret. */
 	#replaceInput(secret = false): void {
 		this.#input.focused = false;
+		this.#retryingManualInput = false;
 		this.#secretPrompt = secret;
 		this.#input = this.#createInput(secret);
 	}
@@ -137,6 +163,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			spaceBeforeControl: false,
 			spaceAfterControl: false,
 			onSubmit: value => {
+				this.#retryingManualInput = false;
 				const resolve = this.#inputResolver;
 				if (!resolve) return;
 				this.#clearInputHandlers();
@@ -161,7 +188,7 @@ export class LoginDialogComponent extends OverlayPanel {
 		const reject = this.#inputRejecter;
 		this.#clearInputHandlers();
 		reject?.(new Error("Login cancelled"));
-		this.#onComplete(false, "Login cancelled");
+		this.#onComplete(false, t("overlaysModel.loginDialog.cancelled"));
 	}
 
 	/**
@@ -177,6 +204,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	 */
 	showAuth(url: string, instructions?: string, launchUrl?: string): void {
 		this.#contentContainer.clear();
+		this.#localizedLines.clear();
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(
 			new WidthAwareText(
@@ -189,13 +217,15 @@ export class LoginDialogComponent extends OverlayPanel {
 			),
 		);
 
-		const clickHint = `${formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl")}+click to open`;
-		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
-		this.#contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 0, 0));
+		this.#addLocalizedLine(() => {
+			const key = formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl");
+			const hint = t("overlaysModel.loginDialog.hint.open", { key });
+			return theme.fg("dim", `\x1b]8;;${url}\x07${hint}\x1b]8;;\x07`);
+		});
 
 		if (launchUrl && launchUrl !== url) {
-			this.#contentContainer.addChild(
-				new Text(theme.fg("dim", `Local shortcut (this machine only): ${launchUrl}`), 0, 0),
+			this.#addLocalizedLine(() =>
+				theme.fg("dim", t("overlaysModel.loginDialog.shortcut.terminal", { url: launchUrl })),
 			);
 		}
 
@@ -228,7 +258,8 @@ export class LoginDialogComponent extends OverlayPanel {
 		try {
 			await this.copyAuthUrl(url);
 		} catch (error) {
-			this.showProgress(`Could not copy sign-in link: ${error instanceof Error ? error.message : String(error)}`);
+			const message = error instanceof Error ? error.message : String(error);
+			this.#appendProgress(() => t("overlaysModel.loginDialog.copyFailed", { message }));
 		}
 	}
 
@@ -243,7 +274,8 @@ export class LoginDialogComponent extends OverlayPanel {
 		const nativeMounted = this.#nativeSteps.find(step => step.kind === "input" && step.field === previousInput);
 		if (mounted !== -1) {
 			// The flow asks again only when the last paste carried no usable code.
-			this.#input.setError(RETRY_MESSAGE);
+			this.#retryingManualInput = true;
+			this.#input.setError(t("overlaysModel.loginDialog.retry"));
 			this.#contentContainer.children.splice(mounted, 1, this.#input);
 			if (nativeMounted?.kind === "input") nativeMounted.field = this.#input;
 		} else {
@@ -251,7 +283,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("dim", prompt), 0, 0));
 			this.#contentContainer.addChild(this.#input);
-			this.#contentContainer.addChild(new Text(theme.fg("dim", `(${interruptKey()} to cancel)`), 0, 0));
+			this.#addCancelHint();
 		}
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
@@ -295,11 +327,20 @@ export class LoginDialogComponent extends OverlayPanel {
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(new Text(theme.fg("text", prompt.message), 0, 0));
 		if (prompt.placeholder) {
-			this.#contentContainer.addChild(new Text(theme.fg("dim", `e.g., ${prompt.placeholder}`), 0, 0));
+			const { placeholder } = prompt;
+			this.#addLocalizedLine(() =>
+				theme.fg("dim", t("overlaysModel.loginDialog.example", { example: placeholder })),
+			);
 		}
 		this.#contentContainer.addChild(this.#input);
-		this.#contentContainer.addChild(
-			new Text(theme.fg("dim", `(${interruptKey()} to cancel, ${editorKey("tui.input.submit")} to submit)`), 0, 0),
+		this.#addLocalizedLine(() =>
+			theme.fg(
+				"dim",
+				t("overlaysModel.loginDialog.hint.submit", {
+					cancel: interruptKey(),
+					submit: editorKey("tui.input.submit"),
+				}),
+			),
 		);
 		this.#nativeSteps.push({ kind: "input", message: plainText(prompt.message), field: this.#input });
 		this.#nativeRoot = undefined;
@@ -327,7 +368,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	showWaiting(message: string): void {
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(new Text(theme.fg("dim", message), 0, 0));
-		this.#contentContainer.addChild(new Text(theme.fg("dim", `(${interruptKey()} to cancel)`), 0, 0));
+		this.#addCancelHint();
 		this.#nativeSteps.push({ kind: "progress", message: plainText(message) });
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
@@ -337,8 +378,16 @@ export class LoginDialogComponent extends OverlayPanel {
 	 * Called by onProgress callback
 	 */
 	showProgress(message: string): void {
-		this.#contentContainer.addChild(new Text(theme.fg("dim", message), 0, 0));
-		this.#nativeSteps.push({ kind: "progress", message: plainText(message) });
+		this.#appendProgress(message);
+	}
+
+	#appendProgress(message: string | (() => string)): void {
+		if (typeof message === "string") {
+			this.#contentContainer.addChild(new Text(theme.fg("dim", message), 0, 0));
+		} else {
+			this.#addLocalizedLine(() => theme.fg("dim", message()));
+		}
+		this.#nativeSteps.push({ kind: "progress", message: typeof message === "string" ? plainText(message) : message });
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
 	}
@@ -369,6 +418,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	 * button), else Open sign-in page.
 	 */
 	override describe(): NativeNode {
+		this.#syncLocale();
 		if (this.#nativeRoot) return this.#nativeRoot;
 		const auth = this.#nativeAuth;
 		const field = this.#activeField();
@@ -380,12 +430,13 @@ export class LoginDialogComponent extends OverlayPanel {
 			if (auth.launchUrl) {
 				body.push(
 					keyed(
-						text([span("On this machine  ", "dim"), span(auth.launchUrl, "mono", { href: auth.launchUrl })], {
-							role: "omp.login.shortcut",
-							truncate: "middle",
-							lines: 1,
-							title: auth.launchUrl,
-						}),
+						text(
+							[
+								span(t("overlaysModel.loginDialog.shortcut.picker"), "dim"),
+								span(auth.launchUrl, "mono", { href: auth.launchUrl }),
+							],
+							{ role: "omp.login.shortcut", truncate: "middle", lines: 1, title: auth.launchUrl },
+						),
 						"shortcut",
 					),
 				);
@@ -395,10 +446,12 @@ export class LoginDialogComponent extends OverlayPanel {
 		const live = this.#nativeSteps.findLastIndex(step => step.kind === "progress");
 		for (const [index, step] of this.#nativeSteps.entries()) {
 			if (step.kind === "progress") {
+				const generated = typeof step.message === "function";
+				const message = typeof step.message === "string" ? step.message : plainText(step.message());
 				status.push(
 					index === live
-						? this.#describeLive(step.message, `p${index}`)
-						: this.#describeDone(step.message, `p${index}`),
+						? this.#describeLive(message, `p${index}`)
+						: this.#describeDone(message, `p${index}`, generated || PROGRESS_PROBLEM.test(message)),
 				);
 				continue;
 			}
@@ -428,16 +481,22 @@ export class LoginDialogComponent extends OverlayPanel {
 			}
 		}
 		// The provider reports nothing while the browser half runs (GitHub's device poll): say so.
-		if (auth && live === -1 && !field) status.push(this.#describeLive(BROWSER_WAIT, "browser"));
+		if (auth && live === -1 && !field) {
+			status.push(this.#describeLive(t("overlaysModel.loginDialog.browserWait"), "browser"));
+		}
 		if (status.length > 0) body.push(node("col", { role: "omp.login.status", gap: "xs" }, status, "status"));
 
 		const cancelKey = boundKeys("app.interrupt", ["ctrl+c"])[0];
-		const cancel = actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {});
+		const cancel = actionButton(
+			t("overlaysModel.loginDialog.action.cancel"),
+			"cancel",
+			cancelKey ? { keys: cancelKey } : {},
+		);
 		const open = auth ? this.#describeOpen(auth.url, !field) : null;
 		let buttons: (NativeNode | null)[];
 		if (field) {
 			const submitKey = getKeybindings().getKeys("tui.input.submit")[0];
-			const submit = actionButton("Continue", "submit", {
+			const submit = actionButton(t("overlaysModel.loginDialog.action.continue"), "submit", {
 				tone: "accent",
 				...(submitKey ? { keys: submitKey } : {}),
 			});
@@ -449,7 +508,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			"overlay",
 			{
 				role: this.nativeRole,
-				head: `Sign in to ${this.#providerName}`,
+				head: t("overlaysModel.loginDialog.title.picker", { provider: this.#providerName }),
 				anchor: "center",
 				size: "md",
 				modal: true,
@@ -463,16 +522,22 @@ export class LoginDialogComponent extends OverlayPanel {
 
 	/** What to do, in one sentence: enter the code, follow the provider's instructions, or finish in the browser. */
 	#lead(auth: LoginAuth): string {
-		if (auth.device) return "Enter this code on the sign-in page to connect your account.";
+		if (auth.device) return t("overlaysModel.loginDialog.lead.device");
 		if (auth.instructions) return sheetText(auth.instructions);
-		return "Continue in your browser. If it didn't open, open or copy the link below.";
+		return t("overlaysModel.loginDialog.lead.browser");
 	}
 
 	/** The device code, large in a well; a click copies it. */
 	#describeCode(code: string): NativeNode {
 		return node(
 			"row",
-			{ role: "omp.login.code", align: "center", actions: { click: "copy" }, href: code, title: "Copy code" },
+			{
+				role: "omp.login.code",
+				align: "center",
+				actions: { click: "copy" },
+				href: code,
+				title: t("overlaysModel.loginDialog.action.copyCode"),
+			},
 			[keyed(text([span(code, "mono")]), "value"), node("icon", { name: "copy" }, undefined, "icon")],
 			"code",
 		);
@@ -492,7 +557,11 @@ export class LoginDialogComponent extends OverlayPanel {
 			[
 				node("icon", { name: "link" }, undefined, "icon"),
 				keyed(shown, "url"),
-				actionButton("Copy", "copy", { key: "copyLink", href: url, title: "Copy the sign-in link" }),
+				actionButton(t("overlaysModel.loginDialog.action.copy"), "copy", {
+					key: "copyLink",
+					href: url,
+					title: t("overlaysModel.loginDialog.action.copyLink"),
+				}),
 			],
 			"link",
 		);
@@ -500,10 +569,10 @@ export class LoginDialogComponent extends OverlayPanel {
 
 	/** Open sign-in page (Tern opens the link itself): the primary action while nothing waits for an answer. */
 	#describeOpen(url: string, primary: boolean): NativeNode {
-		return actionButton("Open sign-in page", "open", {
+		return actionButton(t("overlaysModel.loginDialog.action.open"), "open", {
 			key: "openLink",
 			href: url,
-			title: `Open ${urlPlace(url)} in your browser`,
+			title: t("overlaysModel.loginDialog.action.openTooltip", { location: urlPlace(url) }),
 			icon: "open",
 			tone: primary ? "accent" : undefined,
 		});
@@ -520,8 +589,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	}
 
 	/** A finished stage, checked; one that reported a problem keeps a warning mark. */
-	#describeDone(message: string, key: string): NativeNode {
-		const problem = PROGRESS_PROBLEM.test(message);
+	#describeDone(message: string, key: string, problem: boolean): NativeNode {
 		return node(
 			"row",
 			{ role: "omp.login.done", gap: "sm", align: "baseline", ...(problem ? { tone: "warning" as const } : {}) },

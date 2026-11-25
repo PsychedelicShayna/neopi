@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Settings } from "../config/settings";
 import { cfgIsolationBackend, cfgWorktreeClone } from "../task/settings";
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
@@ -52,7 +53,7 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<void> {
 	let createdBranch: string | undefined;
 	if (options.branch || options.forceBranch) {
 		const branch = options.branch ?? options.forceBranch;
-		if (!branch) throw new Error("branch name is required");
+		if (!branch) throw new Error(t("cli.commands.worktree.branchRequired"));
 		await repository.createBranch(branch, options.commit ?? "HEAD", Boolean(options.forceBranch));
 		ref = branch;
 		createdBranch = branch;
@@ -91,12 +92,15 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<void> {
 		console.log(`HEAD is now at ${shortSha} ${subject}`);
 		if (result.clonedWith != null) {
 			console.log(
-				`Cloned from ${repository.info().repoRoot} via ${formatIsolationBackend(result.clonedWith)}, leaving out .git, other worktrees, and untracked .env files`,
+				t("cli.commands.worktree.cloned", {
+					source: repository.info().repoRoot,
+					backend: formatIsolationBackend(result.clonedWith),
+				}),
 			);
 		}
 	}
 	if (result.cloneError) {
-		console.error(chalk.dim(`warning: worktree clone fell back to plain checkout: ${result.cloneError}`));
+		console.error(chalk.dim(t("cli.commands.worktree.cloneFallback", { error: result.cloneError })));
 	}
 	const hook = await vcs.runPostCheckoutHook(worktreePath, commit.sha);
 	process.stderr.write(hook.stdout);
@@ -111,20 +115,22 @@ export async function listWorktrees(options: ListWorktreesOptions): Promise<void
 		return;
 	}
 	if (entries.length === 0) {
-		console.log(chalk.dim("No agent-managed worktrees found."));
+		console.log(chalk.dim(t("cli.commands.worktree.none")));
 		return;
 	}
 	let live = 0;
 	let orphaned = 0;
 	for (const entry of entries) {
-		const tag = entry.orphanReason ? chalk.yellow("orphaned") : chalk.green("live    ");
+		const tag = entry.orphanReason
+			? chalk.yellow(t("cli.commands.worktree.orphaned"))
+			: chalk.green(t("cli.commands.worktree.live").padEnd(8));
 		const detail = formatEntryDetail(entry);
 		console.log(`${tag}  ${entry.path}`);
 		if (detail) console.log(`          ${chalk.dim(detail)}`);
 		if (entry.orphanReason) orphaned += 1;
 		else live += 1;
 	}
-	console.log(chalk.dim(`\n${live} live · ${orphaned} orphaned · ${entries.length} total`));
+	console.log(chalk.dim(t("cli.commands.worktree.listSummary", { live, orphaned, total: entries.length })));
 }
 
 export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ removed: number; failed: number }> {
@@ -135,7 +141,11 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ 
 		if (options.json) {
 			console.log(JSON.stringify({ removed: 0, kept: entries.length }));
 		} else {
-			console.log(chalk.dim(options.all ? "No worktrees to remove." : "No orphaned worktrees to remove."));
+			console.log(
+				chalk.dim(
+					options.all ? t("cli.commands.worktree.noneToRemove") : t("cli.commands.worktree.noOrphansToRemove"),
+				),
+			);
 		}
 		return { removed: 0, failed: 0 };
 	}
@@ -145,9 +155,15 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ 
 			console.log(JSON.stringify({ wouldRemove: targets.map(t => t.path) }, null, 2));
 		} else {
 			for (const target of targets) {
-				console.log(`${chalk.yellow("would remove")}  ${target.path}`);
+				console.log(`${chalk.yellow(t("cli.commands.worktree.wouldRemove"))}  ${target.path}`);
 			}
-			console.log(chalk.dim(`\n${targets.length} dir${targets.length === 1 ? "" : "s"} would be removed.`));
+			console.log(
+				chalk.dim(
+					targets.length === 1
+						? t("cli.commands.worktree.dryRunOne")
+						: t("cli.commands.worktree.dryRunMany", { count: targets.length }),
+				),
+			);
 		}
 		return { removed: 0, failed: 0 };
 	}
@@ -172,30 +188,33 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ 
 
 	for (const result of results) {
 		if (result.ok) {
-			console.log(`${chalk.green("removed")}  ${result.path}`);
+			console.log(`${chalk.green(t("cli.commands.worktree.removed"))}  ${result.path}`);
 		} else {
-			console.log(`${chalk.red("failed ")}  ${result.path}`);
+			console.log(`${chalk.red(t("cli.commands.worktree.failed"))}  ${result.path}`);
 			if (result.error) console.log(`          ${chalk.dim(result.error)}`);
 		}
 	}
-	console.log(chalk.dim(`\n${succeeded} removed${failed > 0 ? ` · ${chalk.red(`${failed} failed`)}` : ""}`));
+	const failureNote = failed > 0 ? ` · ${chalk.red(t("cli.commands.worktree.failedCount", { count: failed }))}` : "";
+	console.log(chalk.dim(t("cli.commands.worktree.clearSummary", { count: succeeded, failureNote })));
 	return { removed: succeeded, failed };
 }
 
 function formatEntryDetail(entry: ManagedWorktree): string {
 	const parts: string[] = [];
 	if (entry.kind === "pr-checkout") {
-		const repo = entry.parentRepo ? path.basename(entry.parentRepo) : "unknown repo";
-		const branch = entry.branch ?? "unknown branch";
+		const repo = entry.parentRepo ? path.basename(entry.parentRepo) : t("cli.commands.worktree.unknownRepo");
+		const branch = entry.branch ?? t("cli.commands.worktree.unknownBranch");
 		parts.push(`${repo} · ${branch}`);
 	} else if (entry.kind === "ovnfs") {
-		parts.push(`ovnfs · ${entry.parentRepo ?? "unknown source"}${entry.branch ? ` · ${entry.branch}` : ""}`);
+		parts.push(
+			`ovnfs · ${entry.parentRepo ?? t("cli.commands.worktree.unknownSource")}${entry.branch ? ` · ${entry.branch}` : ""}`,
+		);
 	} else if (entry.kind === "task-isolation") {
-		parts.push("task-isolation sandbox");
+		parts.push(t("cli.commands.worktree.taskSandbox"));
 	} else if (entry.kind === "empty") {
-		parts.push("legacy project shell");
+		parts.push(t("cli.commands.worktree.legacyShell"));
 	} else {
-		parts.push("unrecognized contents");
+		parts.push(t("cli.commands.worktree.unrecognized"));
 	}
 	if (entry.orphanReason) parts.push(entry.orphanReason);
 	return parts.join(" — ");

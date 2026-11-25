@@ -1,6 +1,7 @@
 /** `bash` — shell command execution: prompt line with env prefix, badges, output tail. */
 import { parseSpillUrl, spillUrl } from "@oh-my-pi/pi-utils/spill-url";
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, InvalidArg, ResultImages, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, display, isRecord, normalizeWs, num, resultTextOf, shortenPath, str, truncate } from "../util";
@@ -39,6 +40,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const command = args.command === undefined ? "…" : str(args.command);
 	const prefix = isRecord(args.env) ? envPrefix(args.env) : "";
 	const cwd = str(args.cwd);
@@ -56,12 +58,17 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 
 	const stats: string[] = [];
 	if (wallTimeMs !== null) {
-		stats.push(wallTimeMs < 1000 ? `wall ${Math.round(wallTimeMs)}ms` : `wall ${(wallTimeMs / 1000).toFixed(1)}s`);
+		const elapsed = wallTimeMs < 1000 ? `${Math.round(wallTimeMs)}ms` : `${(wallTimeMs / 1000).toFixed(1)}s`;
+		stats.push(t("guesttools.bash.wall", "wall {elapsed}", { elapsed }));
 	}
 	if (requestedTimeoutSeconds !== null && requestedTimeoutSeconds !== timeoutSeconds) {
-		stats.push(`requested timeout ${requestedTimeoutSeconds}s clamped`);
+		stats.push(
+			t("guesttools.bash.timeout_clamped", "requested timeout {timeout}s clamped", {
+				timeout: requestedTimeoutSeconds,
+			}),
+		);
 	}
-	if (job?.jobId) stats.push(`job ${job.jobId}`);
+	if (job?.jobId) stats.push(t("guesttools.job.named", "job {id}", { id: job.jobId }));
 	if (spillId !== undefined) stats.push(spillUrl(spillId));
 
 	return (
@@ -81,7 +88,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					!job && args.async === true && <Badge tone="accent">async</Badge>,
 					head !== null && <Badge>head={head}</Badge>,
 					tail !== null && <Badge>tail={tail}</Badge>,
-					exitCode !== null && <Badge tone="err">exit {exitCode}</Badge>,
+					exitCode !== null && (
+						<Badge tone="err">{t("guesttools.exit_code", "exit {code}", { code: exitCode })}</Badge>
+					),
 					job && (
 						<Badge tone={job.state === "failed" ? "err" : job.state === "running" ? "accent" : "ok"}>
 							async {job.state}

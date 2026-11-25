@@ -11,6 +11,11 @@
  */
 import * as fs from "node:fs";
 import { parseArgs as nodeParseArgs } from "node:util";
+import type { TranslationValues } from "./i18n";
+
+type CliText = (key: string, fallback: string, values?: TranslationValues) => string;
+
+const untranslated: CliText = (_key, fallback) => fallback;
 
 /**
  * Streaming startup marker, enabled by `PI_DEBUG_STARTUP`. Local copy of
@@ -36,9 +41,17 @@ function startupMarker(text: string): void {
  * `dist/cli.js` code frame over a plain argument mistake (issue #5369).
  */
 export class CliUsageError extends Error {
-	constructor(message: string) {
+	readonly #displayMessage: string | undefined;
+
+	constructor(message: string, displayMessage?: string) {
 		super(message);
 		this.name = "CliUsageError";
+		this.#displayMessage = displayMessage;
+	}
+
+	/** Localized presentation; `.message` remains the stable programmatic diagnostic. */
+	get displayMessage(): string {
+		return this.#displayMessage ?? this.message;
 	}
 }
 
@@ -164,6 +177,8 @@ export interface CliConfig<TCommand extends CommandMetadata = CommandCtor> {
 	commands: Map<string, TCommand>;
 	/** Optional host renderer for command help, including implicit help from a command. */
 	commandHelp?: (bin: string, id: string, command: CommandCtor) => Promise<void> | void;
+	/** Optional host translator for human-facing CLI help and diagnostics. */
+	translate?: CliText;
 }
 
 /** Minimal Command base matching the oclif surface we use. */
@@ -181,7 +196,11 @@ export abstract class Command {
 	/** Render this command's help through the host when it supplies a localized renderer. */
 	async showHelp(id: string, command: CommandCtor): Promise<void> {
 		if (this.config.commandHelp) await this.config.commandHelp(this.config.bin, id, command);
-		else renderCommandHelp(this.config.bin, id, command);
+		else renderCommandHelp(this.config.bin, id, command, this.config.translate);
+	}
+
+	#usageError(key: string, message: string, values: TranslationValues): CliUsageError {
+		return new CliUsageError(message, this.config.translate?.(key, message, values));
 	}
 
 	/**
@@ -247,7 +266,10 @@ export abstract class Command {
 				} else {
 					const n = Number.parseInt(raw as string, 10);
 					if (Number.isNaN(n)) {
-						throw new CliUsageError(`Expected integer for --${name}, got "${raw}"`);
+						throw this.#usageError("cli.error.integer", `Expected integer for --${name}, got "${raw}"`, {
+							name,
+							value: String(raw),
+						});
 					}
 					flags[name] = n;
 				}
@@ -260,8 +282,15 @@ export abstract class Command {
 				// Validate options constraint
 				if (val !== undefined && desc.options && !Array.isArray(val)) {
 					if (!desc.options.includes(val as string)) {
-						throw new CliUsageError(
-							`Expected --${name} to be one of: ${[...desc.options].join(", ")}; got "${val}"`,
+						const choices = desc.options.join(", ");
+						throw this.#usageError(
+							"cli.error.flag_choice",
+							`Expected --${name} to be one of: ${choices}; got "${val}"`,
+							{
+								name,
+								choices,
+								value: String(val),
+							},
 						);
 					}
 				}
@@ -269,7 +298,7 @@ export abstract class Command {
 			}
 			// Validate required
 			if (desc.required && flags[name] === undefined) {
-				throw new CliUsageError(`Missing required flag: --${name}`);
+				throw this.#usageError("cli.error.flag_required", `Missing required flag: --${name}`, { name });
 			}
 		}
 
@@ -288,14 +317,23 @@ export abstract class Command {
 			}
 			// Validate required
 			if (desc.required && args[argName] === undefined) {
-				throw new CliUsageError(`Missing required argument: ${argName}`);
+				throw this.#usageError("cli.error.argument_required", `Missing required argument: ${argName}`, {
+					name: argName,
+				});
 			}
 			// Validate options constraint
 			const argVal = args[argName];
 			if (argVal !== undefined && desc.options && typeof argVal === "string") {
 				if (!desc.options.includes(argVal)) {
-					throw new CliUsageError(
-						`Expected ${argName} to be one of: ${[...desc.options].join(", ")}; got "${argVal}"`,
+					const choices = desc.options.join(", ");
+					throw this.#usageError(
+						"cli.error.argument_choice",
+						`Expected ${argName} to be one of: ${choices}; got "${argVal}"`,
+						{
+							name: argName,
+							choices,
+							value: argVal,
+						},
 					);
 				}
 			}
@@ -312,7 +350,7 @@ export abstract class Command {
 /** Render full root help: header, default command details, subcommand list. */
 export function renderRootHelp(
 	config: CliConfig<CommandMetadata>,
-	translate: (key: string, fallback: string) => string = (_key, fallback) => fallback,
+	translate: CliText = config.translate ?? untranslated,
 ): void {
 	const { bin, version, commands } = config;
 	const lines: string[] = [];
@@ -369,37 +407,27 @@ export function commandUsageLine(bin: string, id: string, Cmd: CommandCtor): str
 }
 
 /** Render help for a single command. */
-export function renderCommandHelp(
-	bin: string,
-	id: string,
-	Cmd: CommandCtor,
-	translate: (key: string, fallback: string) => string = (_key, fallback) => fallback,
-): void {
+export function renderCommandHelp(bin: string, id: string, Cmd: CommandCtor, translate: CliText = untranslated): void {
 	const lines: string[] = [];
 	if (Cmd.description) lines.push(`${translate(`cli.command.${id}.description`, Cmd.description)}\n`);
 	lines.push(translate("cli.help.usage", "USAGE"));
 	lines.push(`  ${commandUsageLine(bin, id, Cmd)}\n`);
 	if (Object.keys(Cmd.subcommands ?? {}).length) {
 		lines.push(
-			`${translate("cli.help.subcommands", "Run `{bin} {id} <subcommand> --help` for subcommand flags.")
-				.replace("{bin}", bin)
-				.replace("{id}", id)}\n`,
+			`${translate("cli.help.subcommands", `Run \`${bin} ${id} <subcommand> --help\` for subcommand flags.`, { bin, id })}\n`,
 		);
 	}
-	renderCommandBody(lines, Cmd, (key, fallback) =>
+	renderCommandBody(lines, Cmd, (key, fallback, values) =>
 		translate(
 			key.startsWith("cli.flag.") || key.startsWith("cli.argument.") ? `cli.command.${id}.${key.slice(4)}` : key,
 			fallback,
+			values,
 		),
 	);
 	process.stdout.write(lines.join("\n"));
 }
 
-function renderCommandBody(
-	lines: string[],
-	command: CommandMetadata,
-	translate: (key: string, fallback: string) => string = (_key, fallback) => fallback,
-): void {
+function renderCommandBody(lines: string[], command: CommandMetadata, translate: CliText = untranslated): void {
 	const argDefs = command.args ?? {};
 	const flagDefs = command.flags ?? {};
 
@@ -412,7 +440,10 @@ function renderCommandBody(
 			const parts = [name.toUpperCase().padEnd(maxLen + 2)];
 			if (desc.description) parts.push(translate(`cli.argument.${name}.description`, desc.description));
 			if (desc.options) parts.push(`(${[...desc.options].join("|")})`);
-			if (desc.suggestions) parts.push(`(e.g. ${desc.suggestions.join("|")})`);
+			if (desc.suggestions) {
+				const choices = desc.suggestions.join("|");
+				parts.push(translate("cli.help.suggestions", `(e.g. ${choices})`, { choices }));
+			}
 			lines.push(`  ${parts.join(" ")}`);
 		}
 		lines.push("");
@@ -440,9 +471,10 @@ function renderCommandBody(
 	}
 
 	// Examples
-	if (command.examples && command.examples.length > 0) {
+	const examples = command.examples;
+	if (examples?.length) {
 		lines.push(translate("cli.help.examples", "EXAMPLES"));
-		for (const ex of command.examples) {
+		for (const ex of examples) {
 			for (const line of ex.split("\n")) {
 				lines.push(`  ${line}`);
 			}
@@ -474,6 +506,8 @@ export interface RunOptions {
 	metadataHelp?: (config: CliConfig<CommandMetadata>) => Promise<void> | void;
 	/** Host renderer for explicit and implicit subcommand help. */
 	commandHelp?: (bin: string, id: string, command: CommandCtor) => Promise<void> | void;
+	/** Optional host translator for human-facing CLI help and diagnostics. */
+	translate?: CliText;
 }
 
 /** Find a command entry by exact name or alias. */
@@ -489,6 +523,7 @@ function findEntry(commands: CommandEntry[], id: string): CommandEntry | undefin
  */
 export async function run(opts: RunOptions): Promise<void> {
 	const { bin, version, argv } = opts;
+	const translate = opts.translate ?? untranslated;
 
 	const commandId = argv[0] ?? "";
 	const commandArgv = argv.slice(1);
@@ -502,7 +537,7 @@ export async function run(opts: RunOptions): Promise<void> {
 			if (opts.metadataHelp) {
 				await opts.metadataHelp(config);
 			} else {
-				renderRootHelp(config);
+				renderRootHelp(config, translate);
 			}
 		}
 		return;
@@ -522,9 +557,11 @@ export async function run(opts: RunOptions): Promise<void> {
 		if (entry) {
 			const target = await resolveTarget(entry, commandArgv);
 			if (opts.commandHelp) await opts.commandHelp(bin, target.id, target.Cmd);
-			else renderCommandHelp(bin, target.id, target.Cmd);
+			else renderCommandHelp(bin, target.id, target.Cmd, translate);
 		} else {
-			process.stderr.write(`Unknown command: ${commandId}\n`);
+			process.stderr.write(
+				`${translate("cli.error.unknown_command", `Unknown command: ${commandId}`, { id: commandId })}\n`,
+			);
 		}
 		return;
 	}
@@ -533,7 +570,9 @@ export async function run(opts: RunOptions): Promise<void> {
 	const entry = findEntry(opts.commands, commandId);
 
 	if (!entry) {
-		process.stderr.write(`Error: command ${commandId} not found\n`);
+		process.stderr.write(
+			`${translate("cli.error.command_not_found", `Error: command ${commandId} not found`, { id: commandId })}\n`,
+		);
 		process.exitCode = 1;
 		return;
 	}
@@ -544,6 +583,7 @@ export async function run(opts: RunOptions): Promise<void> {
 		version,
 		commands: new Map([[target.id, target.Cmd]]),
 		commandHelp: opts.commandHelp,
+		translate: opts.translate,
 	};
 	const instance = new target.Cmd(target.argv, config);
 	try {
@@ -554,9 +594,13 @@ export async function run(opts: RunOptions): Promise<void> {
 		// process-level catch would dump a minified `dist/cli.js` code frame over a
 		// plain argument error (issue #5369).
 		if (error instanceof CliUsageError) {
-			process.stderr.write(`error: ${error.message}\n\n`);
-			process.stderr.write(`USAGE\n  ${commandUsageLine(bin, target.id, target.Cmd)}\n`);
-			process.stderr.write(`\nRun \`${bin} ${target.id} --help\` for details.\n`);
+			const { id, Cmd } = target;
+			const message = error.displayMessage;
+			process.stderr.write(`${translate("cli.error.usage", `error: ${message}`, { message })}\n\n`);
+			process.stderr.write(`${translate("cli.help.usage", "USAGE")}\n  ${commandUsageLine(bin, id, Cmd)}\n`);
+			process.stderr.write(
+				`\n${translate("cli.error.details", `Run \`${bin} ${id} --help\` for details.`, { bin, id })}\n`,
+			);
 			process.exitCode = 1;
 			return;
 		}
@@ -609,7 +653,7 @@ async function loadEntry(entry: CommandEntry): Promise<CommandCtor> {
 /** Load every command constructor for backward-compatible custom help callbacks. */
 async function loadAllCommands(opts: RunOptions): Promise<CliConfig> {
 	const loaded = await Promise.all(opts.commands.map(async entry => [entry.name, await loadEntry(entry)] as const));
-	return { bin: opts.bin, version: opts.version, commands: new Map(loaded) };
+	return { bin: opts.bin, version: opts.version, commands: new Map(loaded), translate: opts.translate };
 }
 
 /** Resolve static command metadata for lightweight root help. */
@@ -617,5 +661,5 @@ async function loadAllCommandMetadata(opts: RunOptions): Promise<CliConfig<Comma
 	const loaded = await Promise.all(
 		opts.commands.map(async entry => [entry.name, entry.help ?? (await loadEntry(entry))] as const),
 	);
-	return { bin: opts.bin, version: opts.version, commands: new Map(loaded) };
+	return { bin: opts.bin, version: opts.version, commands: new Map(loaded), translate: opts.translate };
 }

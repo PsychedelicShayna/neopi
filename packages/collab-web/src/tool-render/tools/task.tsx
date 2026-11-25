@@ -1,5 +1,6 @@
 /** `task` — spawn subagents: batch shape, streamed progress, per-agent results. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { AgentLink, Badge, Note, Output, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderHost, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, normalizeWs, num, str, truncate } from "../util";
@@ -58,7 +59,10 @@ function fmtCount(n: number): string {
 }
 
 /** Outcome of one agent, mirroring the TUI's aborted / merge-failed / done / failed split. */
-function resultStatus(res: Record<string, unknown>): { label: string; tone: "ok" | "err" | "warn" } {
+function resultStatus(res: Record<string, unknown>): {
+	label: "aborted" | "merge failed" | "done" | "failed";
+	tone: "ok" | "err" | "warn";
+} {
 	if (res.aborted === true) return { label: "aborted", tone: "err" };
 	if (num(res.exitCode) === 0) {
 		return str(res.error) ? { label: "merge failed", tone: "warn" } : { label: "done", tone: "ok" };
@@ -66,7 +70,15 @@ function resultStatus(res: Record<string, unknown>): { label: string; tone: "ok"
 	return { label: "failed", tone: "err" };
 }
 
+const RESULT_LABELS = {
+	aborted: ["guesttools.task.aborted", "aborted"],
+	"merge failed": ["guesttools.task.merge_failed", "merge failed"],
+	done: ["guesttools.task.done", "done"],
+	failed: ["guesttools.status.failed", "failed"],
+} as const;
+
 function Summary({ args }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const tasks = taskItems(args);
 	// One badge when every spawn runs the same agent; mixed batches badge each row in the body.
 	const agents = new Set(tasks.map(t => t.agent));
@@ -77,21 +89,25 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 		<>
 			{agent && <Badge tone="accent">{agent}</Badge>}
 			{label && <span className="tv-muted">{truncate(label, 72)}</span>}
-			{tasks.length > 1 && <Badge>{tasks.length} tasks</Badge>}
+			{tasks.length > 1 && (
+				<Badge>{t("guesttools.count.task.many", "{count} tasks", { count: tasks.length })}</Badge>
+			)}
 		</>
 	);
 }
 
 /** Final snapshot for one agent: status row, output preview, error/abort notes. */
 function AgentResult({ res, host }: { res: Record<string, unknown>; host?: ToolRenderHost }): ReactNode {
+	const t = useTranslation();
 	const { label, tone } = resultStatus(res);
+	const [labelKey, englishLabel] = RESULT_LABELS[label];
 	const id = str(res.id) ?? "agent";
 	const description = str(res.description);
 	const stats: string[] = [];
 	const tokens = num(res.tokens);
 	if (tokens) stats.push(`${fmtCount(tokens)} tok`);
 	const requests = num(res.requests);
-	if (requests) stats.push(`${requests} req`);
+	if (requests) stats.push(t("guesttools.task.requests", "{count} req", { count: requests }));
 	const durationMs = num(res.durationMs);
 	if (durationMs != null) stats.push(fmtDuration(durationMs));
 	const model = str(res.resolvedModel);
@@ -117,11 +133,12 @@ function AgentResult({ res, host }: { res: Record<string, unknown>; host?: ToolR
 			<Row
 				k={
 					<AgentLink id={id} host={host}>
-						{taskIdLabel(id)}
+						{str(res.id) === null ? t("guesttools.task.agent_fallback", "agent") : taskIdLabel(id)}
 					</AgentLink>
 				}
 			>
-				<Badge tone={tone}>{label}</Badge> {res.truncated === true && <Badge tone="warn">truncated</Badge>}{" "}
+				<Badge tone={tone}>{t(labelKey, englishLabel)}</Badge>{" "}
+				{res.truncated === true && <Badge tone="warn">{t("guesttools.status.truncated", "truncated")}</Badge>}{" "}
 				{description && <span>{truncate(normalizeWs(description), 96)}</span>}{" "}
 				{stats.length > 0 && <span className="tv-faint">{stats.join(" · ")}</span>}
 			</Row>
@@ -129,15 +146,21 @@ function AgentResult({ res, host }: { res: Record<string, unknown>; host?: ToolR
 			{aborted && abortReason && <Note tone="err">{abortReason}</Note>}
 			{output.trim() !== "" && <Output text={output} maxLines={6} error={tone === "err"} />}
 			{error && !aborted && error !== abortReason && <Note tone={tone === "warn" ? "warn" : "err"}>{error}</Note>}
-			{patchPath && <div className="tv-faint">patch: {patchPath}</div>}
-			{!patchPath && branchName && <div className="tv-faint">branch: {branchName}</div>}
+			{patchPath && (
+				<div className="tv-faint">{t("guesttools.task.patch_path", "patch: {path}", { path: patchPath })}</div>
+			)}
+			{!patchPath && branchName && (
+				<div className="tv-faint">{t("guesttools.task.branch_name", "branch: {name}", { name: branchName })}</div>
+			)}
 		</>
 	);
 }
 
 /** Live (still-running) snapshot for one agent. */
 function AgentProgressRow({ p, host }: { p: Record<string, unknown>; host?: ToolRenderHost }): ReactNode {
-	const status = str(p.status) ?? "running";
+	const t = useTranslation();
+	const reportedStatus = str(p.status);
+	const status = reportedStatus ?? "running";
 	const tone =
 		status === "completed"
 			? ("ok" as const)
@@ -151,7 +174,7 @@ function AgentProgressRow({ p, host }: { p: Record<string, unknown>; host?: Tool
 	const intent = str(p.lastIntent) ?? str(p.currentTool);
 	const bits: string[] = [];
 	const toolCount = num(p.toolCount);
-	if (toolCount) bits.push(`${toolCount} tools`);
+	if (toolCount) bits.push(t("guesttools.task.tools", "{count} tools", { count: toolCount }));
 	const tokens = num(p.tokens);
 	if (tokens) bits.push(`${fmtCount(tokens)} tok`);
 	const durationMs = num(p.durationMs);
@@ -160,11 +183,12 @@ function AgentProgressRow({ p, host }: { p: Record<string, unknown>; host?: Tool
 		<Row
 			k={
 				<AgentLink id={id} host={host}>
-					{taskIdLabel(id)}
+					{str(p.id) === null ? t("guesttools.task.agent_fallback", "agent") : taskIdLabel(id)}
 				</AgentLink>
 			}
 		>
-			<Badge tone={tone}>{status}</Badge> {description && <span>{truncate(normalizeWs(description), 96)}</span>}{" "}
+			<Badge tone={tone}>{reportedStatus ?? t("guesttools.card.running", "running")}</Badge>{" "}
+			{description && <span>{truncate(normalizeWs(description), 96)}</span>}{" "}
 			{intent && <span className="tv-muted">{truncate(normalizeWs(intent), 64)}</span>}{" "}
 			{bits.length > 0 && <span className="tv-faint">{bits.join(" · ")}</span>}
 		</Row>
@@ -172,6 +196,7 @@ function AgentProgressRow({ p, host }: { p: Record<string, unknown>; host?: Tool
 }
 
 function Body({ args, result, host }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const context = str(args.context);
 	const tasks = taskItems(args);
 	const details = detailsRecord(result);
@@ -196,10 +221,34 @@ function Body({ args, result, host }: ToolRenderProps): ReactNode {
 		const total = details ? num(details.totalDurationMs) : null;
 		footer = (
 			<Row>
-				{ok > 0 && <Badge tone="ok">{ok} succeeded</Badge>}{" "}
-				{mergeFailed > 0 && <Badge tone="warn">{mergeFailed} merge failed</Badge>}{" "}
-				{failed > 0 && <Badge tone="err">{failed} failed</Badge>}{" "}
-				{aborted > 0 && <Badge tone="err">{aborted} aborted</Badge>}{" "}
+				{ok > 0 && (
+					<Badge tone="ok">
+						{ok === 1
+							? t("guesttools.task.total_succeeded.one", "{count} succeeded", { count: ok })
+							: t("guesttools.task.total_succeeded.many", "{count} succeeded", { count: ok })}
+					</Badge>
+				)}{" "}
+				{mergeFailed > 0 && (
+					<Badge tone="warn">
+						{mergeFailed === 1
+							? t("guesttools.task.total_merge_failed.one", "{count} merge failed", { count: mergeFailed })
+							: t("guesttools.task.total_merge_failed.many", "{count} merge failed", { count: mergeFailed })}
+					</Badge>
+				)}{" "}
+				{failed > 0 && (
+					<Badge tone="err">
+						{failed === 1
+							? t("guesttools.task.total_failed.one", "{count} failed", { count: failed })
+							: t("guesttools.task.total_failed.many", "{count} failed", { count: failed })}
+					</Badge>
+				)}{" "}
+				{aborted > 0 && (
+					<Badge tone="err">
+						{aborted === 1
+							? t("guesttools.task.total_aborted.one", "{count} aborted", { count: aborted })
+							: t("guesttools.task.total_aborted.many", "{count} aborted", { count: aborted })}
+					</Badge>
+				)}{" "}
 				{total != null && <span className="tv-faint">{fmtDuration(total)}</span>}
 			</Row>
 		);
@@ -212,31 +261,43 @@ function Body({ args, result, host }: ToolRenderProps): ReactNode {
 
 	return (
 		<>
-			{context && <Output text={context} maxLines={4} title="context" />}
+			{context && <Output text={context} maxLines={4} title={t("guesttools.label.context", "context")} />}
 			{tasks.length > 0 && (
 				<div className="tv-list">
-					{tasks.map((t, i) => (
-						<div key={t.name ?? i}>
+					{tasks.map((task, i) => (
+						<div key={task.name ?? i}>
 							<Row
 								k={
-									t.name ? (
-										<AgentLink id={t.name} host={host}>
-											{taskIdLabel(t.name)}
+									task.name ? (
+										<AgentLink id={task.name} host={host}>
+											{taskIdLabel(task.name)}
 										</AgentLink>
 									) : (
 										<Badge tone="accent">{`#${i + 1}`}</Badge>
 									)
 								}
 							>
-								{t.agent && <Badge>{t.agent}</Badge>}{" "}
-								{t.steps.length > 0 && (
-									<Badge>{`${t.steps.length} ${t.steps.length === 1 ? "step" : "steps"}`}</Badge>
+								{task.agent && <Badge>{task.agent}</Badge>}{" "}
+								{task.steps.length > 0 && (
+									<Badge>
+										{task.steps.length === 1
+											? t("guesttools.count.step.one", "{count} step", { count: task.steps.length })
+											: t("guesttools.count.step.many", "{count} steps", { count: task.steps.length })}
+									</Badge>
 								)}{" "}
-								{t.isolated && <Badge>isolated</Badge>}
+								{task.isolated && <Badge>{t("guesttools.task.isolated", "isolated")}</Badge>}
 							</Row>
-							{t.task && <Output text={t.task} maxLines={6} title="task" />}
-							{t.steps.map((step, n) => (
-								<Output key={n} text={step} maxLines={4} title={`step ${n + 1}/${t.steps.length}`} />
+							{task.task && <Output text={task.task} maxLines={6} title={t("guesttools.label.task", "task")} />}
+							{task.steps.map((step, n) => (
+								<Output
+									key={n}
+									text={step}
+									maxLines={4}
+									title={t("guesttools.task.step_position", "step {index}/{total}", {
+										index: n + 1,
+										total: task.steps.length,
+									})}
+								/>
 							))}
 						</div>
 					))}

@@ -11,6 +11,7 @@
  * Use case: freeze a busy session, hand-edit the repo, resume, then explain
  * the change via a normal steering message.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { agentPauseGate } from "@oh-my-pi/pi-agent-core";
 import { type Component, matchesKey, type OverlayFocusOwner, type OverlayHandle, type OverlayOptions } from "../index";
 import { formatCoarseDuration } from "../chrome/format";
@@ -64,18 +65,17 @@ const MIN_FULL_WIDTH = 64;
 const MIN_FULL_HEIGHT = 23;
 
 const TITLE = "P A U S E D";
-const BODY_LINES = [
-	"Main agent, subagents, and advisor hold at their next step.",
-	"In-flight calls finish; nothing new starts until you resume.",
-] as const;
+const bodyLines = () =>
+	[t("overlays.pause_screen.agents_hold_summary"), t("overlays.pause_screen.calls_finish_summary")] as const;
 
 /** What the hold means, one fact per row of the native sheet: icon, what, detail. */
-const HOLD_FACTS = [
-	["users", "Every agent holds", "Main agent, subagents and advisor stop at their next step."],
-	["activity", "Running calls finish", "A reply or tool already under way completes; nothing new starts."],
-	["message", "Queued messages wait", "Steering and follow-ups already queued send after you resume."],
-	["pen", "The repo is yours", "Edit files freely, then tell the agent what changed."],
-] as const;
+const holdFacts = () =>
+	[
+		["users", t("overlays.pause_screen.agents_hold_title"), t("overlays.pause_screen.agents_hold_detail")],
+		["activity", t("overlays.pause_screen.calls_finish_title"), t("overlays.pause_screen.calls_finish_detail")],
+		["message", t("overlays.pause_screen.queued_messages_title"), t("overlays.pause_screen.queued_messages_detail")],
+		["pen", t("overlays.pause_screen.repo_title"), t("overlays.pause_screen.repo_detail")],
+	] as const;
 
 /** Live hold clock, seconds-precise: `0:07`, `12:34`, `1:02:03`. */
 function formatClock(ms: number): string {
@@ -102,10 +102,10 @@ export function renderPauseScreen(
 	const screenHeight = Math.max(1, Math.floor(height));
 	const compact = screenWidth < MIN_FULL_WIDTH || screenHeight < MIN_FULL_HEIGHT;
 	const outstanding = workStatus.unsettledTurns > 0 || workStatus.unfinishedJobs > 0;
-	const status = outstanding ? "Pausing — waiting for work to settle" : "Paused — ready to suspend";
+	const status = outstanding ? t("overlays.pause_screen.pausing_status") : t("overlays.pause_screen.paused_status");
 	const workCounts = [
-		`Unsettled turns: ${workStatus.unsettledTurns}`,
-		`Unfinished jobs: ${workStatus.unfinishedJobs}`,
+		t("overlays.pause_screen.unsettled_turns", { unsettledTurns: `${workStatus.unsettledTurns}` }),
+		t("overlays.pause_screen.unfinished_jobs", { unfinishedJobs: `${workStatus.unfinishedJobs}` }),
 	];
 	const content: string[] = [];
 	// Resume keys mirror handleInput: dismiss the pause screen, Enter or Space.
@@ -116,9 +116,15 @@ export function renderPauseScreen(
 			? centerLine(theme.bold(sessionName.replace(/\s+/g, " ").trim()), screenWidth).trimEnd()
 			: undefined;
 		const titleLine = centerLine(theme.bold(theme.fg("accent", `▌▌ ${TITLE}`)), screenWidth).trimEnd();
-		const clockLine = centerLine(theme.fg("dim", `paused for ${formatClock(elapsedMs)}`), screenWidth).trimEnd();
+		const clockLine = centerLine(
+			theme.fg("dim", t("overlays.pause_screen.paused_duration", { elapsedMs: `${formatClock(elapsedMs)}` })),
+			screenWidth,
+		).trimEnd();
 		const statusLine = centerLine(theme.fg(outstanding ? "warning" : "success", status), screenWidth).trimEnd();
-		const resumeLine = centerLine(theme.fg("dim", `${esc} to resume`), screenWidth).trimEnd();
+		const resumeLine = centerLine(
+			theme.fg("dim", t("overlays.pause_screen.resume_hint", { esc: `${esc}` })),
+			screenWidth,
+		).trimEnd();
 		const fullContent: string[] = [];
 		if (sessionLine) fullContent.push(sessionLine);
 		fullContent.push(titleLine, "", clockLine, statusLine);
@@ -132,23 +138,38 @@ export function renderPauseScreen(
 			// Keep the live state and a way out on screen before the decorative card details.
 			if (screenHeight === 1) {
 				const counts = `T:${workStatus.unsettledTurns} J:${workStatus.unfinishedJobs}`;
-				const summary = outstanding ? `${counts} · ${esc} to resume` : `Paused · ${esc} to resume`;
+				const summary = outstanding
+					? t("overlays.pause_screen.counts_resume_hint", { counts: `${counts}`, esc: `${esc}` })
+					: t("overlays.pause_screen.paused_resume_hint", { esc: `${esc}` });
 				const abbreviatedSummary = outstanding
-					? `T${workStatus.unsettledTurns} J${workStatus.unfinishedJobs} ${esc} resume`
-					: `${esc} resume`;
+					? t("overlays.pause_screen.compact_counts_resume", {
+							unsettledTurns: `${workStatus.unsettledTurns}`,
+							unfinishedJobs: `${workStatus.unfinishedJobs}`,
+							esc: `${esc}`,
+						})
+					: t("overlays.pause_screen.resume_short", { esc: `${esc}` });
 				const visibleSummary = visibleWidth(summary) > screenWidth ? abbreviatedSummary : summary;
 				content.push(
 					centerLine(theme.fg(outstanding ? "warning" : "success", visibleSummary), screenWidth).trimEnd(),
 				);
 			} else if (screenHeight === 2 && outstanding) {
-				const counts = `Pausing · T:${workStatus.unsettledTurns} J:${workStatus.unfinishedJobs}`;
+				const counts = t("overlays.pause_screen.pausing_counts", {
+					unsettledTurns: `${workStatus.unsettledTurns}`,
+					unfinishedJobs: `${workStatus.unfinishedJobs}`,
+				});
 				content.push(centerLine(theme.fg("warning", counts), screenWidth).trimEnd(), resumeLine);
 			} else {
 				content.push(statusLine);
 				if (outstanding && screenHeight === 3) {
 					content.push(
 						centerLine(
-							theme.fg("muted", `Turns: ${workStatus.unsettledTurns} · Jobs: ${workStatus.unfinishedJobs}`),
+							theme.fg(
+								"muted",
+								t("overlays.pause_screen.turn_job_counts", {
+									unsettledTurns: `${workStatus.unsettledTurns}`,
+									unfinishedJobs: `${workStatus.unfinishedJobs}`,
+								}),
+							),
 							screenWidth,
 						).trimEnd(),
 					);
@@ -175,7 +196,7 @@ export function renderPauseScreen(
 		content.push("");
 		content.push(centerLine(theme.bold(theme.fg("accent", TITLE)), screenWidth).trimEnd());
 		content.push("");
-		for (const line of BODY_LINES) {
+		for (const line of bodyLines()) {
 			content.push(centerLine(theme.fg("muted", line), screenWidth).trimEnd());
 		}
 		content.push(centerLine(theme.fg(outstanding ? "warning" : "success", status), screenWidth).trimEnd());
@@ -183,9 +204,18 @@ export function renderPauseScreen(
 			content.push(centerLine(theme.fg("muted", workCounts[0]!), screenWidth).trimEnd());
 			content.push(centerLine(theme.fg("muted", workCounts[1]!), screenWidth).trimEnd());
 		}
-		content.push(centerLine(theme.fg("dim", `paused for ${formatClock(elapsedMs)}`), screenWidth).trimEnd());
+		content.push(
+			centerLine(
+				theme.fg("dim", t("overlays.pause_screen.paused_duration", { elapsedMs: `${formatClock(elapsedMs)}` })),
+				screenWidth,
+			).trimEnd(),
+		);
 		content.push("");
-		const resumeHint = `${esc} · ${formatKeyHint("enter")} · ${formatKeyHint("space")} — resume`;
+		const resumeHint = t("overlays.pause_screen.resume_keys", {
+			esc: `${esc}`,
+			value: `${formatKeyHint("enter")}`,
+			value2: `${formatKeyHint("space")}`,
+		});
 		content.push(centerLine(theme.fg("dim", resumeHint), screenWidth).trimEnd());
 	}
 
@@ -278,7 +308,14 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 	}
 
 	/** A glass sheet titled "Paused" (not the whole pane: the transcript stays visible, frozen). */
-	readonly nativeOverlay = { role: "omp.overlay.pause", size: "md", anchor: "center", head: "Paused" } as const;
+	readonly nativeOverlay = {
+		role: "omp.overlay.pause",
+		size: "md",
+		anchor: "center",
+		get head() {
+			return t("overlays.pause_screen.paused_title");
+		},
+	} as const;
 
 	/**
 	 * The sheet: a hero (the pause glyph beside the live hold clock and the
@@ -295,7 +332,9 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 					text(
 						[
 							span(
-								outstanding ? "Pausing — waiting for work to settle" : "Paused — ready to suspend",
+								outstanding
+									? t("overlays.pause_screen.pausing_status")
+									: t("overlays.pause_screen.paused_status"),
 								outstanding ? "warning" : "success",
 							),
 						],
@@ -306,15 +345,35 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 				...(outstanding
 					? [
 							keyed(
-								text([span(`Unsettled turns: ${snapshot.unsettledTurns}`, "muted")], {
-									role: "omp.pause.unsettled-turn-count",
-								}),
+								text(
+									[
+										span(
+											t("overlays.pause_screen.unsettled_turns", {
+												unsettledTurns: `${snapshot.unsettledTurns}`,
+											}),
+											"muted",
+										),
+									],
+									{
+										role: "omp.pause.unsettled-turn-count",
+									},
+								),
 								"unsettled-turns",
 							),
 							keyed(
-								text([span(`Unfinished jobs: ${snapshot.unfinishedJobs}`, "muted")], {
-									role: "omp.pause.unfinished-job-count",
-								}),
+								text(
+									[
+										span(
+											t("overlays.pause_screen.unfinished_jobs", {
+												unfinishedJobs: `${snapshot.unfinishedJobs}`,
+											}),
+											"muted",
+										),
+									],
+									{
+										role: "omp.pause.unfinished-job-count",
+									},
+								),
 								"unfinished-jobs",
 							),
 						]
@@ -334,13 +393,13 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 								age: Date.now() - this.#startedAt,
 								format: "clock",
 								role: "omp.pause.clock",
-								title: "Paused for",
+								title: t("overlays.pause_screen.paused_for"),
 							},
 							undefined,
 							"clock",
 						),
 						keyed(
-							text([span(this.host.sessionName ?? "Every agent in this session", "muted")], {
+							text([span(this.host.sessionName ?? t("overlays.pause_screen.session_agents"), "muted")], {
 								role: "omp.pause.session",
 								wrap: "none",
 								truncate: "end",
@@ -354,7 +413,7 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 			{ role: "omp.pause.hero", gap: "md", align: "center" },
 		);
 		const facts = col(
-			HOLD_FACTS.map(([icon, what, detail], index) =>
+			holdFacts().map(([icon, what, detail], index) =>
 				keyed(
 					row(
 						[
@@ -379,11 +438,15 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 				keyed(facts, "facts"),
 				actionBar([
 					null,
-					actionButton("Resume", "resume", {
+					actionButton(t("overlays.pause_screen.resume"), "resume", {
 						keys: resumeKey,
 						tone: "accent",
 						// Each ` · ` clause ending in two spaces and a key is a keycap: `Resume [esc] · [⏎] · [space]`.
-						title: `Resume  ${formatTooltipKey(resumeKey)} ·   ${formatTooltipKey("enter")} ·   ${formatTooltipKey("space")}`,
+						title: t("overlays.pause_screen.resume_tooltip", {
+							resumeKey: `${formatTooltipKey(resumeKey)}`,
+							value: `${formatTooltipKey("enter")}`,
+							value2: `${formatTooltipKey("space")}`,
+						}),
 					}),
 				]),
 			],
@@ -434,7 +497,7 @@ export async function runPauseScreen(host: PauseScreenHost, options?: PauseScree
 		overlay.hide();
 		const heldMs = agentPauseGate.resume();
 		if (heldMs !== undefined) {
-			host.showStatus(`Resumed after ${formatCoarseDuration(heldMs)} — agents are running again.`);
+			host.showStatus(t("overlays.pause_screen.resumed_status", { heldMs: `${formatCoarseDuration(heldMs)}` }));
 		}
 	}
 }

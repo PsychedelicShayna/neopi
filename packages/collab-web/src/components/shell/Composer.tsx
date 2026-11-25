@@ -225,10 +225,10 @@ export const Composer = memo(function Composer({
 					onCompositionEnd={onCompositionEnd}
 					placeholder={
 						readOnly
-							? "Read-only session — watching only"
+							? tr("composer.read_only", "Read-only session — watching only")
 							: live
-								? "Prompt the host agent…"
-								: "Waiting for the session…"
+								? tr("composer.prompt_host", "Prompt the host agent…")
+								: tr("composer.waiting", "Waiting for the session…")
 					}
 					disabled={!canPrompt}
 					rows={1}

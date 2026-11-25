@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Text } from "../components/text";
 import { type Component, Container } from "../tui";
 import {
@@ -77,9 +78,9 @@ export class TtsrNotificationComponent extends Container {
 	#nativePresentation(): MessageNoticeNativePresentation {
 		const single = this.#rules.length === 1 ? this.#rules[0] : undefined;
 		const head = single
-			? [span("Rule applied: ", "warning"), span(single.name, "mono strong")]
+			? [span(t("overlays.ttsr_notification.rule_applied"), "warning"), span(single.name, "mono strong")]
 			: [
-					span(`${this.#rules.length} rules applied: `, "warning"),
+					span(t("overlays.ttsr_notification.rules_applied", { length: `${this.#rules.length}` }), "warning"),
 					span(this.#rules.map(rule => rule.name).join(", "), "mono strong"),
 				];
 		const body: NativeNode[] = [];
@@ -109,7 +110,10 @@ export class TtsrNotificationComponent extends Container {
 	}
 
 	#presentationSingle(rule: NotificationRule, expanded: boolean): MessageNoticePresentation {
-		const header = `Injecting rule: ${theme.bold(rule.name)}  ${theme.icon.rewind}`;
+		const header = t("overlays.ttsr_notification.injecting_rule", {
+			bold: `${theme.bold(rule.name)}`,
+			rewind: `${theme.icon.rewind}`,
+		});
 
 		const desc = (rule.description || rule.content)?.trim();
 		if (!desc) return { icon: theme.icon.warning, header };
@@ -126,13 +130,22 @@ export class TtsrNotificationComponent extends Container {
 
 		const body: Component[] = [new Text(theme.italic(displayText), 0, 0)];
 		if (truncated) {
-			body.push(new Text(theme.italic(` (${expandKeyHint()} to expand)`), 0, 0));
+			body.push(
+				new Text(
+					theme.italic(t("overlays.ttsr_notification.expand_hint", { expandKeyHint: `${expandKeyHint()}` })),
+					0,
+					0,
+				),
+			);
 		}
 		return { icon: theme.icon.warning, header, body };
 	}
 
 	#presentationMulti(expanded: boolean): MessageNoticePresentation {
-		const header = `Injecting ${this.#rules.length} rules:  ${theme.icon.rewind}`;
+		const header = t("overlays.ttsr_notification.injecting_rules", {
+			length: `${this.#rules.length}`,
+			rewind: `${theme.icon.rewind}`,
+		});
 
 		const visible = expanded ? this.#rules : this.#rules.slice(0, MAX_COLLAPSED_RULES);
 		const body: Component[] = [];
@@ -157,9 +170,26 @@ export class TtsrNotificationComponent extends Container {
 
 		const hidden = this.#rules.length - visible.length;
 		if (hidden > 0) {
-			body.push(new Text(theme.italic(`… +${hidden} more (${expandKeyHint()} to expand)`), 0, 0));
+			body.push(
+				new Text(
+					theme.italic(
+						t("overlays.ttsr_notification.more_expand", {
+							hidden: `${hidden}`,
+							expandKeyHint: `${expandKeyHint()}`,
+						}),
+					),
+					0,
+					0,
+				),
+			);
 		} else if (elidedDetail) {
-			body.push(new Text(theme.italic(` (${expandKeyHint()} to expand)`), 0, 0));
+			body.push(
+				new Text(
+					theme.italic(t("overlays.ttsr_notification.expand_hint", { expandKeyHint: `${expandKeyHint()}` })),
+					0,
+					0,
+				),
+			);
 		}
 		return { icon: theme.icon.warning, header, body };
 	}

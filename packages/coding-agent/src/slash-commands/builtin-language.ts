@@ -22,7 +22,9 @@ export const LANGUAGE_SLASH_COMMAND: SlashCommandSpec = {
 	name: "language",
 	hiddenAliases: ["idioma"],
 	getAutocompleteName: () => (getLocale() === "en" ? "idioma" : "language"),
-	description: "Change the UI language / Cambiar el idioma de la interfaz",
+	get description() {
+		return t("commands.language.description");
+	},
 	icon: "settings",
 	allowArgs: true,
 	getTuiArgumentCompletions(prefix) {

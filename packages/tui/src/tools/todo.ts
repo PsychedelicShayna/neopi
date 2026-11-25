@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { ToolRenderer } from "./renderer";
 
 import type { Component } from "../index";
@@ -11,7 +12,7 @@ import { renderStatusLine, renderTreeList } from "../render";
 import { wrapTreeLine } from "../render/hanging-wrap";
 import { framedToolCard } from "../render/tool-card";
 
-import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
+import { formatMoreItems, formatErrorDetail, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
 import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-pi/pi-wire";
 import { node } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
@@ -231,7 +232,9 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 		const hiddenActive = active.length - cap;
 		return {
 			items: active.slice(0, cap),
-			summary: `… ${hiddenActive} more active ${pluralize("todo", hiddenActive)}`,
+			summary: t(hiddenActive === 1 ? "tools.todo.hidden_active.one" : "tools.todo.hidden_active.many", {
+				count: hiddenActive,
+			}),
 		};
 	}
 
@@ -574,13 +577,13 @@ function describeTodoResult(
 		return {
 			tool: { title: "Todo" },
 			tone: "error",
-			body: [errorText(resultText(result) || "Todo operation failed")],
+			body: [errorText(resultText(result) || t("tools.todo.failed"))],
 		};
 	}
 	const phases = (result.details?.phases ?? []).filter(phase => phase.tasks.length > 0);
 	const total = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
 	if (total === 0) {
-		return { tool: { title: "Todo" }, body: [noteText(forDisplay(resultText(result) || "No todos"))] };
+		return { tool: { title: "Todo" }, body: [noteText(forDisplay(resultText(result) || t("tools.todo.no_todos")))] };
 	}
 	const closed = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
 	const activeDescs = options.expanded ? [] : activeTodoDescriptionsProvider();
@@ -623,7 +626,7 @@ export const todoToolRenderer = {
 		args?: TodoRenderArgs,
 	): Component {
 		if (result.isError) {
-			const errorText = result.content?.find(content => content.type === "text")?.text ?? "Todo operation failed";
+			const errorText = result.content?.find(content => content.type === "text")?.text ?? t("tools.todo.failed");
 			const header = renderStatusLine({ icon: "error", title: "Todo" }, uiTheme);
 			return framedToolCard(uiTheme, () => ({
 				header,
@@ -649,7 +652,7 @@ export const todoToolRenderer = {
 			{
 				iconOverride: uiTheme.styledSymbol("tool.todo", "accent"),
 				title: "Todo",
-				meta: [`${allTasks.length} tasks`],
+				meta: [t("tools.todo.task_count", { count: allTasks.length })],
 			},
 			uiTheme,
 		);
@@ -657,7 +660,9 @@ export const todoToolRenderer = {
 			// Provider text on the Cursor path (the todo summary or a refusal note),
 			// so sanitize like every other label. The error branch above already
 			// goes through `formatErrorDetail`.
-			const fallback = forDisplay(result.content?.find(content => content.type === "text")?.text ?? "No todos");
+			const fallback = forDisplay(
+				result.content?.find(content => content.type === "text")?.text ?? t("tools.todo.no_todos"),
+			);
 			return new Text(`${header}\n  ${uiTheme.fg("dim", fallback)}`, 0, 0);
 		}
 
@@ -795,7 +800,7 @@ export const todoToolRenderer = {
 	},
 
 	describeResult(result: ToolRenderResult<TodoToolDetails>, options: RenderResultOptions): NativeToolView | undefined {
-		return todoResultMemo.get(result, [options.expanded], () => describeTodoResult(result, options));
+		return todoResultMemo.get(result, [getLocale(), options.expanded], () => describeTodoResult(result, options));
 	},
 
 	mergeCallAndResult: true,

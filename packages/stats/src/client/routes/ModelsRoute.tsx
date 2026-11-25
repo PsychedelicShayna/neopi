@@ -1,3 +1,5 @@
+import { LocalizedText, useTranslation, useLocale } from "../i18n";
+import type { Translation } from "../types";
 import "./models.css";
 import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -16,7 +18,7 @@ import {
 } from "../data/formatters";
 import { useQuery } from "../data/query";
 import { bucketAxis, rangeMeta } from "../data/range";
-import { densify, pivotSeries } from "../data/series";
+import { densify, localizeGroupedSeries, pivotSeries } from "../data/series";
 import {
 	buildModelPerformanceLookup,
 	type ModelPerformanceDataPoint,
@@ -52,14 +54,15 @@ export interface ModelsRouteProps {
 type ShareMode = "share" | "requests";
 
 const SHARE_OPTIONS = [
-	{ value: "share" as const, label: "Share" },
-	{ value: "requests" as const, label: "Requests" },
+	{ value: "share" as const, label: <LocalizedText messageKey="pages.models.share" english={"Share"} /> },
+	{ value: "requests" as const, label: <LocalizedText messageKey="pages.models.requests" english={"Requests"} /> },
 ];
 
 /** Models plotted individually in the share chart; the rest fold into "Other". */
 const SHARE_LIMIT = 6;
 
 export function ModelsRoute({ active, range }: ModelsRouteProps) {
+	const tr = useTranslation();
 	const query = useQuery(["models", range], ({ signal }) => getModelDashboardStats(range, signal), {
 		enabled: active,
 	});
@@ -68,20 +71,30 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 	const [hidden, toggleSeries] = useHiddenSeries();
 	const [expandedKey, setExpandedKey] = useState<string | null>(null);
 	const view = useMemo(() => (query.data ? buildModelsView(query.data, range) : null), [query.data, range]);
-	const bucketWord = bucketName(meta.bucketMs);
+	const bucket = bucketName(meta.bucketMs);
+	const bucketWord = tr(`pages.period.${bucket.replace(" ", "_")}`, bucket);
 	// Stable columns: a fresh array would make Table re-sort on every render.
 	const columns = useMemo(
-		() => (view ? buildModelColumns(view, expandedKey, bucketWord) : []),
-		[view, expandedKey, bucketWord],
+		() => (view ? buildModelColumns(view, expandedKey, bucketWord, tr) : []),
+		[view, expandedKey, bucketWord, tr],
 	);
 	const isEmpty = (data: ModelDashboardStats) => data.byModel.length === 0;
-	const empty = <EmptyState title="No model usage in this range" hint="Pick a wider range in the top bar." />;
+	const empty = (
+		<EmptyState
+			title={tr("pages.models.no_model_usage_in_this_range", "No model usage in this range")}
+			hint={tr("pages.models.pick_a_wider_range_in_the_top", "Pick a wider range in the top bar.")}
+		/>
+	);
 
 	return (
 		<div className="page">
 			<PageHeader
-				title="Models"
-				description={`Which models did the work in ${meta.windowLabel}, and how fast they answered.`}
+				title={tr("pages.models.models", "Models")}
+				description={tr(
+					"pages.models.which_models_did_the_work_in_window",
+					"Which models did the work in {window}, and how fast they answered.",
+					{ window: tr(`costs.window.${range}`, meta.windowLabel) },
+				)}
 			/>
 
 			<QueryView
@@ -95,32 +108,47 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 						<div data-stale={query.stale}>
 							<StatGrid min={200}>
 								<Stat
-									label="Models used"
+									label={tr("pages.models.models_used", "Models used")}
 									value={formatInteger(view.models.length)}
-									hint={`across ${formatInteger(view.providerCount)} provider${view.providerCount === 1 ? "" : "s"}`}
+									hint={tr("pages.models.across_count_provider_plural", "across {count} provider{plural}", {
+										count: formatInteger(view.providerCount),
+										plural: view.providerCount === 1 ? "" : "s",
+									})}
 								/>
 								<Stat
-									label="Most used"
+									label={tr("pages.models.most_used", "Most used")}
 									title={view.top ? `${view.top.model} (${view.top.provider})` : undefined}
 									value={view.top ? view.top.model : "–"}
 									hint={
 										view.top
-											? `${formatPercent(view.top.totalRequests / Math.max(1, view.totalRequests))} of requests · ${view.top.provider}`
+											? tr("pages.models.share_of_requests_provider", "{share} of requests · {provider}", {
+													share: formatPercent(view.top.totalRequests / Math.max(1, view.totalRequests)),
+													provider: view.top.provider,
+												})
 											: undefined
 									}
 								/>
 								<Stat
-									label="Requests"
+									label={tr("pages.models.requests", "Requests")}
 									value={formatInteger(view.totalRequests)}
-									hint={`${formatInteger(view.failedRequests)} failed`}
+									hint={tr("pages.models.count_failed", "{count} failed", {
+										count: formatInteger(view.failedRequests),
+									})}
 									spark={view.requestTotals}
 								/>
 								<Stat
-									label="API-equivalent cost"
-									title="What this usage would cost at public API rates"
+									label={tr("pages.models.api_equivalent_cost", "API-equivalent cost")}
+									title={tr(
+										"pages.models.what_this_usage_would_cost_at_public",
+										"What this usage would cost at public API rates",
+									)}
 									value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
 									hint={
-										view.unpricedRequests > 0 ? `${formatInteger(view.unpricedRequests)} unpriced` : undefined
+										view.unpricedRequests > 0
+											? tr("pages.models.count_unpriced", "{count} unpriced", {
+													count: formatInteger(view.unpricedRequests),
+												})
+											: undefined
 									}
 								/>
 							</StatGrid>
@@ -131,11 +159,17 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 
 			<Card
 				index={1}
-				title="Request share"
+				title={tr("pages.models.request_share", "Request share")}
 				description={
 					mode === "share"
-						? `Each model's share of requests per ${bucketWord}`
-						: `Requests per ${bucketWord}, stacked by model`
+						? tr(
+								"pages.models.each_models_share_of_requests_per_bucket",
+								"Each model's share of requests per {bucket}",
+								{ bucket: bucketWord },
+							)
+						: tr("pages.models.requests_per_bucket_stacked_by_model", "Requests per {bucket}, stacked by model", {
+								bucket: bucketWord,
+							})
 				}
 				actions={
 					<Segmented
@@ -143,7 +177,7 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 						options={SHARE_OPTIONS}
 						value={mode}
 						onChange={setMode}
-						aria-label="Share chart mode"
+						aria-label={tr("pages.models.share_chart_mode", "Share chart mode")}
 					/>
 				}
 				stale={query.stale}
@@ -155,7 +189,7 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 								<TimeChart
 									buckets={view.buckets}
 									bucketMs={meta.bucketMs}
-									series={mode === "share" ? view.shareSeries : view.countSeries}
+									series={localizeGroupedSeries(mode === "share" ? view.shareSeries : view.countSeries, tr)}
 									hidden={hidden}
 									height={260}
 									yMax={mode === "share" ? 1 : undefined}
@@ -164,7 +198,7 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 									showTotal={mode === "requests"}
 								/>
 								<Legend
-									items={view.countSeries.map(s => ({
+									items={localizeGroupedSeries(view.countSeries, tr).map(s => ({
 										key: s.key,
 										label: s.label,
 										color: s.color,
@@ -181,8 +215,11 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 
 			<Card
 				index={2}
-				title="All models"
-				description="Click a row for latency and throughput over time"
+				title={tr("pages.models.all_models", "All models")}
+				description={tr(
+					"pages.models.click_a_row_for_latency_and_throughput",
+					"Click a row for latency and throughput over time",
+				)}
 				stale={query.stale}
 				flush
 			>
@@ -316,7 +353,12 @@ function modelLabels(models: readonly ModelStats[]): Map<string, string> {
 	);
 }
 
-function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketWord: string): Column<ModelStats>[] {
+function buildModelColumns(
+	view: ModelsView,
+	expandedKey: string | null,
+	bucketWord: string,
+	tr: Translation,
+): Column<ModelStats>[] {
 	return [
 		{
 			key: "expand",
@@ -330,7 +372,7 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "model",
-			header: "Model",
+			header: <LocalizedText messageKey="pages.models.model" english={"Model"} />,
 			sort: row => row.model,
 			render: row => (
 				<LabelCell
@@ -342,7 +384,7 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: <LocalizedText messageKey="pages.models.requests" english={"Requests"} />,
 			align: "right",
 			sort: row => row.totalRequests,
 			render: row => (
@@ -356,8 +398,9 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "cost",
-			header: "Cost",
+			header: <LocalizedText messageKey="pages.models.cost" english={"Cost"} />,
 			title: "API-equivalent estimate at public rates",
+			titleKey: "pages.models.api_equivalent_estimate_at_public_rates",
 			align: "right",
 			sort: row => row.totalCost,
 			render: row => <span className="num">{formatEstimatedCost(row.totalCost, row.unpricedRequests)}</span>,
@@ -366,6 +409,7 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 			key: "tokens",
 			header: "Tokens",
 			title: "Uncached input + cache reads + cache writes + output",
+			titleKey: "pages.models.uncached_input_cache_reads_cache_writes_output",
 			align: "right",
 			sort: row => sumConversationTokens(row),
 			render: row => {
@@ -379,22 +423,27 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "cache",
-			header: "Cache rate",
+			header: <LocalizedText messageKey="pages.models.cache_rate" english={"Cache rate"} />,
 			title: "Cache reads ÷ (uncached input + cache reads)",
+			titleKey: "pages.models.cache_reads_uncached_input_cache_reads",
 			align: "right",
 			sort: row => row.cacheRate,
 			render: row => <span className="num">{formatPercent(row.cacheRate)}</span>,
 		},
 		{
 			key: "errors",
-			header: "Errors",
+			header: <LocalizedText messageKey="pages.models.errors" english={"Errors"} />,
 			align: "right",
 			sort: row => row.errorRate,
 			render: row =>
 				row.failedRequests === 0 ? (
 					<span className="num dim">0%</span>
 				) : (
-					<span title={`${formatInteger(row.failedRequests)} failed`}>
+					<span
+						title={tr("pages.models.count_failed", "{count} failed", {
+							count: formatInteger(row.failedRequests),
+						})}
+					>
 						<Badge tone={errorRateTone(row.errorRate)} mono>
 							{formatErrorRate(row.errorRate)}
 						</Badge>
@@ -405,6 +454,7 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 			key: "tps",
 			header: "Tokens/s",
 			title: "Average output tokens per second",
+			titleKey: "pages.models.average_output_tokens_per_second",
 			align: "right",
 			sort: row => row.avgTokensPerSecond ?? -1,
 			render: row => <span className="num">{formatTokensPerSecond(row.avgTokensPerSecond)}</span>,
@@ -413,14 +463,15 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 			key: "ttft",
 			header: "TTFT",
 			title: "Average time to first token",
+			titleKey: "pages.models.average_time_to_first_token",
 			align: "right",
 			sort: row => row.avgTtft ?? -1,
 			render: row => <span className="num">{formatDurationMs(row.avgTtft)}</span>,
 		},
 		{
 			key: "trend",
-			header: "Trend",
-			title: `Requests per ${bucketWord}`,
+			header: <LocalizedText messageKey="pages.models.trend" english={"Trend"} />,
+			title: tr("pages.models.requests_per_bucket", "Requests per {bucket}", { bucket: bucketWord }),
 			width: 112,
 			render: row => {
 				const key = modelKey(row.model, row.provider);
@@ -453,6 +504,8 @@ function ModelDetail({
 	bucketMs: number;
 	bucketWord: string;
 }) {
+	const locale = useLocale();
+	const tr = useTranslation();
 	const [hidden, toggle] = useHiddenSeries();
 	const series: ChartSeries[] = [
 		{
@@ -477,23 +530,30 @@ function ModelDetail({
 		<div className="models-detail">
 			<div className="models-detail-facts">
 				<div>
-					<div className="section-label">Efficiency</div>
+					<div className="section-label">{tr("pages.models.efficiency", "Efficiency")}</div>
 					<KeyValues
 						items={[
 							{
 								key: "err",
-								label: "Error rate",
+								label: tr("pages.models.error_rate", "Error rate"),
 								value: (
 									<span className={`tone-${errorRateTone(model.errorRate)}`}>
 										{formatErrorRate(model.errorRate)}{" "}
-										<span className="dim">({formatInteger(model.failedRequests)} failed)</span>
+										<span className="dim">
+											({formatInteger(model.failedRequests)}
+											{tr("pages.models.failed", " failed)")}
+										</span>
 									</span>
 								),
 							},
-							{ key: "cache", label: "Cache rate", value: formatPercent(model.cacheRate) },
+							{
+								key: "cache",
+								label: tr("pages.models.cache_rate", "Cache rate"),
+								value: formatPercent(model.cacheRate),
+							},
 							{
 								key: "savings",
-								label: "Cache savings",
+								label: tr("pages.models.cache_savings", "Cache savings"),
 								value: (
 									<span className={model.cacheSavings < 0 ? "tone-bad" : undefined}>
 										{formatPercent(model.cacheSavings)}
@@ -502,18 +562,26 @@ function ModelDetail({
 							},
 							{
 								key: "premium",
-								label: "Premium requests",
+								label: tr("pages.models.premium_requests", "Premium requests"),
 								value: formatInteger(Math.round(model.totalPremiumRequests * 100) / 100),
 							},
 						]}
 					/>
 				</div>
 				<div>
-					<div className="section-label">Latency</div>
+					<div className="section-label">{tr("pages.models.latency", "Latency")}</div>
 					<KeyValues
 						items={[
-							{ key: "dur", label: "Avg duration", value: formatDurationMs(model.avgDuration) },
-							{ key: "ttft", label: "Avg TTFT", value: formatDurationMs(model.avgTtft) },
+							{
+								key: "dur",
+								label: tr("pages.models.avg_duration", "Avg duration"),
+								value: formatDurationMs(model.avgDuration),
+							},
+							{
+								key: "ttft",
+								label: tr("pages.models.avg_ttft", "Avg TTFT"),
+								value: formatDurationMs(model.avgTtft),
+							},
 							{ key: "tps", label: "Tokens/s", value: formatTokensPerSecond(model.avgTokensPerSecond) },
 						]}
 					/>
@@ -522,22 +590,40 @@ function ModelDetail({
 					<div className="section-label">Tokens</div>
 					<KeyValues
 						items={[
-							{ key: "in", label: "Uncached input", value: formatCompact(model.totalInputTokens) },
-							{ key: "cr", label: "Cache read", value: formatCompact(model.totalCacheReadTokens) },
-							{ key: "cw", label: "Cache write", value: formatCompact(model.totalCacheWriteTokens) },
-							{ key: "out", label: "Output", value: formatCompact(model.totalOutputTokens) },
+							{
+								key: "in",
+								label: tr("pages.models.uncached_input", "Uncached input"),
+								value: formatCompact(model.totalInputTokens),
+							},
+							{
+								key: "cr",
+								label: tr("pages.models.cache_read", "Cache read"),
+								value: formatCompact(model.totalCacheReadTokens),
+							},
+							{
+								key: "cw",
+								label: tr("pages.models.cache_write", "Cache write"),
+								value: formatCompact(model.totalCacheWriteTokens),
+							},
+							{
+								key: "out",
+								label: tr("pages.models.output", "Output"),
+								value: formatCompact(model.totalOutputTokens),
+							},
 						]}
 					/>
 				</div>
 				<div className="micro dim">
-					First seen {formatRelativeTime(model.firstTimestamp)} · last seen{" "}
-					{formatRelativeTime(model.lastTimestamp)}
+					{tr("pages.models.first_seen", "First seen ")}
+					{formatRelativeTime(model.firstTimestamp, locale)}
+					{tr("pages.models.last_seen", " · last seen")} {formatRelativeTime(model.lastTimestamp, locale)}
 				</div>
 			</div>
 			<div className="models-detail-chart">
 				<div className="row" style={{ justifyContent: "space-between" }}>
 					<div className="section-label" style={{ marginBottom: 0 }}>
-						Performance per active {bucketWord}
+						{tr("pages.models.performance_per_active", "Performance per active ")}
+						{bucketWord}
 					</div>
 					<Legend
 						items={series.map(s => ({ key: s.key, label: s.label, color: s.color }))}
@@ -546,7 +632,13 @@ function ModelDetail({
 					/>
 				</div>
 				{points.length === 0 ? (
-					<EmptyState title="No performance samples" hint="Timing is recorded for streamed responses." />
+					<EmptyState
+						title={tr("pages.models.no_performance_samples", "No performance samples")}
+						hint={tr(
+							"pages.models.timing_is_recorded_for_streamed_responses",
+							"Timing is recorded for streamed responses.",
+						)}
+					/>
 				) : (
 					<TimeChart
 						buckets={points.map(p => p.timestamp)}
@@ -560,7 +652,7 @@ function ModelDetail({
 						formatRight={v => `${Number(v.toFixed(2))}s`}
 						tooltipExtra={i => (
 							<div className="chart-tooltip-row chart-tooltip-total">
-								<span className="chart-tooltip-label">Requests</span>
+								<span className="chart-tooltip-label">{tr("pages.models.requests", "Requests")}</span>
 								<span className="chart-tooltip-value">{formatInteger(points[i].requests)}</span>
 							</div>
 						)}

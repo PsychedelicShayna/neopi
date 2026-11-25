@@ -6,6 +6,7 @@ import { PROVIDER_REGISTRY } from "@oh-my-pi/pi-ai";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { APP_NAME, getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { tokenHelp as commandHelp } from "../cli/command-help";
 import { isAuthenticated, ModelRegistry } from "../config/model-registry";
 import { refreshStoredManagedMcpOAuthCredential } from "../mcp/oauth-credentials";
@@ -75,13 +76,16 @@ export default class Token extends Command {
 		}),
 	};
 
-	static examples = [
-		`# Get API key for Anthropic\n  ${APP_NAME} token anthropic`,
-		`# Get raw Copilot credential JSON\n  ${APP_NAME} token github-copilot --raw`,
-		`# Force refresh and get Gemini CLI token\n  ${APP_NAME} token google-gemini-cli --force-refresh`,
-		`# List Anthropic OAuth accounts\n  ${APP_NAME} token anthropic --list`,
-		`# Get the 2nd Anthropic OAuth account's token\n  ${APP_NAME} token anthropic --account 2`,
-	];
+	static get examples(): string[] {
+		const values = { bin: APP_NAME };
+		return [
+			t("cli.commands.token.exampleApi", values),
+			t("cli.commands.token.exampleRaw", values),
+			t("cli.commands.token.exampleRefresh", values),
+			t("cli.commands.token.exampleList", values),
+			t("cli.commands.token.exampleAccount", values),
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Token);
@@ -96,7 +100,7 @@ export default class Token extends Command {
 			const scopedProfile = mcpOAuthCredentialProfile(provider);
 			if (scopedProfile !== undefined && scopedProfile !== (getActiveProfile() ?? "default")) {
 				process.stderr.write(
-					`${chalk.red(`Managed MCP credential "${providerName}" belongs to profile "${scopedProfile}", not the active profile.`)}\n`,
+					`${chalk.red(t("cli.commands.token.wrongProfile", { provider: providerName, profile: scopedProfile }))}\n`,
 				);
 				process.exitCode = 1;
 				return;
@@ -108,8 +112,8 @@ export default class Token extends Command {
 			if (flags.list || flags.account !== undefined) {
 				const accounts = authStorage.oauth.accounts(provider);
 				if (accounts.length === 0) {
-					process.stderr.write(`${chalk.red(`No OAuth accounts found for provider "${providerName}".`)}\n`);
-					process.stderr.write("--account/--list select among OAuth accounts; this provider has none stored.\n");
+					process.stderr.write(`${chalk.red(t("cli.commands.token.noAccounts", { provider: providerName }))}\n`);
+					process.stderr.write(`${t("cli.commands.token.accountFlags")}\n`);
 					process.exitCode = 1;
 					return;
 				}
@@ -120,7 +124,7 @@ export default class Token extends Command {
 							acct.accountId ??
 							acct.projectId ??
 							acct.enterpriseUrl ??
-							`credential #${acct.credentialId}`;
+							t("cli.commands.token.credential", { id: acct.credentialId });
 						const org = acct.orgName ?? acct.orgId;
 						const label = org && org !== base ? `${base} (${org})` : base;
 						process.stdout.write(`${acct.position + 1}. ${label}\n`);
@@ -129,8 +133,11 @@ export default class Token extends Command {
 				}
 				const n = flags.account;
 				if (n === undefined || n < 1 || n > accounts.length) {
+					const invalid = chalk.red(
+						t("cli.commands.token.invalidAccount", { index: n ?? t("cli.commands.token.missing") }),
+					);
 					process.stderr.write(
-						`${chalk.red(`Invalid --account ${n ?? "(missing)"}.`)} Provider "${providerName}" has ${accounts.length} OAuth account(s) (1-${accounts.length}).\n`,
+						`${t("cli.commands.token.accountRange", { invalid, provider: providerName, count: accounts.length })}\n`,
 					);
 					process.exitCode = 1;
 					return;
@@ -148,9 +155,9 @@ export default class Token extends Command {
 					return;
 				}
 				if (!resolution?.ok) {
-					const reason = resolution && !resolution.ok ? resolution.error : "no OAuth credential available";
+					const reason = resolution && !resolution.ok ? resolution.error : t("cli.commands.token.noOauth");
 					process.stderr.write(
-						`${chalk.red(`Could not get token for account ${n} of "${providerName}": ${reason}`)}\n`,
+						`${chalk.red(t("cli.commands.token.accountFailed", { index: n, provider: providerName, reason }))}\n`,
 					);
 					process.exitCode = 1;
 					return;
@@ -199,10 +206,12 @@ export default class Token extends Command {
 					}
 				}
 
-				const msg = `No active credential found for provider "${providerName}".`;
+				const msg = t("cli.commands.token.noCredential", { provider: providerName });
 				process.stderr.write(`${chalk.red(msg)}\n`);
 				if (activeProviders.size > 0) {
-					process.stderr.write(`Configured providers: ${Array.from(activeProviders).sort().join(", ")}\n`);
+					process.stderr.write(
+						`${t("cli.commands.token.providers", { providers: Array.from(activeProviders).sort().join(", ") })}\n`,
+					);
 				}
 				process.exitCode = 1;
 				return;

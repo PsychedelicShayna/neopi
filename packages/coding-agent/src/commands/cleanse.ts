@@ -1,5 +1,6 @@
 import { APP_NAME, postmortem } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { runCleanseCommand } from "../cleanse";
 import { cleanseHelp as commandHelp } from "../cli/command-help";
 import { CliUsageError } from "../cli/usage-error";
@@ -47,7 +48,7 @@ export default class Cleanse extends Command {
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Cleanse);
-		if (flags.agents <= 0) throw new CliUsageError("--agents must be a positive integer");
+		if (flags.agents <= 0) throw new CliUsageError(t("cli.commands.cleanse.error.agents_positive"));
 		const result = await runCleanseCommand({
 			maxAgents: flags.agents,
 			model: flags.model,

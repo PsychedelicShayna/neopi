@@ -12,6 +12,7 @@
  * title says the model saw the original): folds, labels and notes come from the would-be text. Esc, Close or a
  * backdrop click closes it; nothing enters the transcript.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { TspCodeFold, TspCodeMark, TspPropNode, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import {
@@ -52,8 +53,12 @@ export interface SpotlightSheetOptions {
 
 /** Why a hidden line went, as a fold says it. */
 const CUT_WHY: Partial<Record<SpotlightReason, string>> = {
-	b: "cut by the budget",
-	r: "seen in an earlier call",
+	get b() {
+		return t("overlays.spotlight_sheet.cut_budget");
+	},
+	get r() {
+		return t("overlays.spotlight_sheet.seen_earlier");
+	},
 	f: "folded",
 };
 
@@ -62,11 +67,35 @@ type LineClass = "a" | "s" | "n" | "c" | "hot" | "cut";
 
 /** The summary's legend, in order: each class, its swatch tone and its label. */
 const LEGEND: readonly { cls: LineClass; tone: TspTone; label: string }[] = [
-	{ cls: "a", tone: "accent", label: "kept by score" },
-	{ cls: "s", tone: "neutral", label: "kept as structure" },
+	{
+		cls: "a",
+		tone: "accent",
+		get label() {
+			return t("overlays.spotlight_sheet.kept_score");
+		},
+	},
+	{
+		cls: "s",
+		tone: "neutral",
+		get label() {
+			return t("overlays.spotlight_sheet.kept_structure");
+		},
+	},
 	{ cls: "n", tone: "user", label: "named" },
-	{ cls: "c", tone: "info", label: "kept as context" },
-	{ cls: "hot", tone: "error", label: "cut though hot" },
+	{
+		cls: "c",
+		tone: "info",
+		get label() {
+			return t("overlays.spotlight_sheet.kept_context");
+		},
+	},
+	{
+		cls: "hot",
+		tone: "error",
+		get label() {
+			return t("overlays.spotlight_sheet.cut_hot");
+		},
+	},
 	{ cls: "cut", tone: "muted", label: "cut" },
 ];
 
@@ -101,7 +130,10 @@ function nonBlankParams(params: SpotlightRequestParams): Param[] {
 		{ name: "commands", values: params.commands, style: "mono" },
 		{ name: "source", values: [params.source], style: "mono" },
 		{ name: "probe", values: [params.probe], style: "mono" },
-		{ name: "model", values: [params.model, `${params.thinking} thinking`] },
+		{
+			name: "model",
+			values: [params.model, t("overlays.spotlight_sheet.thinking", { thinking: `${params.thinking}` })],
+		},
 	];
 	return all.filter(param => param.values.some(value => sanitizeText(value).trim() !== ""));
 }
@@ -131,7 +163,7 @@ function requestParams(params: SpotlightRequestParams, expanded: boolean): Nativ
 	const rest = named.slice(1);
 	const toggle =
 		rest.length > 0
-			? text(expanded ? "fewer ▾" : `${rest.map(param => param.name).join(", ")} ▸`, {
+			? text(expanded ? t("overlays.spotlight_sheet.fewer") : `${rest.map(param => param.name).join(", ")} ▸`, {
 					role: "omp.spotlight.more",
 					actions: { click: "params" },
 				})
@@ -153,8 +185,12 @@ function lineClass(original: SpotlightOriginal, i: number): LineClass | undefine
 /** A ranking step's budget and cutoff, as the summary or a window's head says them. */
 function rankFacts(rank: SpotlightRank): string {
 	return rank.budget !== undefined
-		? `budget ${count(rank.used ?? 0)} of ${count(rank.budget)} chars · cutoff ${fixed(rank.cutoff)}`
-		: `cutoff ${fixed(rank.cutoff)}`;
+		? t("overlays.spotlight_sheet.budget_cutoff", {
+				count: `${count(rank.used ?? 0)}`,
+				count2: `${count(rank.budget)}`,
+				fixed: `${fixed(rank.cutoff)}`,
+			})
+		: t("overlays.spotlight_sheet.cutoff", { fixed: `${fixed(rank.cutoff)}` });
 }
 
 /**
@@ -182,7 +218,8 @@ function summary(
 	}
 	const facts: string[] = [];
 	if (rank) facts.push(rankFacts(rank));
-	if (shown < total) facts.push(`first ${count(shown)} of ${count(total)} lines`);
+	if (shown < total)
+		facts.push(t("overlays.spotlight_sheet.first_lines", { count: `${count(shown)}`, count2: `${count(total)}` }));
 	if (items.length === 0 && facts.length === 0) return undefined;
 	const budget = facts.length > 0 && text([span(facts.join(" · "), "muted")], { role: "omp.spotlight.budget" });
 	return row(compact([...items, node("spacer", { grow: 1 }), budget]), {
@@ -292,7 +329,11 @@ function cutWhy(original: SpotlightOriginal, window: SpotlightWindow, i: number)
 	const last = rank?.last;
 	if (reason === "b" && rank && last) {
 		const total = rankParts(rank, last.line - 1).reduce((sum, part) => sum + part, 0);
-		return `cut by the budget: line ${window.start + last.line - 1} (${fixed(total)}) took the last ${count(last.chars)} chars`;
+		return t("overlays.spotlight_sheet.budget_explanation", {
+			value: `${window.start + last.line - 1}`,
+			fixed: `${fixed(total)}`,
+			count: `${count(last.chars)}`,
+		});
 	}
 	return reason === undefined ? undefined : CUT_WHY[reason];
 }
@@ -310,7 +351,7 @@ function hotCard(sheet: SheetText, window: SpotlightWindow, i: number): TspPropN
 	return propNode(
 		col(
 			compact([
-				text([span(`line ${line} · the hottest line this fold hides`, "muted")]),
+				text([span(t("overlays.spotlight_sheet.hottest_line", { line: `${line}` }), "muted")]),
 				code(sheet.lines[i] ?? "", {
 					path: window.path,
 					start: line,
@@ -320,7 +361,11 @@ function hotCard(sheet: SheetText, window: SpotlightWindow, i: number): TspPropN
 				rank &&
 					text([
 						span(
-							`${parts.map(fixed).join(" + ")} = ${fixed(parts.reduce((sum, part) => sum + part, 0))} · cutoff ${fixed(rank.cutoff)}`,
+							t("overlays.spotlight_sheet.score_cutoff", {
+								join: `${parts.map(fixed).join(" + ")}`,
+								fixed: `${fixed(parts.reduce((sum, part) => sum + part, 0))}`,
+								fixed2: `${fixed(rank.cutoff)}`,
+							}),
 							"muted",
 						),
 					]),
@@ -351,13 +396,24 @@ function fold(sheet: SheetText, window: SpotlightWindow, from: number, to: numbe
 	}
 	const n = to - from + 1;
 	const note: TspSpan[] = [
-		span(`${count(n)} ${n === 1 ? "line" : "lines"}${peak === undefined ? "" : ` · peak ${fixed(peak)}`}`, "muted"),
+		span(
+			`${count(n)} ${n === 1 ? "line" : "lines"}${peak === undefined ? "" : t("overlays.spotlight_sheet.peak", { fixed: `${fixed(peak)}` })}`,
+			"muted",
+		),
 	];
 	const out: TspCodeFold = { from: lineNumber(window, from), to: lineNumber(window, to) };
 	const label = foldLabel(sheet, from, to);
 	if (hot < 0) return { ...out, ...(label ? { label } : {}), note };
 	const why = CUT_WHY[reasonAt(original.why, hot) ?? "-"];
-	note.push(span(` · line ${lineNumber(window, hot)}${why ? ` ${why}` : ""}`, "error"));
+	note.push(
+		span(
+			t("overlays.spotlight_sheet.line_note", {
+				lineNumber: `${lineNumber(window, hot)}`,
+				value: `${why ? ` ${why}` : ""}`,
+			}),
+			"error",
+		),
+	);
 	return { ...out, ...(label ? { label } : {}), note, tone: "error", hovercard: hotCard(sheet, window, hot) };
 }
 
@@ -411,9 +467,9 @@ function windowSection(sheet: SheetText, section: Section): NativeNode {
 	const shown = section.end - section.from;
 	const clip =
 		shown === 0
-			? `not shown: past the first ${count(SPOTLIGHT_VIEW_LINES)} lines`
+			? t("overlays.spotlight_sheet.past_line_limit", { count: `${count(SPOTLIGHT_VIEW_LINES)}` })
 			: shown < section.lines
-				? `${count(shown)} of ${count(section.lines)} lines shown`
+				? t("overlays.spotlight_sheet.shown_lines", { count: `${count(shown)}`, count2: `${count(section.lines)}` })
 				: undefined;
 	const head =
 		(path !== undefined || clip !== undefined || rank) &&
@@ -442,7 +498,7 @@ function shapingNotes(sheet: SheetText, heldOut: boolean): NativeNode | undefine
 		if (line) notes.push(line);
 	}
 	if (notes.length === 0) return undefined;
-	const heading = heldOut ? "notes the model would have seen" : "notes the model saw";
+	const heading = heldOut ? t("overlays.spotlight_sheet.notes_would_see") : t("overlays.spotlight_sheet.notes_seen");
 	return col([text([span(heading, "muted")]), ...notes.map(note => text([span(note, "muted mono")]))], {
 		gap: "xs",
 		role: "omp.spotlight.notes",
@@ -451,7 +507,9 @@ function shapingNotes(sheet: SheetText, heldOut: boolean): NativeNode | undefine
 
 /** A rank's parts in their order across a row, as its legend names them. */
 function rankLabel(rank: SpotlightRank): string {
-	return rank.parts.length > 1 ? `row tint, left to right: ${rank.parts.join(" → ")}` : `row tint: ${rank.parts[0]}`;
+	return rank.parts.length > 1
+		? t("overlays.spotlight_sheet.row_tint_order", { join: `${rank.parts.join(" → ")}` })
+		: t("overlays.spotlight_sheet.row_tint", { value: `${rank.parts[0]}` });
 }
 
 /**
@@ -480,18 +538,24 @@ export class SpotlightSheet implements Component {
 		const saving = spotlightSaving(s);
 		const saved =
 			s.holdout || s.gated
-				? `would save ${formatNumber(Math.max(0, saving))} toks`
+				? t("overlays.spotlight_sheet.would_save", { max: `${formatNumber(Math.max(0, saving))}` })
 				: saving >= 0
-					? `saved ${formatNumber(saving)} toks`
-					: `+${formatNumber(-saving)} toks`;
+					? t("overlays.spotlight_sheet.saved", { saving: `${formatNumber(saving)}` })
+					: t("overlays.spotlight_sheet.extra_tokens", { value: `${formatNumber(-saving)}` });
 		const heldOut = s.holdout
-			? "held out (the model saw the original) · "
+			? t("overlays.spotlight_sheet.held_out")
 			: s.gated
-				? "kept whole for editing (the model saw the original) · "
+				? t("overlays.spotlight_sheet.kept_for_editing")
 				: "";
 		this.nativeOverlay = {
 			role: "omp.overlay.spotlight",
-			head: `⭐ Spotlight · ${heldOut}${s.tool} · ${formatNumber(s.inChars)} → ${formatNumber(s.outChars)} chars · ${saved}`,
+			head: t("overlays.spotlight_sheet.heading", {
+				heldOut: `${heldOut}`,
+				tool: `${s.tool}`,
+				inChars: `${formatNumber(s.inChars)}`,
+				outChars: `${formatNumber(s.outChars)}`,
+				saved: `${saved}`,
+			}),
 			size: "lg",
 			anchor: "center",
 		};
@@ -528,13 +592,20 @@ export class SpotlightSheet implements Component {
 				single ? section.end > section.from && windowCode(sheet, section) : windowSection(sheet, section),
 			),
 			shapingNotes(sheet, spotlight.holdout === true || spotlight.gated === true),
-			actionBar([...legends.map(rankLegend), null, actionButton("Close", "close", { keys: "escape" })]),
+			actionBar([
+				...legends.map(rankLegend),
+				null,
+				actionButton(t("tui.picker.close"), "close", { keys: "escape" }),
+			]),
 		]);
 		return this.#body;
 	}
 
 	render(width: number): string[] {
-		return [truncateToWidth(this.nativeOverlay.head, width), truncateToWidth("Esc closes", width)];
+		return [
+			truncateToWidth(this.nativeOverlay.head, width),
+			truncateToWidth(t("overlays.spotlight_sheet.esc_closes"), width),
+		];
 	}
 
 	invalidate(): void {

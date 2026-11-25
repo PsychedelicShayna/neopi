@@ -18,6 +18,7 @@
  * Expand / Close actions; without `picker` it describes a page with the same
  * parts. Pointer events run the key paths above.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspPickerAction, TspPickerColumn, TspPickerScope } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
 import { col, keyed, node, span, text } from "../../native/describe";
@@ -85,8 +86,11 @@ export interface ExtensionDashboardOptions {
 }
 
 function extFooter(pane: "list" | "inspector", filtering: boolean): string {
-	if (filtering) return "Search extensions · Enter confirm · Esc clear";
-	return `Tab focus · / search · ${pane === "list" ? "Space toggle · " : ""}${expandKeyHint()} expand · Esc close · ? help`;
+	if (filtering) return t("overlays.extension_dashboard.search_footer");
+	return t("overlays.extension_dashboard.dashboard_footer", {
+		value: `${pane === "list" ? t("overlays.extension_dashboard.toggle_footer") : ""}`,
+		expandKeyHint: `${expandKeyHint()}`,
+	});
 }
 
 /**
@@ -108,7 +112,6 @@ export function buildTabBarTabs(tabs: ProviderTab[]): Tab[] {
 }
 
 /** The sheet/page title, shared by the ANSI frame and the native views. */
-const DASHBOARD_TITLE = "Extension Control Center";
 
 /** The kind column shown when rows are not grouped under kind headers (a provider scope or a search). */
 const KIND_COLUMNS: readonly TspPickerColumn[] = [{ id: "kind", format: "dim", priority: 1 }];
@@ -130,16 +133,17 @@ function providerInitials(label: string): string {
  */
 export function buildPickerScopes(tabs: ProviderTab[]): TspPickerScope[] {
 	return tabs.map(tab => {
-		if (tab.id === "all") return { id: tab.id, label: "All", icon: "extension", count: tab.count };
+		if (tab.id === "all")
+			return { id: tab.id, label: t("overlays.extension_dashboard.all_tab"), icon: "extension", count: tab.count };
 		const emptyEnabled = tab.count === 0 && tab.enabled;
 		return {
 			id: tab.id,
 			label: tab.label,
 			mark: { text: providerInitials(tab.label), seed: tab.id },
 			count: tab.count,
-			group: "Providers",
+			group: t("settings.tab.providers.label"),
 			dot: !tab.enabled ? "muted" : emptyEnabled ? "warning" : "success",
-			disabled: emptyEnabled ? "No extensions" : undefined,
+			disabled: emptyEnabled ? t("overlays.extension_dashboard.no_extensions") : undefined,
 		};
 	});
 }
@@ -165,7 +169,7 @@ export class ExtensionDashboard implements Component {
 	#body!: TwoColumnBody;
 	#refreshToken = 0;
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp(undefined, "Left/Right switch provider tabs; Tab switches list/inspector.");
+	readonly #help = new MenuHelp(undefined, () => t("overlays.extension_dashboard.navigation_help"));
 	#pane: "list" | "inspector" = "list";
 	#pendingOperations = 0;
 	// Persistent fullscreen frame: top, tabs, divider, body, divider, footer,
@@ -298,7 +302,7 @@ export class ExtensionDashboard implements Component {
 		this.#mainList.setToolSource(toolFrame);
 		this.#inspector.setToolSource(toolFrame);
 
-		this.#frameTop.setLines([topBorder(width, DASHBOARD_TITLE)]);
+		this.#frameTop.setLines([topBorder(width, t("overlays.extension_dashboard.dashboard_title"))]);
 		this.#frameTabs.setLines(tabLines.map(line => row(line, width)));
 		this.#frameUpperDivider.setLines([divider(width)]);
 		this.#frameBody.setLines(this.#body.render(innerWidth).map(line => row(line, width)));
@@ -731,15 +735,17 @@ export class ExtensionDashboard implements Component {
 		const error = compileMenuRegex(this.#state.searchQuery)?.error;
 		return picker(
 			{
-				title: DASHBOARD_TITLE,
-				subtitle: error ? `Invalid regex: ${error}` : extFooter(this.#pane, this.#mainList.filterFocused),
+				title: t("overlays.extension_dashboard.dashboard_title"),
+				subtitle: error
+					? t("overlays.extension_dashboard.invalid_regex", { error: `${error}` })
+					: extFooter(this.#pane, this.#mainList.filterFocused),
 				icon: "extension",
 				noun: "extensions",
 				size: "lg",
 				layout: "rows",
 				preview: "side",
 				...this.#mainList.nativeQuery(),
-				placeholder: "/ search extensions…",
+				placeholder: t("overlays.extension_dashboard.search_placeholder"),
 				scopes: buildPickerScopes(this.#state.tabs),
 				scope: activeTab?.id ?? "all",
 				columns: view.grouped ? undefined : KIND_COLUMNS,
@@ -748,7 +754,7 @@ export class ExtensionDashboard implements Component {
 				hits: view.hits,
 				selected: view.selected,
 				total: this.#state.tabFiltered.length,
-				empty: "No extensions found for this provider.",
+				empty: t("overlays.extension_dashboard.provider_empty"),
 				actions: this.#pickerActions(this.#mainList.selectedSwitch()),
 				focus: this.#pane === "inspector" ? "preview" : "list",
 			},
@@ -769,13 +775,21 @@ export class ExtensionDashboard implements Component {
 		const expanded = this.#inspector.isExpanded();
 		const listFocused = this.#pane === "list" && !this.#mainList.filterFocused;
 		return [
-			pickerAction("toggle", "Toggle", listFocused ? "space" : undefined, {
+			pickerAction("toggle", t("overlays.extension_dashboard.toggle_action"), listFocused ? "space" : undefined, {
 				primary: listFocused,
 				on: selected?.on,
-				disabled: selected ? selected.blocked : "Select an extension",
+				disabled: selected ? selected.blocked : t("overlays.extension_dashboard.select_extension"),
 			}),
-			pickerAction("expand", expanded ? "Collapse" : "Expand", this.#expandKey(), { on: expanded }),
-			{ ...CLOSE_ACTION, label: this.#mainList.filterFocused ? "Back to list" : "Close" },
+			pickerAction(
+				"expand",
+				expanded ? t("overlays.extension_dashboard.collapse_action") : t("overlays.btw_controller.expand"),
+				this.#expandKey(),
+				{ on: expanded },
+			),
+			{
+				...CLOSE_ACTION,
+				label: this.#mainList.filterFocused ? t("tui.picker.back_to_list") : t("tui.picker.close"),
+			},
 		];
 	}
 
@@ -794,14 +808,26 @@ export class ExtensionDashboard implements Component {
 			{ justify: "between", align: "center", role: "omp.app.head" },
 			[
 				node("row", { gap: "sm", align: "center", role: "omp.app.where" }, [
-					text(DASHBOARD_TITLE, { role: "omp.app.title" }),
-					text([span(query ? `${shown} of ${total}` : `${total} extensions`, "muted")], { truncate: "end" }),
+					text(t("overlays.extension_dashboard.dashboard_title"), { role: "omp.app.title" }),
+					text(
+						[
+							span(
+								query
+									? t("overlays.extension_dashboard.filtered_count", { shown: `${shown}`, total: `${total}` })
+									: t("overlays.extension_dashboard.extension_count", { total: `${total}` }),
+								"muted",
+							),
+						],
+						{ truncate: "end" },
+					),
 				]),
 				iconButton(
 					"x",
 					"close",
-					this.#mainList.filterFocused ? "Back to list  Esc" : `Close  ${formatTooltipKey("escape")}`,
-					{ aria: this.#mainList.filterFocused ? "Back to list" : "Close" },
+					this.#mainList.filterFocused
+						? t("overlays.extension_dashboard.back_tooltip")
+						: t("overlays.extension_dashboard.close_tooltip", { value: `${formatTooltipKey("escape")}` }),
+					{ aria: this.#mainList.filterFocused ? t("tui.picker.back_to_list") : t("tui.picker.close") },
 				),
 			],
 			"head",
@@ -809,7 +835,11 @@ export class ExtensionDashboard implements Component {
 		const search = text(
 			[
 				span(
-					error ? `Invalid regex: ${error}` : this.#mainList.filterFocused ? "Search: " : "/ search · ",
+					error
+						? t("overlays.extension_dashboard.search_invalid_regex", { error: `${error}` })
+						: this.#mainList.filterFocused
+							? t("tui.components.search.prefix")
+							: t("overlays.extension_dashboard.search_hint"),
 					"muted",
 				),
 				span(query, "accent"),
@@ -832,17 +862,33 @@ export class ExtensionDashboard implements Component {
 		);
 		const expanded = this.#inspector.isExpanded();
 		const buttons: (NativeNode | null)[] = [
-			actionButton(selected?.on === false ? "Enable" : selected ? "Disable" : "Toggle", "toggle", {
-				keys: this.#pane === "list" && !this.#mainList.filterFocused ? "space" : undefined,
-				tone: "accent",
-				title: selected?.blocked ?? (selected ? undefined : "Select an extension"),
-			}),
-			actionButton(expanded ? "Collapse" : "Expand", "expand", { keys: this.#expandKey() }),
+			actionButton(
+				selected?.on === false
+					? t("overlays.extension_dashboard.enable_button")
+					: selected
+						? t("overlays.extension_dashboard.disable_button")
+						: t("overlays.extension_dashboard.toggle_button"),
+				"toggle",
+				{
+					keys: this.#pane === "list" && !this.#mainList.filterFocused ? "space" : undefined,
+					tone: "accent",
+					title:
+						selected?.blocked ??
+						(selected ? undefined : t("overlays.extension_dashboard.select_extension_tooltip")),
+				},
+			),
+			actionButton(
+				expanded ? t("overlays.extension_dashboard.collapse_button") : t("overlays.btw_controller.expand"),
+				"expand",
+				{ keys: this.#expandKey() },
+			),
 		];
-		if (query) buttons.push(actionButton("Clear search", "clear"));
+		if (query) buttons.push(actionButton(t("tui.picker.clear_search"), "clear"));
 		buttons.push(
 			null,
-			actionButton(this.#mainList.filterFocused ? "Back to list" : "Close", "close", { keys: "escape" }),
+			actionButton(this.#mainList.filterFocused ? t("tui.picker.back_to_list") : t("tui.picker.close"), "close", {
+				keys: "escape",
+			}),
 		);
 		return col([head, this.#tabBar, keyed(search, "search"), body, actionBar(buttons)], { gap: "md", grow: 1 });
 	}

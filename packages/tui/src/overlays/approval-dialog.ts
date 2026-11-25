@@ -17,7 +17,7 @@
  * (`app.tools.expand`) swaps it in, wrapped.
  */
 import { type Component, Ellipsis, ScrollView, type TUI, truncateToWidth, wrapTextWithAnsi } from "../index";
-import { t } from "@oh-my-pi/pi-utils/i18n";
+import { t, t as translate } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHints, formatTooltipKey } from "../app-keybindings";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -503,9 +503,16 @@ export class ApprovalDialogComponent implements Component {
 			: "";
 		const keys = `${approve} ${t("tui.approval.hint.approve")} · ${editorKey("app.interrupt")} ${t("tui.approval.hint.deny")}${expand}`;
 		if (drafting) return `${editorKey("tui.input.submit")} ${t("tui.approval.hint.deny_send")} · ${keys}`;
-		const choose = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${editorKey("tui.select.confirm")} select`;
-		const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
-		return `${choose} · ${keys}${scroll}${this.options.draft ? " · type to deny and steer" : ""}`;
+		const choose = translate("overlays.approval_dialog.choose_select_hint", {
+			editorKeys: `${editorKeys("tui.select.up", "tui.select.down")}`,
+			editorKey: `${editorKey("tui.select.confirm")}`,
+		});
+		const scroll = overflows
+			? translate("overlays.approval_dialog.scroll_hint", {
+					editorKeys: `${editorKeys("tui.select.pageUp", "tui.select.pageDown")}`,
+				})
+			: "";
+		return `${choose} · ${keys}${scroll}${this.options.draft ? translate("overlays.approval_dialog.deny_steer_hint") : ""}`;
 	}
 
 	#scroll(delta: number, by: "page-up" | "page-down"): void {

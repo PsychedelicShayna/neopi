@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type { Theme, ThemeColor } from "../theme/theme";
@@ -71,30 +72,33 @@ interface GoalRenderArgs {
 function describeGoalResult(result: ToolRenderResult<GoalToolDetails>, args?: GoalRenderArgs): NativeToolView {
 	const details = result.details;
 	const description = describeOp(details?.op ?? args?.op);
-	if (result.isError) return errorView("Goal", resultText(result) || "Goal tool failed", description);
+	if (result.isError) return errorView("Goal", resultText(result) || t("tools.goal.failed"), description);
 	const goal = details?.goal ?? null;
-	if (!goal) return { head: toolHead("Goal", description, "no active goal"), tone: "warning" };
+	if (!goal) return { head: toolHead("Goal", description, t("tools.goal.no_active")), tone: "warning" };
 
 	const head = [
 		...toolHead("Goal", description),
 		span(" "),
-		span(goal.status, `${goalBadgeColor(goal.status)} strong`),
+		span(t(`tools.goal.state.${goal.status}`), `${goalBadgeColor(goal.status)} strong`),
 	];
 	const used = formatNumber(goal.tokensUsed);
 	const left = goal.tokenBudget !== undefined ? Math.max(0, goal.tokenBudget - goal.tokensUsed) : 0;
 	const tokens =
 		goal.tokenBudget !== undefined
-			? `${used} / ${formatNumber(goal.tokenBudget)} tokens (${formatNumber(left)} left)`
+			? t("tools.goal.usage", { used, total: formatNumber(goal.tokenBudget), left: formatNumber(left) })
 			: `${used} tokens`;
 	const meta = [tokens];
-	if (goal.timeUsedSeconds > 0) meta.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
+	if (goal.timeUsedSeconds > 0)
+		meta.push(t("tools.goal.elapsed", { time: formatDuration(goal.timeUsedSeconds * 1000) }));
 	const report = details?.completionBudgetReport;
 	return {
 		head,
 		body: compact([
 			text([span(`"${goal.objective.trim()}"`, "muted")], { wrap: "word" }),
 			text([span(meta.join(" · "), "dim")], { wrap: "word" }),
-			report ? node("section", { head: [span("Report", "toolTitle")] }, [noteText(report)], "report") : undefined,
+			report
+				? node("section", { head: [span(t("tools.goal.report"), "toolTitle")] }, [noteText(report)], "report")
+				: undefined,
 		]),
 	};
 }
@@ -112,7 +116,7 @@ export const goalToolRenderer = {
 			meta.push(uiTheme.italic(uiTheme.fg("muted", `"${objective}"`)));
 		}
 		if (args.op === "create" && args.token_budget !== undefined) {
-			meta.push(`budget ${formatNumber(args.token_budget)}`);
+			meta.push(t("tools.goal.budget", { tokens: formatNumber(args.token_budget) }));
 		}
 		return new Text(renderStatusLine({ icon: "pending", title: "Goal", description, meta }, uiTheme), 0, 0);
 	},
@@ -132,7 +136,7 @@ export const goalToolRenderer = {
 			const header = renderStatusLine({ icon: "error", title: "Goal", description }, uiTheme);
 			return framedToolCard(uiTheme, () => ({
 				header,
-				sections: [{ content: formatErrorDetail(fallbackText || "Goal tool failed", uiTheme).split("\n") }],
+				sections: [{ content: formatErrorDetail(fallbackText || t("tools.goal.failed"), uiTheme).split("\n") }],
 				phase: "error",
 				borderColor: "error",
 			}));
@@ -141,7 +145,10 @@ export const goalToolRenderer = {
 		const goal = details?.goal ?? null;
 		if (!goal) {
 			return new Text(
-				renderStatusLine({ icon: "warning", title: "Goal", description, meta: ["no active goal"] }, uiTheme),
+				renderStatusLine(
+					{ icon: "warning", title: "Goal", description, meta: [t("tools.goal.no_active")] },
+					uiTheme,
+				),
 				0,
 				0,
 			);
@@ -152,7 +159,7 @@ export const goalToolRenderer = {
 				iconOverride: uiTheme.styledSymbol("tool.goal", "accent"),
 				title: "Goal",
 				description,
-				badge: { label: goal.status, color: goalBadgeColor(goal.status) },
+				badge: { label: t(`tools.goal.state.${goal.status}`), color: goalBadgeColor(goal.status) },
 			},
 			uiTheme,
 		);
@@ -164,18 +171,25 @@ export const goalToolRenderer = {
 		const used = formatNumber(goal.tokensUsed);
 		const tokensLine =
 			goal.tokenBudget !== undefined
-				? `${used} / ${formatNumber(goal.tokenBudget)} tokens (${formatNumber(Math.max(0, goal.tokenBudget - goal.tokensUsed))} left)`
+				? t("tools.goal.usage", {
+						used,
+						total: formatNumber(goal.tokenBudget),
+						left: formatNumber(Math.max(0, goal.tokenBudget - goal.tokensUsed)),
+					})
 				: `${used} tokens`;
 		const metaParts = [tokensLine];
 		if (goal.timeUsedSeconds > 0) {
-			metaParts.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
+			metaParts.push(t("tools.goal.elapsed", { time: formatDuration(goal.timeUsedSeconds * 1000) }));
 		}
 		lines.push(uiTheme.fg("dim", metaParts.join(" · ")));
 
 		const report = details?.completionBudgetReport;
 		const sections: Array<{ label?: string; content: string[] }> = [{ content: lines }];
 		if (report) {
-			sections.push({ label: "Report", content: report.split("\n").map(line => uiTheme.fg("muted", line)) });
+			sections.push({
+				label: t("tools.goal.report"),
+				content: report.split("\n").map(line => uiTheme.fg("muted", line)),
+			});
 		}
 
 		return framedToolCard(uiTheme, () => ({
@@ -191,7 +205,7 @@ export const goalToolRenderer = {
 		const objective = args.objective?.trim();
 		if (args.op === "create" && objective) head.push(span(" "), span(`"${objective}"`, "muted"));
 		if (args.op === "create" && args.token_budget !== undefined) {
-			head.push(span(" "), span(`budget ${formatNumber(args.token_budget)}`, "muted"));
+			head.push(span(" "), span(t("tools.goal.budget", { tokens: formatNumber(args.token_budget) }), "muted"));
 		}
 		return { head };
 	},
@@ -201,7 +215,7 @@ export const goalToolRenderer = {
 		_options: RenderResultOptions,
 		args?: GoalRenderArgs,
 	): NativeToolView | undefined {
-		return goalResultMemo.get(result, [args?.op], () => describeGoalResult(result, args));
+		return goalResultMemo.get(result, [getLocale(), args?.op], () => describeGoalResult(result, args));
 	},
 
 	mergeCallAndResult: true,

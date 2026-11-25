@@ -64,7 +64,7 @@ export function LiveChip() {
 				{sync.lastSyncedAt !== null && <span className="live-chip-count">{ago(now - sync.lastSyncedAt, tr)}</span>}
 			</>
 		);
-		title = "Click to sync session files now";
+		title = tr("live.sync_now", "Click to sync session files now");
 	}
 
 	return (

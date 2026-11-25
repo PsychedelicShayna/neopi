@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -17,15 +18,19 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 		onSelect: (mode: "all" | "one-at-a-time") => void,
 		onCancel: () => void,
 	) {
-		super("Queue Mode", "omp.overlay.queue-mode");
+		super(t("overlays.queue_mode_selector.queue_mode"), "omp.overlay.queue-mode");
 
 		const queueModes: SelectItem[] = [
 			{
 				value: "one-at-a-time",
 				label: "one-at-a-time",
-				description: "Process queued messages one by one (recommended)",
+				description: t("overlays.queue_mode_selector.one_description"),
 			},
-			{ value: "all", label: "all", description: "Process all queued messages at once" },
+			{
+				value: "all",
+				label: t("overlays.queue_mode_selector.all_label"),
+				description: t("overlays.queue_mode_selector.all_description"),
+			},
 		];
 
 		// Create selector
@@ -47,8 +52,8 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 
 		this.addChild(this.#selectList);
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: "Queue mode",
-			subtitle: "How messages you send while omp works are delivered",
+			title: t("overlays.queue_mode_selector.queue_mode_2"),
+			subtitle: t("overlays.queue_mode_selector.queue_subtitle"),
 			icon: "list",
 			noun: "modes",
 			current: [currentMode],
@@ -56,11 +61,14 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 			decorate: item =>
 				item.value === "one-at-a-time"
 					? {
-							label: "One at a time",
-							detail: "Each queued message gets its own turn",
+							label: t("overlays.queue_mode_selector.one_at_a_time"),
+							detail: t("overlays.queue_mode_selector.one_detail"),
 							badges: [{ text: "recommended" }],
 						}
-					: { label: "All at once", detail: "Queued messages are sent together in one turn" },
+					: {
+							label: t("overlays.queue_mode_selector.all_at_once"),
+							detail: t("overlays.queue_mode_selector.all_detail"),
+						},
 		});
 	}
 

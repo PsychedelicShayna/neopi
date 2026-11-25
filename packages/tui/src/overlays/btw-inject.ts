@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Markdown, visibleWidth, wrapTextWithAnsi } from "../index";
 import { getMarkdownTheme, theme } from "../theme/theme";
 import { card, col, md, span, text } from "../native/describe";
@@ -29,7 +30,8 @@ function renderBlockLines(inject: string, width: number, sent: boolean): string[
 		.split("\n")
 		.flatMap(line => (line.trim() ? wrapTextWithAnsi(line, inner) : [""]))
 		.map(line => `${prefix}${line}`);
-	return [...body, `${prefix}${theme.fg(color, sent ? BTW_INJECTED_LABEL : BTW_INJECT_LABEL)}`];
+	const label = t(sent ? "overlays.btw_inject.sent" : "overlays.btw_inject.pending");
+	return [...body, `${prefix}${theme.fg(color, label)}`];
 }
 
 /** Text-mode answer split around its `<inject>` block: prose, the railed block, prose, a blank row apart. */
@@ -73,7 +75,7 @@ function prose(text: string): Markdown | undefined {
 export function describeBtwInjectAnswer(parts: BtwInjectParts, sent: boolean, stream: boolean): NativeNode {
 	const before = parts.before.trim();
 	const after = parts.after.trim();
-	const label = sent ? `${theme.nav.selected} ${BTW_INJECTED_LABEL}` : BTW_INJECT_LABEL;
+	const label = sent ? `${theme.nav.selected} ${t("overlays.btw_inject.sent")}` : t("overlays.btw_inject.pending");
 	const block = card({ role: "omp.btw.inject", tone: sent ? "success" : "user" }, [
 		...formatBtwInjectText(parts.inject)
 			.split("\n")

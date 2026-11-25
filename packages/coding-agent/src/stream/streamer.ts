@@ -1,6 +1,7 @@
 import * as readline from "node:readline";
 import { IpcConnection, IpcServer } from "@oh-my-pi/pi-natives";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	STREAM_CHAT_TEXT_MAX,
 	STREAM_CLOSE_HOST_CONFLICT,
@@ -78,10 +79,10 @@ export function resolveStreamUrls(baseUrl: string): StreamUrls {
 	try {
 		base = new URL(baseUrl);
 	} catch {
-		throw new Error(`invalid stream server URL: ${baseUrl}`);
+		throw new Error(t("cli.commands.stream.invalidServerUrl", { url: baseUrl }));
 	}
 	if (!(["http:", "https:", "ws:", "wss:"] as const).some(protocol => protocol === base.protocol)) {
-		throw new Error(`stream server URL must use http, https, ws, or wss: ${baseUrl}`);
+		throw new Error(t("cli.commands.stream.serverUrlProtocol", { url: baseUrl }));
 	}
 	base.hash = "";
 	base.search = "";
@@ -97,6 +98,7 @@ export function resolveStreamUrls(baseUrl: string): StreamUrls {
 export class StreamMuxHost {
 	readonly #options: StreamMuxHostOptions;
 	readonly #onEvent: (event: StreamConsoleEvent) => void;
+	readonly #eventLocale: Locale;
 	readonly #client: StreamServerClient;
 	readonly #connections = new Set<LocalConnection>();
 	readonly #panes = new Map<number, PaneState>();
@@ -110,9 +112,10 @@ export class StreamMuxHost {
 	#started = false;
 	#closing = false;
 
-	constructor(options: StreamMuxHostOptions) {
+	constructor(options: StreamMuxHostOptions, eventLocale: Locale = "en") {
 		this.#options = options;
 		this.#onEvent = options.onEvent;
+		this.#eventLocale = eventLocale;
 		this.#title = options.title;
 		this.#client = new StreamServerClient({
 			url: options.hostUrl,
@@ -125,14 +128,16 @@ export class StreamMuxHost {
 				this.#onEvent({
 					t: "link",
 					state: "reconnecting",
-					detail: `retrying in ${Math.round(delayMs / 1000)}s`,
+					detail: t(this.#eventLocale, "cli.commands.stream.retrying", {
+						seconds: Math.round(delayMs / 1000),
+					}),
 				}),
 			reconnectDelay: options.reconnectDelay,
 		});
 	}
 
 	async start(): Promise<string> {
-		if (this.#started) throw new Error("stream host is already started");
+		if (this.#started) throw new Error(t("cli.commands.stream.alreadyStarted"));
 		this.#started = true;
 		const endpoint = await streamSocketEndpoint(this.#options.projectDir);
 		try {
@@ -143,11 +148,11 @@ export class StreamMuxHost {
 			);
 		} catch (error) {
 			if (error instanceof Error && "code" in error && error.code === "EADDRINUSE") {
-				throw new Error(`another ${APP_NAME} stream process is already running for this directory (${endpoint})`);
+				throw new Error(t("cli.commands.stream.directoryInUse", { app: APP_NAME, endpoint }));
 			}
 			throw error;
 		}
-		this.#onEvent({ t: "notice", message: "connecting your stencil.so channel" });
+		this.#onEvent({ t: "notice", message: t(this.#eventLocale, "cli.commands.stream.connecting") });
 		this.#onEvent({ t: "title", title: this.#title });
 		this.#onEvent({ t: "link", state: "connecting" });
 		this.#client.start();
@@ -174,7 +179,10 @@ export class StreamMuxHost {
 		const trimmed = title.trim();
 		if (!trimmed) return;
 		if (trimmed.length > STREAM_TITLE_MAX) {
-			this.#onEvent({ t: "error", message: `title must be at most ${STREAM_TITLE_MAX} characters` });
+			this.#onEvent({
+				t: "error",
+				message: t(this.#eventLocale, "cli.commands.stream.titleTooLong", { max: STREAM_TITLE_MAX }),
+			});
 			return;
 		}
 		this.#title = trimmed;
@@ -182,7 +190,18 @@ export class StreamMuxHost {
 		this.#onEvent({ t: "title", title: this.#title });
 	}
 
-	async close(reason = "stream ended", exitCode = 0): Promise<void> {
+	close(reason = "stream ended", exitCode = 0): Promise<void> {
+		const detail =
+			reason === "stream ended"
+				? t(this.#eventLocale, "cli.commands.stream.ended")
+				: reason === "stream stopped"
+					? t(this.#eventLocale, "cli.commands.stream.stopped")
+					: reason;
+		return this.#closeWithDetail(reason, exitCode, detail);
+	}
+
+	/** Keep the IPC bye reason independent of the language of the console. */
+	async #closeWithDetail(reason: string, exitCode: number, detail: string): Promise<void> {
 		if (this.#closing) return;
 		this.#closing = true;
 		const bye: StreamStreamerFrame = { t: "bye", reason };
@@ -193,7 +212,7 @@ export class StreamMuxHost {
 		this.#connections.clear();
 		this.#panes.clear();
 		this.#client.close();
-		this.#onEvent({ t: "link", state: "stopped", detail: reason });
+		this.#onEvent({ t: "link", state: "stopped", detail });
 
 		const server = this.#server;
 		this.#server = undefined;
@@ -297,9 +316,13 @@ export class StreamMuxHost {
 		switch (frame.t) {
 			case "welcome":
 				if (frame.proto !== STREAM_PROTO) {
-					const message = `stream protocol mismatch (server ${frame.proto}, client ${STREAM_PROTO})`;
+					const reason = `stream protocol mismatch (server ${frame.proto}, client ${STREAM_PROTO})`;
+					const message = t(this.#eventLocale, "cli.commands.stream.protocolMismatch", {
+						server: frame.proto,
+						client: STREAM_PROTO,
+					});
 					this.#onEvent({ t: "error", message });
-					void this.close(message, 1);
+					void this.#closeWithDetail(reason, 1, message);
 					return;
 				}
 				this.#channel = frame.channel;
@@ -325,7 +348,10 @@ export class StreamMuxHost {
 				this.#onEvent({ t: "chat", msg: frame.msg });
 				break;
 			case "error":
-				this.#onEvent({ t: "error", message: `stream server: ${frame.message}` });
+				this.#onEvent({
+					t: "error",
+					message: t(this.#eventLocale, "cli.commands.stream.serverError", { message: frame.message }),
+				});
 				break;
 		}
 	}
@@ -342,10 +368,11 @@ export class StreamMuxHost {
 	}
 
 	async #handleFatal(error: StreamServerFatalError): Promise<void> {
-		const message =
-			error.code === STREAM_CLOSE_HOST_CONFLICT ? "your channel already has a live host" : error.message;
+		const conflict = error.code === STREAM_CLOSE_HOST_CONFLICT;
+		const reason = conflict ? "your channel already has a live host" : error.message;
+		const message = conflict ? t(this.#eventLocale, "cli.commands.stream.hostConflict") : reason;
 		this.#onEvent({ t: "error", message });
-		await this.close(message, 1);
+		await this.#closeWithDetail(reason, 1, message);
 	}
 }
 
@@ -397,7 +424,8 @@ export async function runStreamConsole(options: StreamConsoleOptions): Promise<n
 				for (const listener of listeners) listener(event);
 			}
 		: logConsoleSink();
-	const host = new StreamMuxHost({ ...options, onEvent: sink });
+	// The line-oriented console keeps its original output for scripts.
+	const host = new StreamMuxHost({ ...options, onEvent: sink }, interactive ? getLocale() : "en");
 	await host.start();
 
 	const stop = (): void => {

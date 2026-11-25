@@ -7737,6 +7737,13 @@ pub struct SetSubagentFastParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentPriorityTierParams {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	pub tier: SetSubagentPriorityTierParamsTier,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetCommandCompletionsParams {
 	pub command: String,
 	pub prefix: String,
@@ -9683,6 +9690,27 @@ impl GetEntriesPageParamsDirection {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SetSubagentPriorityTierParamsTier {
+	#[serde(rename = "fast")]
+	Fast,
+	#[serde(rename = "ultra")]
+	Ultra,
+	#[serde(rename = "off")]
+	Off,
+}
+
+impl SetSubagentPriorityTierParamsTier {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Fast => "fast",
+			Self::Ultra => "ultra",
+			Self::Off => "off",
+		}
+	}
+}
+
 fn default_roles_result_cycle_order() -> Vec<String> {
 	serde_json::from_str("[]").expect("valid wire default")
 }
@@ -10851,7 +10879,7 @@ impl Command for SetSubagentThinkingLevelCommand {
 	}
 }
 
-/// Enable or disable fast mode only for a running subagent, from its next request.
+/// Enable or disable fast mode for a running subagent from its next request. For explicit fast, ultra, or off selection, use set_subagent_priority_tier.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetSubagentFastCommand {
 	#[serde(rename = "subagentId")]
@@ -10866,6 +10894,25 @@ impl Command for SetSubagentFastCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<FastModeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Set a running subagent's priority tier from its next request, using the same model support as /fast. Returns an error if the requested tier is unavailable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentPriorityTierCommand {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	pub tier: SetSubagentPriorityTierParamsTier,
+}
+
+impl Command for SetSubagentPriorityTierCommand {
+	const NAME: &'static str = "set_subagent_priority_tier";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
 	}
 }
 

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { SelectItem } from "./select-list";
 
 export interface ChecklistOptions {
@@ -38,7 +39,7 @@ export class Checklist {
 				return {
 					value: `item:${name}`,
 					label: `${mark} ${entry?.label ?? name}`,
-					description: entry?.description ?? (entry ? undefined : "not in catalog"),
+					description: entry?.description ?? (entry ? undefined : t("overlays.checklist.not_in_catalog")),
 					disabled: fixed || entry?.disabled,
 				};
 			}),

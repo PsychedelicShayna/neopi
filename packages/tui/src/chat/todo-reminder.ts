@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Text } from "../components/text";
 import { Container } from "../tui";
 import { MessageNoticeComponent } from "../chrome/message-notice";
@@ -21,9 +22,14 @@ export class TodoReminderComponent extends Container {
 	constructor(todos: TodoItem[], attempt: number, maxAttempts: number) {
 		super();
 		this.#todos = todos;
-		this.#note = `reminder ${attempt}/${maxAttempts}`;
+		this.#note = t("overlays.todo_reminder.reminder", { attempt: `${attempt}`, maxAttempts: `${maxAttempts}` });
 		const count = todos.length;
-		const header = `${count} incomplete ${count === 1 ? "todo" : "todos"} - reminder ${attempt}/${maxAttempts}`;
+		const header = t("overlays.todo_reminder.incomplete_reminder", {
+			count: `${count}`,
+			value: `${count === 1 ? "todo" : "todos"}`,
+			attempt: `${attempt}`,
+			maxAttempts: `${maxAttempts}`,
+		});
 		this.#notice = new MessageNoticeComponent({
 			presentation: () => {
 				const todoList = todos.map(todo => `  ${theme.checkbox.unchecked} ${todo.content}`).join("\n");

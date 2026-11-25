@@ -6,6 +6,7 @@
  * its help, so this parent only handles a missing or unknown subcommand.
  */
 import { type CommandCtor, Command } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { chronicleHelp } from "../cli/command-help";
 
 export default class Chronicle extends Command {
@@ -21,7 +22,7 @@ export default class Chronicle extends Command {
 	async run(): Promise<void> {
 		const name = this.argv[0];
 		if (name !== undefined) {
-			process.stderr.write(`Unknown chronicle subcommand: ${name}\n\n`);
+			process.stderr.write(`${t("cli.commands.chronicle.error.unknown_subcommand", { name })}\n\n`);
 			process.exitCode = 1;
 		}
 		await this.showHelp("chronicle", Chronicle);

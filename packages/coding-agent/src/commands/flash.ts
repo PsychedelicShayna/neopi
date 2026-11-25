@@ -1,6 +1,7 @@
 /** Turn a whole disk into a bootable, encrypted portable NeoPi system. */
 
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { flashHelp as commandHelp } from "../cli/command-help";
 import { runFlashCommand } from "../cli/flash-cli";
 
@@ -27,10 +28,12 @@ export default class Flash extends Command {
 		}),
 	};
 
-	static examples = [
-		"# Flash a removable disk\n  sudo npi flash /dev/sdc",
-		"# Resume an interrupted flash\n  sudo npi flash --resume /dev/sdc",
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.flash.example.removable")}\n  sudo npi flash /dev/sdc`,
+			`# ${t("cli.commands.flash.example.resume")}\n  sudo npi flash --resume /dev/sdc`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Flash);

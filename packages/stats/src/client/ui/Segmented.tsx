@@ -1,9 +1,11 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "../i18n";
 
 export interface SegmentedOption<T extends string> {
 	value: T;
 	label: ReactNode;
 	title?: string;
+	titleKey?: string;
 }
 
 export interface SegmentedProps<T extends string> {
@@ -22,6 +24,7 @@ export function Segmented<T extends string>({
 	size = "md",
 	"aria-label": ariaLabel,
 }: SegmentedProps<T>) {
+	const tr = useTranslation();
 	const rootRef = useRef<HTMLDivElement>(null);
 	const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
 
@@ -50,7 +53,7 @@ export function Segmented<T extends string>({
 					aria-checked={option.value === value}
 					className="segmented-option"
 					data-active={option.value === value}
-					title={option.title}
+					title={option.titleKey && option.title !== undefined ? tr(option.titleKey, option.title) : option.title}
 					onClick={() => onChange(option.value)}
 				>
 					{option.label}

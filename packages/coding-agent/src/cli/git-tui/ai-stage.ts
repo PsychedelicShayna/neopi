@@ -14,6 +14,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { VcsHunkSelection } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { parseFileDiffs, parseFileHunks } from "../../commit/git/diff";
 import { openStandaloneJudge } from "../../judgment/standalone";
 import questionFile from "../../prompts/judge/git-stage.json" with { type: "json" };
@@ -94,12 +95,12 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 	const repo = vcs.requireGit(cwd);
 	const untracked = options.files.filter(file => file.kind === "untracked");
 	const tracked = options.files.filter(file => file.kind !== "untracked" && file.kind !== "conflicted");
-	if (tracked.length === 0 && untracked.length === 0) throw new Error("No unstaged changes to filter");
+	if (tracked.length === 0 && untracked.length === 0) throw new Error(t("cli.commands.git.stage.noChanges"));
 
-	onProgress?.("Resolving model…");
+	onProgress?.(t("cli.commands.git.stage.resolving"));
 	const { judge, close } = await openStandaloneJudge(cwd, "git_stage");
 	try {
-		onProgress?.("Reading changes…");
+		onProgress?.(t("cli.commands.git.stage.reading"));
 		const rawDiff = tracked.length > 0 ? await repo.diffText({ files: tracked.map(file => file.path) }, signal) : "";
 		const deleted = new Set(tracked.flatMap(file => (file.kind === "deleted" ? [file.path] : [])));
 		const units: Unit[] = [];
@@ -141,7 +142,7 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 		const allChangedFiles = [...filePaths];
 
 		let settled = 0;
-		onProgress?.(`Judging 0/${units.length} changes…`);
+		onProgress?.(t("cli.commands.git.stage.judging", { done: 0, total: units.length }));
 		const { results, aborted } = await mapWithConcurrencyLimitAllSettled(
 			units,
 			CONCURRENCY,
@@ -159,7 +160,7 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 					},
 					{ signal: workerSignal },
 				);
-				onProgress?.(`Judging ${++settled}/${units.length} changes…`);
+				onProgress?.(t("cli.commands.git.stage.judging", { done: ++settled, total: units.length }));
 				return answers.belongs.probabilities[PART_OF_IT];
 			},
 			signal,
@@ -178,7 +179,7 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 			.sort((a, b) => b.score - a.score)
 			.slice(0, VERIFY_CANDIDATES);
 		if (ranked.length > 0) {
-			onProgress?.("Verifying…");
+			onProgress?.(t("cli.commands.git.stage.verifying"));
 			const criteria: Record<string, string | null> = { ...QUESTIONS.pick.criteria };
 			const candidates = ranked.map(({ unit }, index) => {
 				criteria[`c${index}`] = null;
@@ -232,7 +233,7 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 				indices,
 			})),
 		];
-		if (selections.length > 0 || untrackedAccepted.length > 0) onProgress?.("Staging…");
+		if (selections.length > 0 || untrackedAccepted.length > 0) onProgress?.(t("cli.commands.git.stage.staging"));
 		if (selections.length > 0) await repo.stageHunks(selections, rawDiff || null, signal);
 		if (untrackedAccepted.length > 0) await repo.stageFiles(untrackedAccepted, signal);
 

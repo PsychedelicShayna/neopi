@@ -1,3 +1,5 @@
+import { LocalizedText, useTranslation, useLocale } from "../i18n";
+import type { Locale, Translation } from "../types";
 import { useDeferredValue, useMemo, useState } from "react";
 import { getFolderStats } from "../api";
 import { BarList } from "../charts";
@@ -43,6 +45,8 @@ const TABLE_LIMIT = 100;
 const TOP_LIMIT = 8;
 
 export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
+	const locale = useLocale();
+	const tr = useTranslation();
 	const folders = useQuery(["projects", range], ({ signal }) => getFolderStats(range, signal), { enabled: active });
 	const [search, setSearch] = useState("");
 	// Benchmarks and scratch sessions can leave tens of thousands of one-off temp folders; hide them by default.
@@ -68,46 +72,78 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 	);
 	const topEmpty = (
 		<EmptyState
-			title={view.rows.length === 0 ? "No project folders in this range" : "Only temporary folders in this range"}
+			title={
+				view.rows.length === 0
+					? tr("pages.projects.no_project_folders_in_this_range", "No project folders in this range")
+					: tr("pages.projects.only_temporary_folders_in_this_range", "Only temporary folders in this range")
+			}
 		/>
 	);
 	// Meter scales follow the whole range so a bar's length does not change while filtering.
-	const columns = useMemo(() => folderColumns(view.maxRequests, view.maxCost), [view]);
+	const columns = useMemo(() => folderColumns(view.maxRequests, view.maxCost, tr, locale), [view, tr, locale]);
 
 	return (
 		<div className="page">
-			<PageHeader title="Projects" description={`Usage by session folder in ${meta.windowLabel}.`} />
+			<PageHeader
+				title={tr("pages.projects.projects", "Projects")}
+				description={tr(
+					"pages.projects.usage_by_session_folder_in_window",
+					"Usage by session folder in {window}.",
+					{ window: tr(`costs.window.${range}`, meta.windowLabel) },
+				)}
+			/>
 
 			<QueryView query={folders} skeleton={<ChartSkeleton height={96} />}>
 				{() => (
 					<div data-stale={folders.stale}>
 						<StatGrid min={180}>
 							<Stat
-								label="Folders"
+								label={tr("pages.projects.folders", "Folders")}
 								value={formatInteger(view.rows.length)}
-								hint={view.temporaryCount > 0 ? `${formatInteger(view.temporaryCount)} temporary` : undefined}
-							/>
-							<Stat
-								label="Requests"
-								value={formatInteger(view.totalRequests)}
-								hint={`${formatInteger(view.failedRequests)} failed`}
-							/>
-							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
-								value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
 								hint={
-									view.unpricedRequests > 0 ? `${formatInteger(view.unpricedRequests)} unpriced` : undefined
+									view.temporaryCount > 0
+										? tr("pages.projects.count_temporary", "{count} temporary", {
+												count: formatInteger(view.temporaryCount),
+											})
+										: undefined
 								}
 							/>
 							<Stat
-								label="Conversation tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								label={tr("pages.projects.requests", "Requests")}
+								value={formatInteger(view.totalRequests)}
+								hint={tr("pages.projects.count_failed", "{count} failed", {
+									count: formatInteger(view.failedRequests),
+								})}
+							/>
+							<Stat
+								label={tr("pages.projects.api_equivalent_cost", "API-equivalent cost")}
+								title={tr(
+									"pages.projects.what_this_usage_would_cost_at_public",
+									"What this usage would cost at public API rates",
+								)}
+								value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
+								hint={
+									view.unpricedRequests > 0
+										? tr("pages.projects.count_unpriced", "{count} unpriced", {
+												count: formatInteger(view.unpricedRequests),
+											})
+										: undefined
+								}
+							/>
+							<Stat
+								label={tr("pages.projects.conversation_tokens", "Conversation tokens")}
+								title={tr(
+									"pages.projects.uncached_input_cache_reads_cache_writes_output",
+									"Uncached input + cache reads + cache writes + output",
+								)}
 								value={formatCompact(view.conversationTokens)}
 							/>
 							<Stat
-								label="Cache rate"
-								title="Cache reads ÷ (uncached input + cache reads), across every folder"
+								label={tr("pages.projects.cache_rate", "Cache rate")}
+								title={tr(
+									"pages.projects.cache_reads_uncached_input_cache_reads_across",
+									"Cache reads ÷ (uncached input + cache reads), across every folder",
+								)}
 								value={formatPercent(view.cacheRate)}
 							/>
 						</StatGrid>
@@ -116,7 +152,12 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 			</QueryView>
 
 			<div className="grid grid-2">
-				<Card index={1} title="Top by cost" description="Share of API-equivalent cost" stale={folders.stale}>
+				<Card
+					index={1}
+					title={tr("pages.projects.top_by_cost", "Top by cost")}
+					description={tr("pages.projects.share_of_api_equivalent_cost", "Share of API-equivalent cost")}
+					stale={folders.stale}
+				>
 					<QueryView
 						query={folders}
 						skeleton={<ChartSkeleton height={236} />}
@@ -127,7 +168,7 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 							<BarList
 								items={top.cost.map(row => ({
 									key: row.folder,
-									label: <span className="mono">{formatFolder(row.folder)}</span>,
+									label: <span className="mono">{formatFolder(row.folder, tr)}</span>,
 									value: row.totalCost,
 									display: `${formatEstimatedCost(row.totalCost, row.unpricedRequests)} · ${formatPercent(row.costShare)}`,
 									color: "var(--chart-secondary)",
@@ -137,7 +178,12 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 						)}
 					</QueryView>
 				</Card>
-				<Card index={2} title="Top by requests" description="Share of all requests" stale={folders.stale}>
+				<Card
+					index={2}
+					title={tr("pages.projects.top_by_requests", "Top by requests")}
+					description={tr("pages.projects.share_of_all_requests", "Share of all requests")}
+					stale={folders.stale}
+				>
 					<QueryView
 						query={folders}
 						skeleton={<ChartSkeleton height={236} />}
@@ -148,7 +194,7 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 							<BarList
 								items={top.requests.map(row => ({
 									key: row.folder,
-									label: <span className="mono">{formatFolder(row.folder)}</span>,
+									label: <span className="mono">{formatFolder(row.folder, tr)}</span>,
 									value: row.totalRequests,
 									display: `${formatInteger(row.totalRequests)} · ${formatPercent(row.requestShare)}`,
 								}))}
@@ -161,27 +207,42 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 
 			<Card
 				index={3}
-				title="Folders"
+				title={tr("pages.projects.folders", "Folders")}
 				description={
 					folders.data
 						? matching.length === view.rows.length
-							? `${formatInteger(view.rows.length)} folders`
-							: `${formatInteger(matching.length)} of ${formatInteger(view.rows.length)} folders`
+							? tr("pages.projects.count_folders", "{count} folders", { count: formatInteger(view.rows.length) })
+							: tr("pages.projects.count_of_total_folders", "{count} of {total} folders", {
+									count: formatInteger(matching.length),
+									total: formatInteger(view.rows.length),
+								})
 						: undefined
 				}
 				actions={
 					<>
 						{view.temporaryCount > 0 && (
-							<label className="check" title="Session folders under /tmp or /var/folders">
+							<label
+								className="check"
+								title={tr(
+									"pages.projects.session_folders_under_tmp_or_var_folders",
+									"Session folders under /tmp or /var/folders",
+								)}
+							>
 								<input
 									type="checkbox"
 									checked={hideTemporary}
 									onChange={e => setHideTemporary(e.target.checked)}
 								/>
-								Hide temporary ({formatInteger(view.temporaryCount)})
+								{tr("pages.projects.hide_temporary", "Hide temporary (")}
+								{formatInteger(view.temporaryCount)})
 							</label>
 						)}
-						<SearchInput value={search} onChange={setSearch} placeholder="Filter folders…" width={240} />
+						<SearchInput
+							value={search}
+							onChange={setSearch}
+							placeholder={tr("pages.projects.filter_folders", "Filter folders…")}
+							width={240}
+						/>
 					</>
 				}
 				flush
@@ -198,12 +259,19 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 							dense
 							empty={
 								<EmptyState
-									title={view.rows.length === 0 ? "No project folders in this range" : "No folders match"}
+									title={
+										view.rows.length === 0
+											? tr(
+													"pages.projects.no_project_folders_in_this_range",
+													"No project folders in this range",
+												)
+											: tr("pages.projects.no_folders_match", "No folders match")
+									}
 									hint={
 										view.rows.length === 0
-											? "Try a longer range."
+											? tr("pages.projects.try_a_longer_range", "Try a longer range.")
 											: hideTemporary && view.temporaryCount > 0
-												? "Temporary folders are hidden."
+												? tr("pages.projects.temporary_folders_are_hidden", "Temporary folders are hidden.")
 												: undefined
 									}
 								/>
@@ -216,38 +284,51 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 	);
 }
 
-function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowView>[] {
+function folderColumns(maxRequests: number, maxCost: number, tr: Translation, locale: Locale): Column<FolderRowView>[] {
 	return [
 		{
 			key: "folder",
-			header: "Folder",
+			header: <LocalizedText messageKey="pages.projects.folder" english={"Folder"} />,
 			sort: row => row.folder,
 			render: row => (
-				<span className="row projects-folder" title={row.folder || "(root)"}>
-					<span className="mono truncate">{formatFolder(row.folder)}</span>
-					{row.temporary && <Badge>temp</Badge>}
+				<span className="row projects-folder" title={row.folder || tr("pages.projects.root", "(root)")}>
+					<span className="mono truncate">{formatFolder(row.folder, tr)}</span>
+					{row.temporary && (
+						<Badge>
+							<LocalizedText messageKey="pages.projects.temp" english={"temp"} />
+						</Badge>
+					)}
 				</span>
 			),
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: <LocalizedText messageKey="pages.projects.requests" english={"Requests"} />,
 			align: "right",
 			sort: row => row.totalRequests,
 			render: row => (
-				<span title={`${formatPercent(row.requestShare)} of all requests`}>
+				<span
+					title={tr("pages.projects.percent_of_all_requests", "{percent} of all requests", {
+						percent: formatPercent(row.requestShare),
+					})}
+				>
 					<MeterCell value={row.totalRequests} max={maxRequests} display={formatInteger(row.totalRequests)} />
 				</span>
 			),
 		},
 		{
 			key: "cost",
-			header: "Cost",
+			header: <LocalizedText messageKey="pages.projects.cost" english={"Cost"} />,
 			title: "API-equivalent cost at public API rates",
+			titleKey: "pages.projects.api_equivalent_cost_at_public_api_rates",
 			align: "right",
 			sort: row => row.totalCost,
 			render: row => (
-				<span title={`${formatPercent(row.costShare)} of all cost`}>
+				<span
+					title={tr("pages.projects.percent_of_all_cost", "{percent} of all cost", {
+						percent: formatPercent(row.costShare),
+					})}
+				>
 					<MeterCell
 						value={row.totalCost}
 						max={maxCost}
@@ -261,6 +342,7 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 			key: "tokens",
 			header: "Tokens",
 			title: "Uncached input + cache reads + cache writes + output",
+			titleKey: "pages.projects.uncached_input_cache_reads_cache_writes_output",
 			align: "right",
 			sort: row => row.conversationTokens,
 			render: row => (
@@ -271,16 +353,18 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "cacheRate",
-			header: "Cache rate",
+			header: <LocalizedText messageKey="pages.projects.cache_rate" english={"Cache rate"} />,
 			title: "Cache reads ÷ (uncached input + cache reads)",
+			titleKey: "pages.projects.cache_reads_uncached_input_cache_reads",
 			align: "right",
 			sort: row => row.cacheRate,
 			render: row => <span className="num">{formatPercent(row.cacheRate)}</span>,
 		},
 		{
 			key: "cacheSavings",
-			header: "Cache savings",
+			header: <LocalizedText messageKey="pages.projects.cache_savings" english={"Cache savings"} />,
 			title: "Prompt-input cost saved versus billing the same tokens uncached",
+			titleKey: "pages.projects.prompt_input_cost_saved_versus_billing_the",
 			align: "right",
 			sort: row => row.cacheSavings,
 			render: row => (
@@ -291,11 +375,13 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "errorRate",
-			header: "Errors",
+			header: <LocalizedText messageKey="pages.projects.errors" english={"Errors"} />,
 			align: "right",
 			sort: row => row.errorRate,
 			render: row => (
-				<span title={`${formatInteger(row.failedRequests)} failed`}>
+				<span
+					title={tr("pages.projects.count_failed", "{count} failed", { count: formatInteger(row.failedRequests) })}
+				>
 					<Badge tone={row.failedRequests > 0 ? errorRateTone(row.errorRate) : "neutral"} mono>
 						{formatErrorRate(row.errorRate)}
 					</Badge>
@@ -304,17 +390,17 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "duration",
-			header: "Avg duration",
+			header: <LocalizedText messageKey="pages.projects.avg_duration" english={"Avg duration"} />,
 			align: "right",
 			sort: row => row.avgDuration ?? -1,
 			render: row => <span className="num">{formatDurationMs(row.avgDuration)}</span>,
 		},
 		{
 			key: "last",
-			header: "Last active",
+			header: <LocalizedText messageKey="pages.projects.last_active" english={"Last active"} />,
 			align: "right",
 			sort: row => row.lastTimestamp,
-			render: row => <span className="dim">{formatRelativeTime(row.lastTimestamp)}</span>,
+			render: row => <span className="dim">{formatRelativeTime(row.lastTimestamp, locale)}</span>,
 		},
 	];
 }

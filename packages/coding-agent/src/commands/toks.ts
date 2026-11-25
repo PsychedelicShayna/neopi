@@ -5,9 +5,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
-import { APP_NAME, formatBytes, pluralize } from "@oh-my-pi/pi-utils";
+import { APP_NAME, formatBytes } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { toksHelp as commandHelp } from "../cli/command-help";
 
 /** Display name and served model lines per native encoding; `Record` keeps it exhaustive. */
@@ -32,7 +33,7 @@ async function resolveInput(input: string): Promise<{ source: Source; text: stri
 	const filePath = path.resolve(input);
 	// Unstattable (missing, name too long, invalid chars) means it is text, not a path.
 	const stat = await fs.stat(filePath).catch(() => undefined);
-	if (stat?.isDirectory()) throw new CliUsageError(`${input} is a directory; pass a file or text`);
+	if (stat?.isDirectory()) throw new CliUsageError(t("cli.commands.toks.isDirectory", { input }));
 	if (stat?.isFile()) return { source: { kind: "file", path: filePath }, text: await Bun.file(filePath).text() };
 	return { source: { kind: "text" }, text: input };
 }
@@ -55,7 +56,6 @@ function countLines(text: string): number {
 }
 
 const int = (n: number): string => n.toLocaleString("en-US");
-const count = (n: number, label: string): string => `${int(n)} ${pluralize(label, n)}`;
 
 export default class Toks extends Command {
 	static description = commandHelp.description;
@@ -79,7 +79,7 @@ export default class Toks extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Toks);
 		const input = (args.input ?? []).join(" ");
-		if (input.length === 0) throw new CliUsageError("toks requires a file path or text");
+		if (input.length === 0) throw new CliUsageError(t("cli.commands.toks.missingInput"));
 
 		const { source, text } = await resolveInput(input);
 		const bytes = Buffer.byteLength(text, "utf-8");
@@ -97,13 +97,27 @@ export default class Toks extends Command {
 		}
 
 		const baseline = rows.find(row => row.encoding === natives.Encoding.O200kBase)?.tokens ?? 0;
-		const label = source.kind === "file" ? path.relative(process.cwd(), source.path) || source.path : "text";
+		const label =
+			source.kind === "file"
+				? path.relative(process.cwd(), source.path) || source.path
+				: t("cli.commands.toks.text");
+		const charCount = t(chars === 1 ? "cli.commands.toks.char" : "cli.commands.toks.chars", { count: int(chars) });
+		const lineCount = t(lines === 1 ? "cli.commands.toks.line" : "cli.commands.toks.lines", { count: int(lines) });
 		const out = [
-			`${chalk.dim("input")}  ${label}`,
-			`${chalk.dim("size")}   ${formatBytes(bytes)} · ${count(chars, "char")} · ${count(lines, "line")}`,
+			t("cli.commands.toks.inputRow", { input: chalk.dim(t("cli.commands.toks.input")), label }),
+			t("cli.commands.toks.sizeRow", {
+				size: chalk.dim(t("cli.commands.toks.size")),
+				bytes: formatBytes(bytes),
+				chars: charCount,
+				lines: lineCount,
+			}),
 			"",
 			chalk.dim(
-				`${"encoding".padEnd(18)}${"models".padEnd(22)}${"tokens".padStart(10)}${"chars/tok".padStart(11)}${"vs o200k".padStart(10)}`,
+				t("cli.commands.toks.encoding").padEnd(18) +
+					t("cli.commands.toks.models").padEnd(22) +
+					t("cli.commands.toks.tokens").padStart(10) +
+					t("cli.commands.toks.ratio").padStart(11) +
+					t("cli.commands.toks.delta").padStart(10),
 			),
 		];
 		for (const row of rows) {

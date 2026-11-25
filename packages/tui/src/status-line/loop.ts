@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { truncateToWidth } from "../render/render-utils";
 import { sanitizeStatusText } from "../chrome/shared";
 
@@ -23,6 +24,6 @@ export type LoopLimitRuntime =
 
 /** Compact status-line form: `until: bun test`. */
 export function summarizeLoopCondition(condition: LoopConditionConfig, maxWidth: number): string {
-	const label = condition.until ? "until" : "while";
+	const label = condition.until ? t("status.loop.until") : t("status.loop.while");
 	return `${label}: ${truncateToWidth(sanitizeStatusText(condition.command), Math.max(1, maxWidth - label.length - 2))}`;
 }

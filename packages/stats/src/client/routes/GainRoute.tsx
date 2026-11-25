@@ -1,3 +1,4 @@
+import { LocalizedText, useTranslation } from "../i18n";
 import { useMemo, useState } from "react";
 import { getGainDashboardStats } from "../api";
 import { Chart, type ChartSeries, Legend } from "../charts";
@@ -41,6 +42,7 @@ interface SourceRow extends GainSourceTotals {
 }
 
 export function GainRoute({ active, range }: GainRouteProps) {
+	const tr = useTranslation();
 	const [project, setProject] = useState<string | null>(null);
 	const gain = useQuery(["gain", range, project], ({ signal }) => getGainDashboardStats(range, project, signal), {
 		enabled: active,
@@ -78,10 +80,15 @@ export function GainRoute({ active, range }: GainRouteProps) {
 	const scope = project ? ` for ${project}` : "";
 
 	const chartSeries: ChartSeries[] = [
-		{ key: "daily", label: "Saved per day", color: "var(--chart-primary)", values: series.daily },
+		{
+			key: "daily",
+			label: tr("pages.gain.saved_per_day", "Saved per day"),
+			color: "var(--chart-primary)",
+			values: series.daily,
+		},
 		{
 			key: "cumulative",
-			label: "Cumulative",
+			label: tr("pages.gain.cumulative", "Cumulative"),
 			color: "var(--chart-secondary)",
 			values: series.cumulative,
 			kind: "line",
@@ -92,18 +99,22 @@ export function GainRoute({ active, range }: GainRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title="Gain"
-				description={`Context snapcompact freed by compacting, and tokens it saved by imaging tool results${scope}, in ${meta.windowLabel}.`}
+				title={tr("pages.gain.gain", "Gain")}
+				description={tr(
+					"pages.gain.context_snapcompact_freed_by_compacting_and_tokens",
+					"Context snapcompact freed by compacting, and tokens it saved by imaging tool results{scope}, in {window}.",
+					{ scope: scope, window: tr(`costs.window.${range}`, meta.windowLabel) },
+				)}
 				actions={
 					projectOptions.length > 0 && (
 						<select
 							className="input"
-							aria-label="Project"
+							aria-label={tr("pages.gain.project", "Project")}
 							value={project ?? ""}
 							onChange={e => setProject(e.target.value || null)}
 							style={{ maxWidth: 320 }}
 						>
-							<option value="">All projects</option>
+							<option value="">{tr("pages.gain.all_projects", "All projects")}</option>
 							{projectOptions.map(p => (
 								<option key={p} value={p}>
 									{p}
@@ -121,11 +132,18 @@ export function GainRoute({ active, range }: GainRouteProps) {
 				empty={
 					<Card>
 						<EmptyState
-							title={`No savings recorded${scope} in ${meta.windowLabel}`}
+							title={tr(
+								"pages.gain.no_savings_recorded_scope_in_window",
+								"No savings recorded{scope} in {window}",
+								{ scope: scope, window: tr(`costs.window.${range}`, meta.windowLabel) },
+							)}
 							hint={
 								range === "all"
-									? "Savings appear here once snapcompact compacts the context or images tool output."
-									: "Try a longer range."
+									? tr(
+											"pages.gain.savings_appear_here_once_snapcompact_compacts_the",
+											"Savings appear here once snapcompact compacts the context or images tool output.",
+										)
+									: tr("pages.gain.try_a_longer_range", "Try a longer range.")
 							}
 						/>
 					</Card>
@@ -136,21 +154,31 @@ export function GainRoute({ active, range }: GainRouteProps) {
 						<div data-stale={gain.stale}>
 							<StatGrid min={180}>
 								<Stat
-									label="Saved tokens"
+									label={tr("pages.gain.saved_tokens", "Saved tokens")}
 									value={formatCompact(overall.savedTokens)}
 									hint={formatInteger(overall.savedTokens)}
 									spark={series.daily}
 								/>
-								<Stat label="Saved bytes" value={formatBytes(overall.savedBytes)} />
 								<Stat
-									label="Reduction"
-									title="Saved bytes ÷ original bytes, when the original size is known"
-									value={overall.reductionPercent !== null ? formatPercent(overall.reductionPercent) : "–"}
-									hint={overall.reductionPercent === null ? "original size not recorded" : undefined}
+									label={tr("pages.gain.saved_bytes", "Saved bytes")}
+									value={formatBytes(overall.savedBytes)}
 								/>
-								<Stat label="Hits" value={formatInteger(overall.hits)} />
 								<Stat
-									label="Saved per hit"
+									label={tr("pages.gain.reduction", "Reduction")}
+									title={tr(
+										"pages.gain.saved_bytes_original_bytes_when_the_original",
+										"Saved bytes ÷ original bytes, when the original size is known",
+									)}
+									value={overall.reductionPercent !== null ? formatPercent(overall.reductionPercent) : "–"}
+									hint={
+										overall.reductionPercent === null
+											? tr("pages.gain.original_size_not_recorded", "original size not recorded")
+											: undefined
+									}
+								/>
+								<Stat label={tr("pages.gain.hits", "Hits")} value={formatInteger(overall.hits)} />
+								<Stat
+									label={tr("pages.gain.saved_per_hit", "Saved per hit")}
 									value={overall.hits > 0 ? formatCompact(overall.savedTokens / overall.hits) : "–"}
 									hint="tokens"
 								/>
@@ -159,8 +187,11 @@ export function GainRoute({ active, range }: GainRouteProps) {
 
 						<Card
 							index={1}
-							title="Savings over time"
-							description="Tokens saved per day, with the running total"
+							title={tr("pages.gain.savings_over_time", "Savings over time")}
+							description={tr(
+								"pages.gain.tokens_saved_per_day_with_the_running",
+								"Tokens saved per day, with the running total",
+							)}
 							actions={<Legend items={chartSeries.map(s => ({ key: s.key, label: s.label, color: s.color }))} />}
 							stale={gain.stale}
 						>
@@ -174,7 +205,13 @@ export function GainRoute({ active, range }: GainRouteProps) {
 							/>
 						</Card>
 
-						<Card index={2} title="By source" description="Savings per subsystem" flush stale={gain.stale}>
+						<Card
+							index={2}
+							title={tr("pages.gain.by_source", "By source")}
+							description={tr("pages.gain.savings_per_subsystem", "Savings per subsystem")}
+							flush
+							stale={gain.stale}
+						>
 							<Table rows={sourceRows} rowKey={row => row.source} columns={SOURCE_COLUMNS} />
 						</Card>
 					</>
@@ -187,13 +224,17 @@ export function GainRoute({ active, range }: GainRouteProps) {
 const SOURCE_COLUMNS: Column<SourceRow>[] = [
 	{
 		key: "source",
-		header: "Source",
+		header: <LocalizedText messageKey="pages.gain.source" english={"Source"} />,
 		sort: row => row.source,
-		render: row => <span className="cell-primary">{SOURCE_LABEL[row.source]}</span>,
+		render: row => (
+			<span className="cell-primary">
+				{<LocalizedText messageKey={`pages.gain.source.${row.source}`} english={SOURCE_LABEL[row.source]} />}
+			</span>
+		),
 	},
 	{
 		key: "tokens",
-		header: "Saved tokens",
+		header: <LocalizedText messageKey="pages.gain.saved_tokens" english={"Saved tokens"} />,
 		align: "right",
 		sort: row => row.savedTokens,
 		render: row => (
@@ -204,28 +245,28 @@ const SOURCE_COLUMNS: Column<SourceRow>[] = [
 	},
 	{
 		key: "share",
-		header: "Share",
+		header: <LocalizedText messageKey="pages.gain.share" english={"Share"} />,
 		align: "right",
 		sort: row => row.share,
 		render: row => <span className="num muted">{formatPercent(row.share)}</span>,
 	},
 	{
 		key: "bytes",
-		header: "Saved bytes",
+		header: <LocalizedText messageKey="pages.gain.saved_bytes" english={"Saved bytes"} />,
 		align: "right",
 		sort: row => row.savedBytes,
 		render: row => <span className="num">{formatBytes(row.savedBytes)}</span>,
 	},
 	{
 		key: "hits",
-		header: "Hits",
+		header: <LocalizedText messageKey="pages.gain.hits" english={"Hits"} />,
 		align: "right",
 		sort: row => row.hits,
 		render: row => <span className="num">{formatInteger(row.hits)}</span>,
 	},
 	{
 		key: "reduction",
-		header: "Reduction",
+		header: <LocalizedText messageKey="pages.gain.reduction" english={"Reduction"} />,
 		align: "right",
 		sort: row => row.reductionPercent ?? -1,
 		render: row => (

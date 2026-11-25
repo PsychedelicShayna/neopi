@@ -4,12 +4,13 @@ const languageInput = document.getElementById("language");
 const portInput = document.getElementById("port");
 const tokenInput = document.getElementById("token");
 const status = document.getElementById("status");
+const intro = document.getElementById("intro");
+const relayCommand = document.getElementById("relay-command");
 const copy = {
 	en: {
 		title: "NeoPi Browser Relay settings",
 		language: "Language",
-		before: "The extension connects to a local",
-		after: "process. Values here must match the flags the relay was started with.",
+		intro: "The extension connects to a local {command} process. Values here must match the flags the relay was started with.",
 		port: "Relay port",
 		token: "Token (optional)",
 		save: "Save",
@@ -19,8 +20,7 @@ const copy = {
 	es: {
 		title: "Configuración de NeoPi Browser Relay",
 		language: "Idioma",
-		before: "La extensión se conecta a un proceso local de",
-		after: "en ejecución. Los valores deben coincidir con las opciones usadas para iniciar el relay.",
+		intro: "La extensión se conecta a un proceso local de {command}. Los valores deben coincidir con las opciones usadas para iniciar el relay.",
 		port: "Puerto del relay",
 		token: "Token (opcional)",
 		save: "Guardar",
@@ -36,8 +36,8 @@ function renderLanguage() {
 	document.documentElement.lang = language;
 	document.title = text.title;
 	document.getElementById("language-label").textContent = text.language;
-	document.getElementById("intro-before").textContent = text.before;
-	document.getElementById("intro-after").textContent = text.after;
+	const [before, after] = text.intro.split("{command}");
+	intro.replaceChildren(before, relayCommand, after);
 	document.getElementById("port-label").textContent = text.port;
 	document.getElementById("token-label").textContent = text.token;
 	document.getElementById("save").textContent = text.save;

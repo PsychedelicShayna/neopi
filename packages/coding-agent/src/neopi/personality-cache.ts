@@ -1,4 +1,5 @@
 import { getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentSession } from "../session/agent-session";
 
 /** An observed cache can have expired; this is an upper bound, not a billing promise. */
@@ -44,12 +45,14 @@ export async function personalityCacheImpact(
 	return undefined;
 }
 
+export function formatPersonalityCacheImpact(impact: PersonalityCacheImpact): string {
+	if (impact.tokens === undefined) return t("overlaysModel.personalityCache.unknown");
+	const tokens = impact.tokens.toLocaleString();
+	return impact.apiEquivalentUsd === undefined
+		? t("overlaysModel.personalityCache.unpriced", { tokens })
+		: t("overlaysModel.personalityCache.priced", { tokens, cost: impact.apiEquivalentUsd.toFixed(4) });
+}
+
 export function describePersonalityCacheImpact(impact: PersonalityCacheImpact): string {
-	if (impact.tokens === undefined)
-		return "Changing the system prompt may invalidate a provider cache. The previous response did not report a cached token count, so the impact and cost are unknown. Continue?";
-	const cost =
-		impact.apiEquivalentUsd === undefined
-			? "API-equivalent cost unavailable"
-			: `up to about $${impact.apiEquivalentUsd.toFixed(4)} in API-equivalent rates`;
-	return `Changing the system prompt may invalidate up to ${impact.tokens.toLocaleString()} previously cached tokens (${cost}). The cache may already have expired. Continue?`;
+	return t("overlaysModel.personalityCache.confirm", { impact: formatPersonalityCacheImpact(impact) });
 }

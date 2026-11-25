@@ -1,56 +1,56 @@
-<a class="skip-link" href="#content">Skip to transcript</a>
+<a class="skip-link" href="#content" data-export-text="tools.export.skip">Skip to transcript</a>
 <header class="topbar">
-  <button id="hamburger" title="Open sidebar" aria-label="Open sidebar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-  <a class="brand" href="#" id="home-link"><span class="brand-mark">omp</span><span class="brand-divider"></span><span>Session</span></a>
-  <span class="export-label">Session export</span>
+  <button id="hamburger" title="Open sidebar" aria-label="Open sidebar" data-export-title="tools.export.open_sidebar" data-export-aria-label="tools.export.open_sidebar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="brand" href="#" id="home-link"><span class="brand-mark">omp</span><span class="brand-divider"></span><span data-export-text="tools.export.session">Session</span></a>
+  <span class="export-label" data-export-text="tools.export.session_export">Session export</span>
   <div class="topbar-actions">
-    <nav class="view-switch" aria-label="Session view">
-      <button type="button" id="transcript-tab" aria-pressed="true">Transcript</button>
-      <button type="button" id="trace-tab" aria-pressed="false" hidden>Trace</button>
+    <nav class="view-switch" aria-label="Session view" data-export-aria-label="tools.export.session_view">
+      <button type="button" id="transcript-tab" aria-pressed="true" data-export-text="tools.export.transcript">Transcript</button>
+      <button type="button" id="trace-tab" aria-pressed="false" hidden data-export-text="tools.export.trace">Trace</button>
     </nav>
-    <select class="theme-select" id="theme-select" title="Color theme" aria-label="Color theme">
-      <option value="auto">Auto</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
+    <select class="theme-select" id="theme-select" title="Color theme" aria-label="Color theme" data-export-title="tools.export.color_theme" data-export-aria-label="tools.export.color_theme">
+      <option value="auto" data-export-text="tools.export.theme_auto">Auto</option>
+      <option value="light" data-export-text="tools.export.theme_light">Light</option>
+      <option value="dark" data-export-text="tools.export.theme_dark">Dark</option>
     </select>
   </div>
 </header>
 <div id="sidebar-overlay"></div>
 <div id="app">
-  <aside id="sidebar" aria-label="Session navigation">
-    <div class="sidebar-section-heading">Sessions <span id="session-count"></span><button class="sidebar-close" id="sidebar-close" title="Close" aria-label="Close sidebar">&times;</button></div>
-    <nav id="session-list" aria-label="Sessions and subagents"></nav>
+  <aside id="sidebar" aria-label="Session navigation" data-export-aria-label="tools.export.session_navigation">
+    <div class="sidebar-section-heading"><span data-export-text="tools.export.sessions">Sessions</span> <span id="session-count"></span><button class="sidebar-close" id="sidebar-close" title="Close" aria-label="Close sidebar" data-export-title="tools.export.close" data-export-aria-label="tools.export.close_sidebar">&times;</button></div>
+    <nav id="session-list" aria-label="Sessions and subagents" data-export-aria-label="tools.export.sessions_agents"></nav>
     <div class="sidebar-header">
-      <div class="sidebar-section-heading">Conversation</div>
+      <div class="sidebar-section-heading" data-export-text="tools.export.conversation">Conversation</div>
       <div class="sidebar-controls">
-        <input type="search" class="sidebar-search" id="tree-search" aria-label="Search entries" placeholder="Search entries…" autocomplete="off" spellcheck="false">
+        <input type="search" class="sidebar-search" id="tree-search" aria-label="Search entries" placeholder="Search entries…" autocomplete="off" spellcheck="false" data-export-aria-label="tools.export.search_entries" data-export-placeholder="tools.export.search_placeholder">
       </div>
       <div class="sidebar-filters">
-        <button class="filter-btn active" data-filter="default" title="Hide settings entries">Default</button>
-        <button class="filter-btn" data-filter="no-tools" title="Default minus tool results">No tools</button>
-        <button class="filter-btn" data-filter="user-only" title="Only user messages">User</button>
-        <button class="filter-btn" data-filter="labeled-only" title="Only labeled entries">Labeled</button>
-        <button class="filter-btn" data-filter="all" title="Show everything">All</button>
+        <button class="filter-btn active" data-filter="default" title="Hide settings entries" data-export-text="tools.export.default_filter" data-export-title="tools.export.hide_settings">Default</button>
+        <button class="filter-btn" data-filter="no-tools" title="Default minus tool results" data-export-text="tools.export.no_tools" data-export-title="tools.export.hide_tools">No tools</button>
+        <button class="filter-btn" data-filter="user-only" title="Only user messages" data-export-text="tools.export.user_filter" data-export-title="tools.export.only_user">User</button>
+        <button class="filter-btn" data-filter="labeled-only" title="Only labeled entries" data-export-text="tools.export.labeled" data-export-title="tools.export.only_labeled">Labeled</button>
+        <button class="filter-btn" data-filter="all" title="Show everything" data-export-text="tools.export.all" data-export-title="tools.export.show_all">All</button>
       </div>
     </div>
     <div class="tree-container" id="tree-container"></div>
     <div class="tree-status" id="tree-status"></div>
   </aside>
-  <div id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize session tree sidebar"></div>
-  <section id="workspace" aria-label="Session workspace">
+  <div id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize session tree sidebar" data-export-aria-label="tools.export.resize_sidebar"></div>
+  <section id="workspace" aria-label="Session workspace" data-export-aria-label="tools.export.session_workspace">
     <main id="content" tabindex="-1">
       <div id="header-container"></div>
       <div id="messages"></div>
     </main>
-    <section id="trace-panel" aria-label="Session trace" hidden>
+    <section id="trace-panel" aria-label="Session trace" hidden data-export-aria-label="tools.export.session_trace">
       <div class="trace-panel-bar">
-        <button type="button" id="timeline-toggle" aria-expanded="false" aria-controls="trace-body"><span class="timeline-chevron" aria-hidden="true">⌃</span> Timeline <span id="trace-summary"></span></button>
-        <button type="button" id="trace-expand" class="chrome-button">Open trace view</button>
+        <button type="button" id="timeline-toggle" aria-expanded="false" aria-controls="trace-body"><span class="timeline-chevron" aria-hidden="true">⌃</span> <span data-export-text="tools.export.timeline">Timeline</span> <span id="trace-summary"></span></button>
+        <button type="button" id="trace-expand" class="chrome-button" data-export-text="tools.export.open_trace">Open trace view</button>
       </div>
       <div id="trace-body" hidden><omp-session-trace view="timeline"></omp-session-trace></div>
     </section>
   </section>
   <div id="image-modal" class="image-modal">
-    <img id="modal-image" src="" alt="Expanded attachment">
+    <img id="modal-image" src="" alt="Expanded attachment" data-export-alt="tools.export.expanded_attachment">
   </div>
 </div>

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Markdown, Text, type TUI } from "../index";
 import { replaceTabs } from "../render/render-utils";
 import { getMarkdownTheme, theme } from "../theme/theme";
@@ -101,7 +102,7 @@ export class BtwPanelComponent extends OverlayPanel {
 
 	#setCopied(copied: boolean): void {
 		this.#copied = copied;
-		this.title = copied ? `${this.#baseTitle} ✓ Copied` : this.#baseTitle;
+		this.title = copied ? t("overlays.btw_panel.title_copied", { baseTitle: `${this.#baseTitle}` }) : this.#baseTitle;
 	}
 
 	/** Shows that the completed answer is being promoted into the chat session. */
@@ -193,38 +194,59 @@ export class BtwPanelComponent extends OverlayPanel {
 
 	#describeBody(): NativeNode {
 		if (this.#state === "error") {
-			return text([span(sanitizeErrorLine(this.#errorMessage ?? "Unknown error"), "error")], { wrap: "word" });
+			return text([span(sanitizeErrorLine(this.#errorMessage ?? t("tools.common.unknown_error")), "error")], {
+				wrap: "word",
+			});
 		}
 		const answer = this.#visibleAnswer;
 		const parts = this.#injectParts();
 		const stream = this.#state === "running";
 		if (parts) return describeBtwInjectAnswer(parts, this.#injected, stream);
 		if (answer) return md(answer, { stream });
-		const waiting = this.#state === "running" ? `${theme.status.pending} Waiting for response…` : "No text returned.";
+		const waiting =
+			this.#state === "running"
+				? t("overlays.btw_panel.waiting_response", { pending: `${theme.status.pending}` })
+				: t("overlays.btw_panel.no_text_returned");
 		return text([span(waiting, "dim")]);
 	}
 
 	#describeFooter(canFollowUp: boolean, canBranch: boolean, injectKey: KeyId | undefined): NativeNode {
-		const esc: NativeHint = { keys: boundKeys("app.navigation.dismiss", ["escape"]).slice(0, 1), label: "to close" };
+		const esc: NativeHint = {
+			keys: boundKeys("app.navigation.dismiss", ["escape"]).slice(0, 1),
+			label: t("overlays.btw_panel.hint_close"),
+		};
 		switch (this.#state) {
 			case "running":
-				return hintsRow([{ keys: boundKeys("app.interrupt", ["ctrl+c"]).slice(0, 1), label: "to cancel" }, esc]);
+				return hintsRow([
+					{ keys: boundKeys("app.interrupt", ["ctrl+c"]).slice(0, 1), label: t("overlays.btw_panel.hint_cancel") },
+					esc,
+				]);
 			case "complete": {
 				const hints: NativeHint[] = [];
-				if (injectKey) hints.push({ keys: [injectKey], label: "to inject" });
-				if (this.isCopyable()) hints.push({ keys: ["c"], label: this.#copied ? "to copy again" : "to copy" });
-				if (canFollowUp) hints.push({ keys: ["f"], label: "to follow up" });
-				if (canBranch) hints.push({ keys: ["b"], label: "to branch" });
+				if (injectKey) hints.push({ keys: [injectKey], label: t("overlays.btw_panel.hint_inject") });
+				if (this.isCopyable())
+					hints.push({
+						keys: ["c"],
+						label: this.#copied ? t("overlays.btw_panel.hint_copy_again") : t("overlays.btw_panel.hint_copy"),
+					});
+				if (canFollowUp) hints.push({ keys: ["f"], label: t("overlays.btw_panel.hint_follow_up") });
+				if (canBranch) hints.push({ keys: ["b"], label: t("overlays.btw_panel.hint_branch") });
 				hints.push(esc);
 				if (!this.#copied) return hintsRow(hints);
-				return statusHintsRow([span("✓ Copied to clipboard", "success")], hints);
+				return statusHintsRow([span(t("overlays.btw_panel.copied_clipboard"), "success")], hints);
 			}
 			case "branching":
-				return text([span(`${theme.status.pending} Branching to chat…`, "muted")]);
+				return text([span(t("overlays.btw_panel.branching", { pending: `${theme.status.pending}` }), "muted")]);
 			case "aborted":
-				return statusHintsRow([span(`${theme.status.warning} Cancelled`, "warning")], [esc]);
+				return statusHintsRow(
+					[span(t("overlays.btw_panel.cancelled", { warning: `${theme.status.warning}` }), "warning")],
+					[esc],
+				);
 			case "error":
-				return statusHintsRow([span(`${theme.status.error} Error`, "error")], [esc]);
+				return statusHintsRow(
+					[span(t("overlays.btw_panel.error", { error: `${theme.status.error}` }), "error")],
+					[esc],
+				);
 		}
 	}
 
@@ -242,38 +264,59 @@ export class BtwPanelComponent extends OverlayPanel {
 		const esc = dismissKey();
 		switch (this.#state) {
 			case "running":
-				return theme.fg("muted", `${interruptKey()} to cancel · ${esc} to close`);
+				return theme.fg(
+					"muted",
+					t("overlays.btw_panel.cancel_close", { interruptKey: `${interruptKey()}`, esc: `${esc}` }),
+				);
 			case "complete": {
 				const actions: string[] = [];
 				const copyKey = formatKeyHint("c");
 				const injectKey = this.#injectKey();
-				if (injectKey) actions.push(`${formatKeyHint(injectKey)} to inject`);
-				if (this.isCopyable()) actions.push(this.#copied ? `${copyKey} to copy again` : `${copyKey} to copy`);
-				if (this.#canFollowUp?.()) actions.push(`${formatKeyHint("f")} to follow up`);
-				if (this.#canBranch?.() ?? this.isBranchable()) actions.push(`${formatKeyHint("b")} to branch`);
-				actions.push(`${esc} to close`);
+				if (injectKey)
+					actions.push(t("overlays.btw_panel.key_inject", { injectKey: `${formatKeyHint(injectKey)}` }));
+				if (this.isCopyable())
+					actions.push(
+						this.#copied
+							? t("overlays.btw_panel.key_copy_again", { copyKey: `${copyKey}` })
+							: t("overlays.btw_panel.key_copy", { copyKey: `${copyKey}` }),
+					);
+				if (this.#canFollowUp?.())
+					actions.push(t("overlays.btw_panel.key_follow_up", { value: `${formatKeyHint("f")}` }));
+				if (this.#canBranch?.() ?? this.isBranchable())
+					actions.push(t("overlays.btw_panel.key_branch", { value: `${formatKeyHint("b")}` }));
+				actions.push(t("overlays.btw_panel.key_close", { esc: `${esc}` }));
 				if (this.#copied) {
-					return `${theme.fg("success", "✓ Copied to clipboard")}${theme.fg("muted", actions.length > 0 ? ` · ${actions.join(" · ")}` : "")}`;
+					return `${theme.fg("success", t("overlays.btw_panel.copied_clipboard"))}${theme.fg("muted", actions.length > 0 ? ` · ${actions.join(" · ")}` : "")}`;
 				}
 				return theme.fg("muted", actions.join(" · "));
 			}
 			case "branching":
-				return theme.fg("muted", `${theme.status.pending} Branching to chat…`);
+				return theme.fg("muted", t("overlays.btw_panel.branching", { pending: `${theme.status.pending}` }));
 			case "aborted":
-				return theme.fg("warning", `${theme.status.warning} Cancelled · ${esc} to close`);
+				return theme.fg(
+					"warning",
+					t("overlays.btw_panel.cancelled_close", { warning: `${theme.status.warning}`, esc: `${esc}` }),
+				);
 			case "error":
-				return theme.fg("error", `${theme.status.error} Error · ${esc} to close`);
+				return theme.fg(
+					"error",
+					t("overlays.btw_panel.error_close", { error: `${theme.status.error}`, esc: `${esc}` }),
+				);
 		}
 	}
 
 	#contentSections(): Component[] {
 		if (this.#state === "error") {
-			return [new Text(theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? "Unknown error")), 0, 0)];
+			return [
+				new Text(theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? t("tools.common.unknown_error"))), 0, 0),
+			];
 		}
 		const text = this.#visibleAnswer;
 		if (!text) {
 			const waiting =
-				this.#state === "running" ? `${theme.status.pending} Waiting for response…` : "No text returned.";
+				this.#state === "running"
+					? t("overlays.btw_panel.waiting_response", { pending: `${theme.status.pending}` })
+					: t("overlays.btw_panel.no_text_returned");
 			return [new Text(theme.fg("dim", waiting), 0, 0)];
 		}
 		const parts = this.#injectParts();

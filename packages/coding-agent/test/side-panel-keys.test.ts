@@ -7,6 +7,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
@@ -157,7 +158,7 @@ describe("alt+t view chords", () => {
 		}
 	});
 
-	it("cancels on escape and lets any other key keep its meaning", async () => {
+	it("closes on escape and ends the view chord on an unrelated focused key", async () => {
 		const h = await harness(120);
 		const typed: string[] = [];
 		const editor: Component = {
@@ -178,8 +179,9 @@ describe("alt+t view chords", () => {
 			h.term.sendInput("x");
 			h.term.sendInput("a");
 			await h.settle();
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
-			expect(typed).toEqual(["t", "x", "a"]);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
+			expect(h.sidePanel.dockedView).toBe("agents");
+			expect(typed).toEqual(["t"]);
 		} finally {
 			h.stop();
 		}
@@ -199,11 +201,66 @@ describe("alt+t view chords", () => {
 			h.term.sendInput(ALT_T);
 			vi.advanceTimersByTime(2500);
 			h.term.sendInput("t");
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
-			expect(typed).toEqual(["t"]);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
+			expect(cfgSidebarView.get(h.settings)).toBe("agents");
+			expect(typed).toEqual([]);
 		} finally {
 			vi.useRealTimers();
 			h.stop();
 		}
 	});
+});
+
+describe("focused side-panel scrolling", () => {
+	for (const vim of [false, true]) {
+		it(`opens immediately and jumps by two digits with Vim ${vim ? "on" : "off"}`, async () => {
+			const previousVim = getMenuSearchVimMode();
+			setMenuSearchVimMode(vim);
+			const h = await harness(100);
+			try {
+				const content = Array.from({ length: 110 }, (_, i) => `fixture-row-${i}`);
+				h.sidePanel.registerView("agents", { id: "agents", title: "AGENTS", content: () => content });
+				const screen = () => h.term.getViewport().join("\n");
+				const firstRow = () => Number(screen().match(/fixture-row-(\d+)/)?.[1]);
+				const send = async (...keys: string[]) => {
+					for (const key of keys) h.term.sendInput(key);
+					await h.settle();
+				};
+				await send(ALT_T);
+				expect(h.sidePanel.fullscreenActive).toBe(true);
+				expect(screen()).toContain("a Agents");
+				expect(screen().includes("gg/G")).toBe(vim);
+				expect(firstRow()).toBe(0);
+				await send("3");
+				expect(firstRow()).toBe(0);
+				await send("0");
+				const jumped = firstRow();
+				expect(jumped).toBeGreaterThanOrEqual(24);
+				expect(jumped).toBeLessThanOrEqual(28);
+				await send("\x1b[B");
+				expect(firstRow()).toBe(jumped + 1);
+				await send("j");
+				expect(firstRow()).toBe(jumped + (vim ? 2 : 1));
+				if (vim) {
+					await send("k", "\x05");
+					expect(firstRow()).toBe(jumped + 2);
+					await send("\x19");
+					expect(firstRow()).toBe(jumped + 1);
+					await send("\x04");
+					expect(firstRow()).toBeGreaterThan(jumped + 2);
+					await send("\x15");
+					expect(firstRow()).toBe(jumped + 1);
+					await send("G");
+					expect(screen()).toContain("fixture-row-109");
+					await send("g", "g");
+					expect(firstRow()).toBe(0);
+				}
+				await send("\x03");
+				expect(h.sidePanel.fullscreenOpen).toBe(false);
+			} finally {
+				setMenuSearchVimMode(previousVim);
+				h.stop();
+			}
+		});
+	}
 });

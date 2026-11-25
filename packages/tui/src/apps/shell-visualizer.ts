@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ShellVizPresentation } from "@oh-my-pi/pi-wire";
 import { matchesKey } from "../keys";
 import { node } from "../native/describe";
@@ -112,16 +113,28 @@ export class ShellVisualizer implements Component {
 	}
 	render(width: number): string[] {
 		const presentation = this.host.presentation();
-		if (!presentation) return ["No complete bash command available", "Escape closes"];
+		const close = t("cli.commands.shell_visualizer.close");
+		if (!presentation) return [t("cli.commands.shell_visualizer.unavailable"), close];
 		const prefs = presentation.preferences;
-		const headings = `v  Raw ↔ Pseudo  ·  ${prefs.view === "pseudo" ? "Pseudo" : "Raw"}`;
-		const layers = SHELL_VIZ_LAYERS.map(layer => `${layer}:${prefs.layers[layer] ? "on" : "off"}`).join("  ");
+		const raw = t("cli.commands.shell_visualizer.raw");
+		const pseudo = t("cli.commands.shell_visualizer.pseudo");
+		const headings = `v  ${raw} ↔ ${pseudo}  ·  ${prefs.view === "pseudo" ? pseudo : raw}`;
+		const on = t("cli.commands.shell_visualizer.on");
+		const off = t("cli.commands.shell_visualizer.off");
+		const layers = SHELL_VIZ_LAYERS.map(
+			layer => `${t(`cli.commands.shell_visualizer.layer.${layer}`)}:${prefs.layers[layer] ? on : off}`,
+		).join("  ");
 		const header = [
-			theme.bold("Bash visualizer  ·  Escape closes"),
+			theme.bold(t("cli.commands.shell_visualizer.title", { close })),
 			headings,
 			layers,
-			`c/i/d/e/u layers · s split:${prefs.split ? "on" : "off"} · ↑↓/Tab select · Enter details · PgUp/PgDn scroll`,
-			`Space ${prefs.playing ? "pause" : "play"} · ←/→ step · r reset · l live · Home/End seek · −/+ speed ${prefs.speed}× · ${formatDuration(presentation.timeline.elapsedNs / 1_000_000)} / ${formatDuration(presentation.timeline.durationNs / 1_000_000)}`,
+			t("cli.commands.shell_visualizer.controls", { split: prefs.split ? on : off }),
+			t("cli.commands.shell_visualizer.playback", {
+				action: t(prefs.playing ? "cli.commands.shell_visualizer.pause" : "cli.commands.shell_visualizer.play"),
+				speed: prefs.speed,
+				elapsed: formatDuration(presentation.timeline.elapsedNs / 1_000_000),
+				duration: formatDuration(presentation.timeline.durationNs / 1_000_000),
+			}),
 		];
 		const body = renderShellVisualization(presentation, theme, width);
 		const selected = presentation.rows.find(
@@ -137,8 +150,13 @@ export class ShellVisualizer implements Component {
 					detail.push(...segment.expanded.split("\n").map(shellVizText));
 			}
 			for (const variable of selected.annotations ?? []) {
+				const scope = variable.scope ? ` (${shellVizText(variable.scope)})` : "";
+				const truncated =
+					variable.fullLength !== undefined && variable.fullLength > Buffer.byteLength(variable.value, "utf8")
+						? t("cli.commands.shell_visualizer.truncated_value", { bytes: variable.fullLength })
+						: "";
 				detail.push(
-					`${shellVizText(variable.name)} = ${shellVizText(JSON.stringify(variable.value))}${variable.scope ? ` (${shellVizText(variable.scope)})` : ""}${variable.fullLength !== undefined && variable.fullLength > Buffer.byteLength(variable.value, "utf8") ? ` [${variable.fullLength} bytes; retained value truncated]` : ""}`,
+					`${shellVizText(variable.name)} = ${shellVizText(JSON.stringify(variable.value))}${scope}${truncated}`,
 				);
 			}
 			for (const effect of selected.effects)
@@ -157,7 +175,11 @@ export class ShellVisualizer implements Component {
 				? [
 						theme.fg(
 							"dim",
-							`Selected details ${this.#detailScroll + 1}–${this.#detailScroll + detailHeight}/${wrappedDetail.length} · [/] scroll`,
+							t("cli.commands.shell_visualizer.details", {
+								start: this.#detailScroll + 1,
+								end: this.#detailScroll + detailHeight,
+								total: wrappedDetail.length,
+							}),
 						),
 						...wrappedDetail.slice(this.#detailScroll, this.#detailScroll + detailHeight),
 					]

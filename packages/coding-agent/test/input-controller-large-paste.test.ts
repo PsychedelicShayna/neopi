@@ -124,7 +124,7 @@ describe("InputController.handleLargePaste gate", () => {
 
 describe("InputController.presentLargePasteMenu actions", () => {
 	it("wraps the paste in attachment XML collapsed to a marker", async () => {
-		const { controller, spies } = createContext({ choice: "Attach as a wrapped block" });
+		const { controller, spies } = createContext({ choice: "wrapped" });
 
 		await controller.presentLargePasteMenu("payload", 1);
 
@@ -133,7 +133,7 @@ describe("InputController.presentLargePasteMenu actions", () => {
 
 	it("recalls and submits the wrapped expansion rather than only the chip preview", async () => {
 		const editor = new CustomEditor(getEditorTheme());
-		const { controller } = createContext({ choice: "Attach as a wrapped block", editor });
+		const { controller } = createContext({ choice: "wrapped", editor });
 		await controller.presentLargePasteMenu("line one\nline two", 2);
 		editor.clearDraftForRecall();
 		editor.addToHistory("intervening prompt");
@@ -146,7 +146,7 @@ describe("InputController.presentLargePasteMenu actions", () => {
 	});
 
 	it("pastes inline when explicitly selected", async () => {
-		const { controller, spies } = createContext({ choice: "Paste inline" });
+		const { controller, spies } = createContext({ choice: "inline" });
 
 		await controller.presentLargePasteMenu("payload", 1);
 
@@ -172,7 +172,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 
 	it("saves the paste to local:// and inserts a clean local://paste reference", async () => {
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-paste-test-"));
-		const { controller, spies } = createContext({ choice: "Attach as local file", artifactsDir: dir });
+		const { controller, spies } = createContext({ choice: "file", artifactsDir: dir });
 
 		await controller.presentLargePasteMenu("line one\nline two", 2);
 
@@ -186,7 +186,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 	it("does not overwrite an existing paste file", async () => {
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-paste-test-"));
 		await Bun.write(path.join(dir, "local", "paste-1.md"), "previous");
-		const { controller, spies } = createContext({ choice: "Attach as local file", artifactsDir: dir });
+		const { controller, spies } = createContext({ choice: "file", artifactsDir: dir });
 
 		await controller.presentLargePasteMenu("fresh", 1);
 
@@ -198,7 +198,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 	it("recalls a paste-file reference without deleting or overwriting its content", async () => {
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-paste-recall-"));
 		const editor = new CustomEditor(getEditorTheme());
-		const { controller } = createContext({ choice: "Attach as local file", artifactsDir: dir, editor });
+		const { controller } = createContext({ choice: "file", artifactsDir: dir, editor });
 		await controller.presentLargePasteMenu("first file\nsecond line", 2);
 		editor.clearDraftForRecall();
 		await controller.presentLargePasteMenu("another paste", 1);

@@ -2,6 +2,7 @@
  * Edit tool renderer.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type EditInspection, editInspect } from "@oh-my-pi/pi-natives";
 import type { Component } from "../tui";
 import { sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
@@ -493,7 +494,7 @@ function renderPlainTextPreview(text: string, uiTheme: Theme, _filePath?: string
 		preview += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), CALL_TEXT_PREVIEW_WIDTH))}\n`;
 	}
 	if (previewLines.hidden > 0) {
-		preview += uiTheme.fg("dim", `… ${previewLines.hidden} more lines`);
+		preview += uiTheme.fg("dim", t("tools.edit.more_lines_ellipsis", { count: previewLines.hidden }));
 	}
 	return preview.trimEnd();
 }
@@ -1031,8 +1032,8 @@ function renderDiffSection(
 		let text = `\n${visibleDiff}`;
 		if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
 			const remainder: string[] = [];
-			if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
-			if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
+			if (hiddenHunks > 0) remainder.push(t("tools.edit.hidden_hunks", { count: hiddenHunks }));
+			if (hiddenLines > 0) remainder.push(t("tools.edit.hidden_lines", { count: hiddenLines }));
 			text += uiTheme.fg("toolOutput", `\n… (${remainder.join(", ")}) ${formatExpandHint(uiTheme)}`);
 		}
 		return text;
@@ -1117,7 +1118,7 @@ export const editToolRenderer = {
 		if (!facts.rawPath) return { label };
 		let detail = formatEditTitlePath(facts.rawPath);
 		if (facts.rename) detail += ` → ${formatEditTitlePath(facts.rename)}`;
-		if (facts.fileCount > 1) detail += ` (+${facts.fileCount - 1} more)`;
+		if (facts.fileCount > 1) detail += t("tools.edit.more_files", { count: facts.fileCount - 1 });
 		return { label, detail };
 	},
 
@@ -1152,7 +1153,8 @@ export const editToolRenderer = {
 					op,
 					rawPath,
 					rename,
-					extraSuffix: fileCount > 1 ? uiTheme.fg("dim", ` (+${fileCount - 1} more)`) : undefined,
+					extraSuffix:
+						fileCount > 1 ? uiTheme.fg("dim", t("tools.edit.more_files", { count: fileCount - 1 })) : undefined,
 				});
 				const preview = getCallPreview(
 					editArgs,
@@ -1291,7 +1293,14 @@ export const editToolRenderer = {
 			if (remaining > 0) {
 				body.push(
 					node("spinner", {
-						label: [span(`${remaining} more file${remaining > 1 ? "s" : ""} pending…`, "muted")],
+						label: [
+							span(
+								t(remaining <= 1 ? "tools.edit.files_pending.one" : "tools.edit.files_pending.many", {
+									count: remaining,
+								}),
+								"muted",
+							),
+						],
 					}),
 				);
 			}
@@ -1350,14 +1359,15 @@ interface EditHeadFacts {
  * file, `Edit · 3 files · +21 −4` for several; a diagnostics chip when LSP reported.
  */
 function editToolHead(facts: EditHeadFacts): NativeToolHead {
-	const multi = (facts.files ?? 0) > 1;
+	const files = facts.files ?? 0;
+	const multi = files > 1;
 	const meta = compact([
 		diffStatsMeta(facts.added, facts.removed),
 		!multi && facts.rename ? `→ ${displayPath(sanitizeText(facts.rename))}` : undefined,
 	]);
 	const badge = facts.diagnostics && diagnosticsBadge(facts.diagnostics);
 	const target = multi
-		? `${facts.files} files`
+		? t("tools.edit.files", { files })
 		: facts.path
 			? `${displayPath(sanitizeText(facts.path))}${facts.line ? `:${facts.line}` : ""}`
 			: undefined;
@@ -1697,7 +1707,12 @@ function renderMultiFileResult(
 						{
 							iconOverride: spinner,
 							title: "Edit",
-							description: uiTheme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
+							description: uiTheme.fg(
+								"dim",
+								t(remaining <= 1 ? "tools.edit.files_pending.one" : "tools.edit.files_pending.many", {
+									count: remaining,
+								}),
+							),
 						},
 						uiTheme,
 					),

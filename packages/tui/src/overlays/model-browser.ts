@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { provenanceColor, uiProvenance, uiProvenanceSuffix } from "../theme/provenance";
 /**
  * Frameless, reusable model browser: a fuzzy search row, a windowed model
@@ -895,7 +896,12 @@ function formatCostLeg(n: number): string {
 /** `2× from 2026-11-22` when a dated Factory Droid credit card changes the rate in force now; undefined otherwise. */
 function nextCreditRateNote(model: Model): string | undefined {
 	const next = getFactoryDroidCreditRate(model)?.next;
-	return next ? `${formatCostLeg(next.rate)}× from ${new Date(next.at).toISOString().slice(0, 10)}` : undefined;
+	return next
+		? t("overlaysModel.browser.price.creditChange", {
+				rate: formatCostLeg(next.rate),
+				date: new Date(next.at).toISOString().slice(0, 10),
+			})
+		: undefined;
 }
 
 /**
@@ -913,17 +919,45 @@ function withCreditBadge(model: Model, price: string): string {
 }
 
 const PRICING_STATUS_LABELS: Record<Exclude<ModelPricingStatus, "fixed">, { short: string; detail: string }> = {
-	free: { short: "free", detail: "free" },
-	included: { short: "included", detail: "included" },
-	variable: { short: "varies", detail: "price varies" },
-	unknown: { short: "unknown", detail: "pricing unknown" },
+	free: {
+		get short() {
+			return t("overlaysModel.browser.price.free");
+		},
+		get detail() {
+			return t("overlaysModel.browser.price.free");
+		},
+	},
+	included: {
+		get short() {
+			return t("overlaysModel.browser.price.included");
+		},
+		get detail() {
+			return t("overlaysModel.browser.price.included");
+		},
+	},
+	variable: {
+		get short() {
+			return t("overlaysModel.browser.price.varies");
+		},
+		get detail() {
+			return t("overlaysModel.browser.price.variesDetail");
+		},
+	},
+	unknown: {
+		get short() {
+			return t("overlaysModel.browser.price.unknown");
+		},
+		get detail() {
+			return t("overlaysModel.browser.price.unknownDetail");
+		},
+	},
 };
 
 /** `$in/out` per-million cost pair with any credit badge; `free` when nothing is charged; a declared pricing state otherwise. */
 function formatCostPair(model: Model): string {
 	const declared = declaredPricingStatus(model);
 	if (declared !== undefined) return PRICING_STATUS_LABELS[declared].short;
-	if (isFreeModel(model)) return "free";
+	if (isFreeModel(model)) return t("overlaysModel.browser.price.free");
 	const cost = getEffectiveTokenCost(model.cost);
 	return withCreditBadge(model, `$${formatCostLeg(cost.input)}/${formatCostLeg(cost.output)}`);
 }
@@ -931,27 +965,43 @@ function formatCostPair(model: Model): string {
 /** Detail-pane price fact: `$3/15 per M`, or the declared pricing state in words. */
 function formatCostDetail(model: Model): string {
 	const declared = declaredPricingStatus(model);
-	return declared !== undefined ? PRICING_STATUS_LABELS[declared].detail : `${formatCostPair(model)} per M`;
+	return declared !== undefined
+		? PRICING_STATUS_LABELS[declared].detail
+		: t("overlaysModel.browser.price.perMillion", { price: formatCostPair(model) });
 }
 
 /** Fact columns of a model picker (Stencil `NATIVE_REDESIGN.md` §4.7); the lowest priority hides first. */
 export const MODEL_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "int", head: "Int", format: "num", priority: 4 },
 	{ id: "speed", head: "t/s", format: "num", priority: 3 },
-	{ id: "ctx", head: "Ctx", format: "num", priority: 1 },
+	{
+		id: "ctx",
+		get head() {
+			return t("overlaysModel.browser.column.context");
+		},
+		format: "num",
+		priority: 1,
+	},
 	{ id: "price", head: "$/M", format: "price", priority: 2 },
 ];
 
 export const NEW_MODEL_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	...MODEL_PICKER_COLUMNS,
-	{ id: "discovered", head: "Discovered", format: "dim", priority: 5 },
+	{
+		id: "discovered",
+		get head() {
+			return t("overlaysModel.browser.column.discovered");
+		},
+		format: "dim",
+		priority: 5,
+	},
 ];
 
 /** `$3·15` price fact of a picker row; `free` at zero cost; a declared pricing state otherwise. */
 function pickerPrice(model: Model): string {
 	const declared = declaredPricingStatus(model);
 	if (declared !== undefined) return PRICING_STATUS_LABELS[declared].short;
-	if (isFreeModel(model)) return "free";
+	if (isFreeModel(model)) return t("overlaysModel.browser.price.free");
 	const cost = getEffectiveTokenCost(model.cost);
 	return withCreditBadge(model, `$${formatCostLeg(cost.input)}·${formatCostLeg(cost.output)}`);
 }
@@ -961,8 +1011,11 @@ function previewPrice(model: Model): string {
 	const declared = declaredPricingStatus(model);
 	if (declared !== undefined) return PRICING_STATUS_LABELS[declared].detail;
 	const cost = getEffectiveTokenCost(model.cost);
-	const parts = [`$${formatCostLeg(cost.input)} in`, `$${formatCostLeg(cost.output)} out`];
-	if (cost.cacheRead > 0) parts.push(`$${formatCostLeg(cost.cacheRead)} cache`);
+	const parts = [
+		t("overlaysModel.browser.price.in", { price: formatCostLeg(cost.input) }),
+		t("overlaysModel.browser.price.out", { price: formatCostLeg(cost.output) }),
+	];
+	if (cost.cacheRead > 0) parts.push(t("overlaysModel.browser.price.cache", { price: formatCostLeg(cost.cacheRead) }));
 	const priced = withCreditBadge(model, parts.join(" · "));
 	const note = nextCreditRateNote(model);
 	return note ? `${priced} (${note})` : priced;
@@ -1340,7 +1393,9 @@ export class ModelBrowser implements Component {
 	#pickerTitle(item: ModelBrowserItem, int: number | undefined): { title?: string } {
 		const parts = [
 			...(this.#pickerProvider || item.provider === "" ? [] : [item.provider]),
-			...(int !== undefined ? [`Intelligence ${Math.round(int)}`] : []),
+			...(int !== undefined
+				? [t("overlaysModel.browser.preview.intelligenceTooltip", { score: Math.round(int) })]
+				: []),
 		];
 		return parts.length > 0 ? { title: parts.join(" · ") } : {};
 	}
@@ -1788,10 +1843,12 @@ export class ModelBrowser implements Component {
 		const currentMark =
 			item.selector === this.#currentSelector ? ` ${theme.fg("success", theme.status.enabled)}` : "";
 		const overLimit = overContext
-			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
+			? ` ${t("overlaysModel.browser.warning.row", { icon: theme.status.disabled, limit: formatNumber(item.model.contextWindow ?? 0).toLowerCase() })}`
 			: "";
 		const star = item.discovery ? theme.fg(item.discovery.color, `${theme.symbol("provenance.star")} `) : "";
-		const unavailable = item.discovery?.unavailable ? ` ${theme.fg("muted", "Unavailable")}` : "";
+		const unavailable = item.discovery?.unavailable
+			? ` ${theme.fg("muted", t("overlaysModel.browser.unavailable"))}`
+			: "";
 		let left = `${prefix}${star}${providerPrefix}${name}${currentMark}${overLimit}${unavailable}`;
 
 		// Metric columns collapse when empty or when the row needs room for its name.
@@ -1829,14 +1886,18 @@ export class ModelBrowser implements Component {
 		const facts: string[] = [model.name];
 		// Upstream badges sit next to the name; the provider blurb goes last so
 		// width truncation eats prose before context, cost, or perf facts.
-		if (model.isNew) facts.push("new");
+		if (model.isNew) facts.push(t("overlaysModel.browser.badge.new"));
 		if (model.isBeta) facts.push("beta");
-		if (model.isRecommended) facts.push("recommended");
-		if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
-		if (model.maxTokens) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
+		if (model.isRecommended) facts.push(t("overlaysModel.browser.badge.recommended"));
+		if (model.contextWindow)
+			facts.push(
+				t("overlaysModel.browser.fact.context", { tokens: formatNumber(model.contextWindow).toLowerCase() }),
+			);
+		if (model.maxTokens)
+			facts.push(t("overlaysModel.browser.fact.output", { tokens: formatNumber(model.maxTokens).toLowerCase() }));
 		facts.push(formatCostDetail(model));
-		if (model.reasoning) facts.push("reasoning");
-		if (model.input.includes("image")) facts.push("vision");
+		if (model.reasoning) facts.push(t("overlaysModel.browser.badge.reasoning"));
+		if (model.input.includes("image")) facts.push(t("overlaysModel.browser.badge.vision"));
 		const intelligence = formatIntelligence(model);
 		if (intelligence) facts.push(intelligence);
 		const measured = this.#perfFor(selected);
@@ -1856,13 +1917,13 @@ export class ModelBrowser implements Component {
 		const line1 = truncateToWidth(theme.fg("muted", `  ${facts.join(" · ")}`), width);
 
 		if (this.isOverContext(selected)) {
-			const warning = `  ${theme.status.disabled} context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds ${formatNumber(model.contextWindow ?? 0).toLowerCase()} limit · compacts with current model, then switches`;
+			const warning = `  ${t("overlaysModel.browser.warning.detail", { icon: theme.status.disabled, context: formatNumber(this.#currentContextTokens).toLowerCase(), limit: formatNumber(model.contextWindow ?? 0).toLowerCase() })}`;
 			return [line1, truncateToWidth(theme.fg("warning", warning), width)];
 		}
 
 		const chips: string[] = [];
 		if (selected.selector === this.#currentSelector) {
-			chips.push(theme.fg("success", `${theme.status.enabled} current`));
+			chips.push(theme.fg("success", t("overlaysModel.browser.currentMark", { icon: theme.status.enabled })));
 		}
 		const seen = new Set<string>();
 		const pushRole = (role: string) => {
@@ -1880,6 +1941,7 @@ export class ModelBrowser implements Component {
 	}
 
 	render(width: number): string[] {
+		this.#syncLabelsLocale();
 		this.#syncContextRevision();
 		this.#syncCreditClock();
 		const lines: string[] = [];
@@ -1894,7 +1956,8 @@ export class ModelBrowser implements Component {
 
 		if (total === 0) {
 			const message =
-				this.#emptyText?.() ?? (this.query.trim() ? "  No matching models" : "  No models available in this scope");
+				this.#emptyText?.() ??
+				`  ${this.query.trim() ? t("overlaysModel.browser.empty.noMatch") : t("overlaysModel.browser.empty.noModels")}`;
 			lines.push(truncateToWidth(theme.fg("muted", message), width));
 			for (let i = 1; i < this.#maxVisible; i++) lines.push("");
 		} else {
@@ -2016,6 +2079,18 @@ export class ModelBrowser implements Component {
 	}
 
 	#contextRevision = -1;
+	#labelsLocale = getLocale();
+	#localizedPickerColumns = MODEL_PICKER_COLUMNS.map(column => ({ ...column }));
+	#syncLabelsLocale(): void {
+		const locale = getLocale();
+		if (locale === this.#labelsLocale) return;
+		this.#labelsLocale = locale;
+		this.#localizedPickerColumns = MODEL_PICKER_COLUMNS.map(column => ({ ...column }));
+		this.#metricCells = new WeakMap();
+		this.#pickerOrder = undefined;
+		this.#bumpPickerEpoch();
+	}
+
 	#syncContextRevision(): void {
 		if (this.#contextRevision === this.#settings.revision) return;
 		this.#contextRevision = this.#settings.revision;
@@ -2029,6 +2104,7 @@ export class ModelBrowser implements Component {
 	 * scrolls), and the selection's facts and role chips.
 	 */
 	describe(): NativeNode {
+		this.#syncLabelsLocale();
 		this.#syncContextRevision();
 		this.#syncCreditClock();
 		this.#nativeSearch ??= row([text([span(theme.symbol("icon.search"), "muted")]), this.#search.input], {
@@ -2068,11 +2144,11 @@ export class ModelBrowser implements Component {
 		const filter = this.query.trim();
 		const error = compileMenuRegex(this.query)?.error;
 		const empty = error
-			? `Invalid regex: ${error}`
+			? t("overlaysModel.browser.error.regex", { error })
 			: items.length > 0
 				? ""
 				: plainText(this.#emptyText?.() ?? "").trim() ||
-					(filter ? "No matching models" : "No models available in this scope");
+					(filter ? t("overlaysModel.browser.empty.noMatch") : t("overlaysModel.browser.empty.noModels"));
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
@@ -2109,7 +2185,7 @@ export class ModelBrowser implements Component {
 		if (item.discovery) label.push(span(`${theme.symbol("provenance.star")} `, item.discovery.color));
 		if (this.#showProvider) label.push(span(`${item.provider}/`, "dim"));
 		label.push(span(item.id, item.labelColor));
-		if (item.discovery?.unavailable) label.push(span(" Unavailable", "muted"));
+		if (item.discovery?.unavailable) label.push(span(t("overlaysModel.browser.unavailableSpaced"), "muted"));
 		if (item.selector === this.#currentSelector) label.push(span(` ${theme.status.enabled}`, "success"));
 		const metrics = [
 			formatIntelligence(item.model),
@@ -2127,7 +2203,10 @@ export class ModelBrowser implements Component {
 				detail: overContext
 					? [
 							span(
-								`${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`,
+								t("overlaysModel.browser.warning.row", {
+									icon: theme.status.disabled,
+									limit: formatNumber(item.model.contextWindow ?? 0).toLowerCase(),
+								}),
 								"warning",
 							),
 						]
@@ -2154,17 +2233,22 @@ export class ModelBrowser implements Component {
 		if (selected) {
 			const model = selected.model;
 			const head: NativeChild[] = [text([span(model.name, "strong")])];
-			if (model.isNew) head.push(node("badge", { text: "new", tone: "accent" }));
+			if (model.isNew) head.push(node("badge", { text: t("overlaysModel.browser.badge.new"), tone: "accent" }));
 			if (model.isBeta) head.push(node("badge", { text: "beta", tone: "warning" }));
-			if (model.isRecommended) head.push(node("badge", { text: "recommended", tone: "success" }));
+			if (model.isRecommended)
+				head.push(node("badge", { text: t("overlaysModel.browser.badge.recommended"), tone: "success" }));
 			children.push(row(head, { gap: "sm", align: "center", wrap: true }));
 
 			const facts: string[] = [];
-			if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
-			if (model.maxTokens) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
+			if (model.contextWindow)
+				facts.push(
+					t("overlaysModel.browser.fact.context", { tokens: formatNumber(model.contextWindow).toLowerCase() }),
+				);
+			if (model.maxTokens)
+				facts.push(t("overlaysModel.browser.fact.output", { tokens: formatNumber(model.maxTokens).toLowerCase() }));
 			facts.push(formatCostDetail(model));
-			if (model.reasoning) facts.push("reasoning");
-			if (model.input.includes("image")) facts.push("vision");
+			if (model.reasoning) facts.push(t("overlaysModel.browser.badge.reasoning"));
+			if (model.input.includes("image")) facts.push(t("overlaysModel.browser.badge.vision"));
 			const intelligence = formatIntelligence(model);
 			if (intelligence) facts.push(intelligence);
 			const measured = this.#perfFor(selected);
@@ -2181,12 +2265,16 @@ export class ModelBrowser implements Component {
 			if (description) children.push(text([span(description, "dim")], { wrap: "word", lines: 2 }));
 
 			if (this.isOverContext(selected)) {
-				const warning = `${theme.status.disabled} context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds ${formatNumber(model.contextWindow ?? 0).toLowerCase()} limit · compacts with current model, then switches`;
+				const warning = t("overlaysModel.browser.warning.detail", {
+					icon: theme.status.disabled,
+					context: formatNumber(this.#currentContextTokens).toLowerCase(),
+					limit: formatNumber(model.contextWindow ?? 0).toLowerCase(),
+				});
 				children.push(text([span(warning, "warning")], { wrap: "word" }));
 			} else {
 				const chips: TspSpan[] = [];
 				if (selected.selector === this.#currentSelector) {
-					chips.push(span(`${theme.status.enabled} current`, "success"));
+					chips.push(span(t("overlaysModel.browser.currentMark", { icon: theme.status.enabled }), "success"));
 				}
 				const seen = new Set<string>();
 				const pushRole = (role: string) => {
@@ -2233,7 +2321,7 @@ export class ModelBrowser implements Component {
 		return {
 			query: this.value,
 			cursor: this.cursor,
-			columns: MODEL_PICKER_COLUMNS,
+			columns: this.#localizedPickerColumns,
 			...catalogue,
 			order: view.order,
 			...(view.hits ? { hits: view.hits } : {}),
@@ -2250,6 +2338,7 @@ export class ModelBrowser implements Component {
 	 * role moving) keeps the last whole `items` and patches it.
 	 */
 	pickerItems(catalogue: readonly ModelBrowserItem[]): ModelPickerCatalogue {
+		this.#syncLabelsLocale();
 		this.#syncContextRevision();
 		this.#syncCreditClock();
 		const memo = this.#pickerItems;
@@ -2322,17 +2411,21 @@ export class ModelBrowser implements Component {
 		facts.price = pickerPrice(model);
 		if (item.discovery) facts.discovered = item.discovery.date;
 		const badges: { text: string; tone?: "accent" | "warning" | "success"; title?: string }[] = [];
-		if (item.discovery?.unavailable) badges.push({ text: "Unavailable", tone: "warning" });
+		if (item.discovery?.unavailable) badges.push({ text: t("overlaysModel.browser.unavailable"), tone: "warning" });
 		if (this.isOverContext(item)) {
 			badges.push({
-				text: `ctx>${formatNumber(model.contextWindow ?? 0).toLowerCase()}`,
+				text: t("overlaysModel.browser.warning.short", {
+					limit: formatNumber(model.contextWindow ?? 0).toLowerCase(),
+				}),
 				tone: "warning",
-				title: `Context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds this model's limit; picking it compacts first`,
+				title: t("overlaysModel.browser.warning.tooltip", {
+					context: formatNumber(this.#currentContextTokens).toLowerCase(),
+				}),
 			});
 		}
-		if (model.isNew) badges.push({ text: "new", tone: "accent" });
+		if (model.isNew) badges.push({ text: t("overlaysModel.browser.badge.new"), tone: "accent" });
 		if (model.isBeta) badges.push({ text: "beta", tone: "warning" });
-		if (isFreeModel(model)) badges.push({ text: "free", tone: "success" });
+		if (isFreeModel(model)) badges.push({ text: t("overlaysModel.browser.price.free"), tone: "success" });
 		const chips = heldRoles.map(({ role, assignment }) => {
 			const info = this.#settings.getRoleInfo(role);
 			const dot = thinkingDotToken(assignment.thinkingLevel);
@@ -2395,6 +2488,7 @@ export class ModelBrowser implements Component {
 	 * result list and query, so selection moves reuse it.
 	 */
 	pickerOrder(grouping: ModelPickerGrouping): ModelPickerOrder {
+		this.#syncLabelsLocale();
 		const visible = this.#menu.visibleItems;
 		const query = this.query.trim();
 		const key = `${grouping.providers}\0${grouping.rest}\0${query}`;
@@ -2417,7 +2511,7 @@ export class ModelBrowser implements Component {
 			pushRows(visible);
 		} else {
 			if (recent.length > 0) {
-				order.push({ group: "recent", label: "Recent", count: recent.length });
+				order.push({ group: "recent", label: t("overlaysModel.browser.recent"), count: recent.length });
 				pushRows(recent);
 			}
 			if (grouping.providers) this.#pushProviderGroups(order, rest, pushRows);
@@ -2486,6 +2580,7 @@ export class ModelBrowser implements Component {
 	 * below the list): one inline fact line and the held-role chips.
 	 */
 	pickerPreview(mode: "full" | "compact", current?: string): readonly NativeChild[] {
+		this.#syncLabelsLocale();
 		this.#syncCreditClock();
 		const selected = this.getSelected();
 		const item = selected && !this.#isDisabled(selected) ? selected : undefined;
@@ -2523,7 +2618,10 @@ export class ModelBrowser implements Component {
 			? text(
 					[
 						span(
-							`Context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds the ${formatNumber(ctx).toLowerCase()} limit · compacts with the current model, then switches`,
+							t("overlaysModel.browser.warning.preview", {
+								context: formatNumber(this.#currentContextTokens).toLowerCase(),
+								limit: formatNumber(ctx).toLowerCase(),
+							}),
 							"warning",
 						),
 					],
@@ -2541,22 +2639,31 @@ export class ModelBrowser implements Component {
 				text: (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role),
 				...(assignment ? { tone: assignment.autoSelected ? "muted" : "accent" } : {}),
 				title: assignment
-					? `${info.name}${assignment.autoSelected ? " (auto-selected)" : ""}${level ? ` · thinking ${level}` : ""}`
-					: `${info.name}: not assigned`,
+					? `${info.name}${assignment.autoSelected ? t("overlaysModel.browser.role.autoSelected") : ""}${level ? t("overlaysModel.browser.role.thinking", { level }) : ""}`
+					: t("overlaysModel.browser.role.notAssigned", { role: info.name }),
 			});
 		};
 
 		if (mode === "compact") {
 			const facts: { k: TspText; v: TspText }[] = [];
-			if (ctx > 0) facts.push({ k: "ctx", v: formatNumber(ctx).toLowerCase() });
-			if (out > 0) facts.push({ k: "out", v: formatNumber(out).toLowerCase() });
-			facts.push({ k: "price", v: isFreeModel(model) ? "free" : formatCostDetail(model) });
+			if (ctx > 0)
+				facts.push({ k: t("overlaysModel.browser.preview.ctxShort"), v: formatNumber(ctx).toLowerCase() });
+			if (out > 0)
+				facts.push({ k: t("overlaysModel.browser.preview.outShort"), v: formatNumber(out).toLowerCase() });
+			facts.push({
+				k: t("overlaysModel.browser.preview.priceShort"),
+				v: isFreeModel(model) ? t("overlaysModel.browser.price.free") : formatCostDetail(model),
+			});
 			const nextCredits = nextCreditRateNote(model);
-			if (nextCredits) facts.push({ k: "then", v: nextCredits });
-			facts.push({ k: "reasoning", v: model.reasoning ? "yes" : "no" });
+			if (nextCredits) facts.push({ k: t("overlaysModel.browser.preview.then"), v: nextCredits });
+			facts.push({
+				k: t("overlaysModel.browser.badge.reasoning"),
+				v: model.reasoning ? t("overlaysModel.browser.yes") : t("overlaysModel.browser.no"),
+			});
 			const children: NativeChild[] = [node("kv", { items: facts, layout: "inline" })];
 			const chips: NativeChild[] = [];
-			if (item.selector === current) chips.push(node("badge", { text: "current", tone: "success" }));
+			if (item.selector === current)
+				chips.push(node("badge", { text: t("overlaysModel.browser.badge.current"), tone: "success" }));
 			for (const { role, assignment } of held) chips.push(roleBadge(role, assignment));
 			if (chips.length > 0) children.push(row(chips, { gap: "xs", wrap: true }));
 			if (warning) children.push(warning);
@@ -2565,15 +2672,21 @@ export class ModelBrowser implements Component {
 
 		const children: NativeChild[] = [
 			text(model.name, { role: "omp.picker.title" }),
-			text([span(selector, "mono")], { actions: { click: "copy" }, title: "Copy model id", truncate: "middle" }),
+			text([span(selector, "mono")], {
+				actions: { click: "copy" },
+				title: t("overlaysModel.browser.preview.copyModelId"),
+				truncate: "middle",
+			}),
 		];
 		const badges: NativeChild[] = [];
-		if (item.selector === current) badges.push(node("badge", { text: "current", tone: "success" }));
-		if (model.isNew) badges.push(node("badge", { text: "new", tone: "accent" }));
+		if (item.selector === current)
+			badges.push(node("badge", { text: t("overlaysModel.browser.badge.current"), tone: "success" }));
+		if (model.isNew) badges.push(node("badge", { text: t("overlaysModel.browser.badge.new"), tone: "accent" }));
 		if (model.isBeta) badges.push(node("badge", { text: "beta", tone: "warning" }));
-		if (model.isRecommended) badges.push(node("badge", { text: "recommended", tone: "success" }));
-		if (model.reasoning) badges.push(node("badge", { text: "reasoning" }));
-		if (model.input.includes("image")) badges.push(node("badge", { text: "vision" }));
+		if (model.isRecommended)
+			badges.push(node("badge", { text: t("overlaysModel.browser.badge.recommended"), tone: "success" }));
+		if (model.reasoning) badges.push(node("badge", { text: t("overlaysModel.browser.badge.reasoning") }));
+		if (model.input.includes("image")) badges.push(node("badge", { text: t("overlaysModel.browser.badge.vision") }));
 		if (badges.length > 0) children.push(row(badges, { gap: "xs", wrap: true }));
 
 		const speed: string[] = [];
@@ -2582,38 +2695,66 @@ export class ModelBrowser implements Component {
 				`${formatTps(measured.perf.tps).replace("t/s", " t/s")}${measured.tier ? ` ${measured.tier}` : ""}`,
 			);
 			if (measured.perf.ttftMs !== null) speed.push(`${formatTtft(measured.perf.ttftMs).replace("s", " s")} TTFT`);
-			speed.push(`${measured.perf.samples} ${measured.perf.samples === 1 ? "sample" : "samples"}`);
+			speed.push(
+				measured.perf.samples === 1
+					? t("overlaysModel.browser.preview.sample", { count: measured.perf.samples })
+					: t("overlaysModel.browser.preview.samples", { count: measured.perf.samples }),
+			);
 		} else if (model.tps != null && Number.isFinite(model.tps) && model.tps > 0) {
-			speed.push(`~${formatTps(model.tps).replace("t/s", " t/s")} (catalog)`);
+			speed.push(
+				t("overlaysModel.browser.preview.catalogSpeed", { speed: formatTps(model.tps).replace("t/s", " t/s") }),
+			);
 		}
 		const facts: { k: TspText; v: TspText }[] = [];
 		const fact = (k: string, v: string | undefined) => {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
-		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
+		fact(t("overlaysModel.browser.preview.context"), ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
 		const effectiveContext = showContextPolicy ? this.#settings.effectiveContextWindowFor?.(model) : undefined;
 		if (effectiveContext !== undefined && effectiveContext !== ctx)
 			fact(
-				"Effective context *",
-				`${effectiveContext.toLocaleString("en-US")} · maintenance budget; Context is catalog`,
+				t("overlaysModel.browser.preview.effectiveContext"),
+				t("overlaysModel.browser.preview.budget", { context: effectiveContext.toLocaleString("en-US") }),
 			);
 		const compaction = showContextPolicy ? this.#settings.compactionPointFor?.(model) : undefined;
 		if (compaction) {
 			const value =
 				compaction.tokens === undefined
-					? "off"
+					? t("overlaysModel.browser.preview.off")
 					: `${compaction.tokens.toLocaleString("en-US")}${compaction.basis !== undefined ? ` · ${compaction.basis}` : ""}`;
 			facts.push({
-				k: [span("Compacts at", "muted")],
+				k: [span(t("overlaysModel.browser.preview.compactsAt"), "muted")],
 				v: [span(value, "mono"), span(` · ${compaction.source}`, "dim")],
 			});
 		}
-		fact("Max output", out > 0 ? out.toLocaleString("en-US") : undefined);
-		fact("Price", isFreeModel(model) ? "free" : `${previewPrice(model)} per M`);
-		fact("Speed", speed.length > 0 ? speed.join(" · ") : undefined);
-		fact("Intelligence", model.int != null && Number.isFinite(model.int) ? String(Math.round(model.int)) : undefined);
-		fact("Input", model.input.join(" · "));
-		fact("Reasoning", model.reasoning ? "yes" : "no");
+		fact(t("overlaysModel.browser.preview.maxOutput"), out > 0 ? out.toLocaleString("en-US") : undefined);
+		fact(
+			t("overlaysModel.browser.preview.price"),
+			isFreeModel(model)
+				? t("overlaysModel.browser.price.free")
+				: t("overlaysModel.browser.price.perMillion", { price: previewPrice(model) }),
+		);
+		fact(t("overlaysModel.browser.preview.speed"), speed.length > 0 ? speed.join(" · ") : undefined);
+		fact(
+			t("overlaysModel.browser.preview.intelligence"),
+			model.int != null && Number.isFinite(model.int) ? String(Math.round(model.int)) : undefined,
+		);
+		fact(
+			t("overlaysModel.browser.preview.input"),
+			model.input
+				.map(input =>
+					input === "text"
+						? t("overlaysModel.browser.modality.text")
+						: input === "image"
+							? t("overlaysModel.browser.modality.image")
+							: input,
+				)
+				.join(" · "),
+		);
+		fact(
+			t("overlaysModel.browser.preview.reasoning"),
+			model.reasoning ? t("overlaysModel.browser.yes") : t("overlaysModel.browser.no"),
+		);
 		children.push(node("kv", { items: facts }));
 		if (warning) children.push(warning);
 
@@ -2625,7 +2766,11 @@ export class ModelBrowser implements Component {
 			roleBadges.push(roleBadge(role, heldBy.get(role)));
 		}
 		if (roleBadges.length > 0) {
-			children.push(node("section", { head: "Roles" }, [row(roleBadges, { gap: "xs", wrap: true })]));
+			children.push(
+				node("section", { head: t("overlaysModel.browser.preview.roles") }, [
+					row(roleBadges, { gap: "xs", wrap: true }),
+				]),
+			);
 		}
 		const description = model.description ? sanitizeText(model.description).trim() : "";
 		if (description) children.push(md(description));

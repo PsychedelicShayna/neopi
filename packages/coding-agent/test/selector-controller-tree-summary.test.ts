@@ -58,7 +58,7 @@ interface TreeSummaryHarness {
 	showHookSelector: Mock<ShowHookSelector>;
 }
 
-function createHarness(summaryChoice = "No summary"): TreeSummaryHarness {
+function createHarness(summaryChoice = "none"): TreeSummaryHarness {
 	const navigation = Promise.withResolvers<void>();
 	const root = userNode("root", null, "Root prompt");
 	const showHookSelector = vi.fn<ShowHookSelector>(async () => summaryChoice);
@@ -172,16 +172,16 @@ describe("SelectorController tree branch summaries", () => {
 
 	it("still offers the summary prompt on plain enter when branchSummary.enabled is on", async () => {
 		cfgBranchSummaryEnabled.set(Settings.instance, true);
-		const harness = createHarness("Summarize");
+		const harness = createHarness("summary");
 
 		harness.controller.showTreeSelector();
 		harness.selector().handleInput("\r");
 		await harness.navigation;
 
 		expect(harness.showHookSelector).toHaveBeenCalledWith("Summarize branch?", [
-			"No summary",
-			"Summarize",
-			"Summarize with custom prompt",
+			{ value: "none", label: "No summary" },
+			{ value: "summary", label: "Summarize" },
+			{ value: "custom", label: "Summarize with custom prompt" },
 		]);
 		expect(harness.navigateTree).toHaveBeenCalledWith("root", {
 			summarize: true,

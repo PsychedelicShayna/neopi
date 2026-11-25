@@ -6,9 +6,9 @@ import { buildModelColorLookup, modelKey, OTHER_COLOR, SERIES_COLORS } from "../
 import { formatCost, formatEstimatedCost, formatInteger, formatPercent } from "../data/formatters";
 import { useQuery } from "../data/query";
 import { bucketAxis, rangeMeta } from "../data/range";
-import { densify, pivotSeries } from "../data/series";
+import { densify, localizeGroupedSeries, pivotSeries } from "../data/series";
 import { buildCostSummary, type CostComponents, type CostModelRow, type CostSummaryView } from "../data/view-models";
-import { useTranslation } from "../i18n";
+import { useTranslation, useLocale } from "../i18n";
 import type { CostDashboardStats, TimeRange } from "../types";
 import {
 	Card,
@@ -53,15 +53,19 @@ const COMPONENTS = [
 	{ key: "costCacheWrite", label: "Cache write", color: "#f5b54a" },
 ] as const satisfies readonly { key: keyof CostComponents; label: string; color: string }[];
 
-const LOCAL_DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-const LOCAL_DAY_LONG = new Intl.DateTimeFormat(undefined, {
-	weekday: "short",
-	month: "short",
-	day: "numeric",
-	year: "numeric",
-});
+function dayLabels(locale?: string) {
+	const day = { month: "short", day: "numeric" } as const;
+	return {
+		tick: new Intl.DateTimeFormat(locale, day),
+		tooltip: new Intl.DateTimeFormat(locale, { ...day, weekday: "short", year: "numeric" }),
+	};
+}
+
+const DAY_LABELS = { en: dayLabels(), es: dayLabels("es-419") };
 
 export function CostsRoute({ active, range }: CostsRouteProps) {
+	const locale = useLocale();
+	const days = DAY_LABELS[locale];
 	const tr = useTranslation();
 	const query = useQuery(["costs", range], ({ signal }) => getCostDashboardStats(range, signal), { enabled: active });
 	const meta = rangeMeta(range);
@@ -69,7 +73,7 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 	const [hidden, toggleSeries] = useHiddenSeries();
 	const view = useMemo(() => (query.data ? buildCostsView(query.data, range) : null), [query.data, range]);
 	// Stable columns: a fresh array would make Table re-sort on every render.
-	const columns = useMemo(() => (view ? buildCostColumns(view) : []), [view]);
+	const columns = useMemo(() => (view ? buildCostColumns(view, tr) : []), [view, tr]);
 	const isEmpty = (data: CostDashboardStats) => data.costSeries.length === 0;
 	const empty = (
 		<EmptyState
@@ -101,14 +105,21 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 				<Card
 					index={1}
 					title={tr("costs.daily", "Daily estimate")}
-					description={split === "model" ? "Per day, stacked by model" : "Per day, stacked by billing component"}
+					description={
+						split === "model"
+							? tr("costs.daily_model", "Per day, stacked by model")
+							: tr("costs.daily_component", "Per day, stacked by billing component")
+					}
 					actions={
 						<Segmented
 							size="sm"
-							options={SPLIT_OPTIONS}
+							options={SPLIT_OPTIONS.map(option => ({
+								...option,
+								label: tr(`costs.split_${option.value}`, option.label),
+							}))}
 							value={split}
 							onChange={setSplit}
-							aria-label="Split by"
+							aria-label={tr("costs.split", "Split by")}
 						/>
 					}
 					stale={query.stale}
@@ -116,13 +127,16 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 					<QueryView query={query} skeleton={<ChartSkeleton height={280} />} isEmpty={isEmpty} empty={empty}>
 						{() => {
 							if (!view) return null;
-							const series = split === "model" ? view.modelSeries : view.componentSeries;
+							const series =
+								split === "model"
+									? localizeGroupedSeries(view.modelSeries, tr)
+									: view.componentSeries.map(s => ({ ...s, label: tr(`components.${s.key}`, s.label) }));
 							return (
 								<div className="stack" style={{ gap: 12 }}>
 									<Chart
 										slots={view.buckets.length}
-										tickLabel={i => LOCAL_DAY.format(view.buckets[i])}
-										tooltipTitle={i => LOCAL_DAY_LONG.format(view.buckets[i])}
+										tickLabel={i => days.tick.format(view.buckets[i])}
+										tooltipTitle={i => days.tooltip.format(view.buckets[i])}
 										series={series}
 										hidden={hidden}
 										height={280}
@@ -158,7 +172,12 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 					</QueryView>
 				</Card>
 
-				<Card index={2} title="Where it went" description="Estimate by billing component" stale={query.stale}>
+				<Card
+					index={2}
+					title={tr("costs.breakdown", "Where it went")}
+					description={tr("costs.breakdown_description", "Estimate by billing component")}
+					stale={query.stale}
+				>
 					<QueryView query={query} skeleton={<ChartSkeleton height={280} />} isEmpty={isEmpty} empty={empty}>
 						{() => view && <ComponentBreakdown summary={view.summary} />}
 					</QueryView>
@@ -167,8 +186,8 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 
 			<Card
 				index={3}
-				title="By model"
-				description="Estimate per model with its input, output and cache split"
+				title={tr("costs.split_model", "By model")}
+				description={tr("costs.model_description", "Estimate per model with its input, output and cache split")}
 				stale={query.stale}
 				flush
 			>
@@ -277,10 +296,16 @@ function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
 					).replace("{count}", formatInteger(summary.activeDays))}
 				/>
 				<Stat
-					label="Top model"
+					label={tr("costs.top_model", "Top model")}
 					title={top ? `${top.model} (${top.provider})` : undefined}
 					value={top ? top.model : "–"}
-					hint={top ? `${formatCost(top.cost)} · ${formatPercent(top.share)} of estimate` : "Nothing priced yet"}
+					hint={
+						top
+							? tr("costs.share_estimate", "{cost} · {share} of estimate")
+									.replace("{cost}", formatCost(top.cost))
+									.replace("{share}", formatPercent(top.share))
+							: tr("costs.nothing_priced", "Nothing priced yet")
+					}
 				/>
 				<Stat
 					label={tr("costs.per_priced", "Per priced request")}
@@ -307,18 +332,24 @@ function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
 }
 
 function ComponentBreakdown({ summary }: { summary: CostSummaryView }) {
+	const tr = useTranslation();
 	return (
 		<div className="stack" style={{ gap: 14 }}>
 			<ShareBar
 				height={10}
-				segments={COMPONENTS.map(c => ({ key: c.key, label: c.label, value: summary[c.key], color: c.color }))}
+				segments={COMPONENTS.map(c => ({
+					key: c.key,
+					label: tr(`components.${c.key}`, c.label),
+					value: summary[c.key],
+					color: c.color,
+				}))}
 			/>
 			<div className="costs-components">
 				{COMPONENTS.map(c => (
 					<div key={c.key} className="costs-component-row">
 						<span className="row">
 							<Swatch color={c.color} />
-							{c.label}
+							{tr(`components.${c.key}`, c.label)}
 						</span>
 						<span className="num">{formatCost(summary[c.key])}</span>
 						<span className="num dim costs-component-share">
@@ -327,7 +358,7 @@ function ComponentBreakdown({ summary }: { summary: CostSummaryView }) {
 					</div>
 				))}
 				<div className="costs-component-row costs-component-total">
-					<span>Total</span>
+					<span>{tr("common.total", "Total")}</span>
 					<span className="num">{formatEstimatedCost(summary.totalCost, summary.unpricedRequests)}</span>
 					<span className="costs-component-share" />
 				</div>
@@ -342,10 +373,10 @@ function ComponentBreakdown({ summary }: { summary: CostSummaryView }) {
 	);
 }
 
-function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
+function buildCostColumns(view: CostsView, tr: (key: string, english: string) => string): Column<CostModelRow>[] {
 	const componentColumns: Column<CostModelRow>[] = COMPONENTS.map(c => ({
 		key: c.key,
-		header: c.label,
+		header: tr(`components.${c.key}`, c.label),
 		align: "right",
 		sort: row => row[c.key],
 		render: row => <span className="num">{formatCost(row[c.key])}</span>,
@@ -353,7 +384,7 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 	return [
 		{
 			key: "model",
-			header: "Model",
+			header: tr("common.model", "Model"),
 			sort: row => row.model,
 			render: row => (
 				<LabelCell
@@ -365,15 +396,15 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: tr("nav.requests", "Requests"),
 			align: "right",
 			sort: row => row.requests,
 			render: row => <span className="num">{formatInteger(row.requests)}</span>,
 		},
 		{
 			key: "cost",
-			header: "Estimate",
-			title: "API-equivalent estimate at public rates",
+			header: tr("costs.estimate_column", "Estimate"),
+			title: tr("costs.estimate_column_hint", "API-equivalent estimate at public rates"),
 			align: "right",
 			sort: row => row.cost,
 			render: row => (
@@ -387,20 +418,25 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		},
 		{
 			key: "share",
-			header: "Share",
+			header: tr("costs.share", "Share"),
 			align: "right",
 			sort: row => row.share,
 			render: row => <span className="num muted">{row.cost > 0 ? formatPercent(row.share) : "–"}</span>,
 		},
 		{
 			key: "split",
-			header: "Split",
-			title: "Input · output · cache read · cache write",
+			header: tr("costs.breakdown_column", "Split"),
+			title: tr("costs.breakdown_column_hint", "Input · output · cache read · cache write"),
 			width: 150,
 			render: row =>
 				row.cost > 0 ? (
 					<ShareBar
-						segments={COMPONENTS.map(c => ({ key: c.key, label: c.label, value: row[c.key], color: c.color }))}
+						segments={COMPONENTS.map(c => ({
+							key: c.key,
+							label: tr(`components.${c.key}`, c.label),
+							value: row[c.key],
+							color: c.color,
+						}))}
 					/>
 				) : (
 					<span className="dim">–</span>
@@ -409,8 +445,8 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		...componentColumns,
 		{
 			key: "perRequest",
-			header: "Per request",
-			title: "Estimate ÷ priced requests",
+			header: tr("costs.per_request", "Per request"),
+			title: tr("costs.per_request_hint", "Estimate ÷ priced requests"),
 			align: "right",
 			sort: row => (row.requests > row.unpricedRequests ? row.cost / (row.requests - row.unpricedRequests) : -1),
 			render: row => (
@@ -423,8 +459,8 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		},
 		{
 			key: "unpriced",
-			header: "Unpriced",
-			title: "Requests with no public-equivalent price",
+			header: tr("costs.unpriced", "Unpriced"),
+			title: tr("costs.unpriced_hint", "Requests with no public-equivalent price"),
 			align: "right",
 			sort: row => row.unpricedRequests,
 			render: row =>

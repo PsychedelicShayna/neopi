@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { ToolRenderer } from "./renderer";
 
 import type { Component } from "../index";
@@ -113,8 +114,8 @@ export const resolveRenderer = {
 		uiTheme: Theme,
 	): Component {
 		const details = result.details;
-		const label = replaceTabs(details?.label ?? "pending action");
-		const reason = replaceTabs(details?.reason?.trim() || "No reason provided");
+		const label = replaceTabs(details?.label ?? t("tools.resolve.pending"));
+		const reason = replaceTabs(details?.reason?.trim() || t("tools.resolve.no_reason"));
 		const action = details?.action ?? "apply";
 		const isApply = action === "apply" && !result.isError;
 		const isFailedApply = action === "apply" && result.isError;
@@ -123,7 +124,11 @@ export const resolveRenderer = {
 		// reset (styledSymbol/status glyphs carry their own \x1b[39m) would drop the
 		// inverse block back to the default background mid-line.
 		const icon = uiTheme.symbol(isApply ? "tool.resolve" : "status.error");
-		const verb = isApply ? "Accept" : isFailedApply ? "Failed" : "Discard";
+		const verb = isApply
+			? t("tools.resolve.accept")
+			: isFailedApply
+				? t("tools.resolve.failed")
+				: t("tools.resolve.discard");
 		const separator = ": ";
 		const separatorIndex = label.indexOf(separator);
 		const sourceLabel = separatorIndex > 0 ? label.slice(0, separatorIndex).trim() : undefined;
@@ -169,13 +174,17 @@ export const resolveRenderer = {
 		details?: ResolveDetails;
 		isError?: boolean;
 	}): NativeToolView | undefined {
-		return resolveResultMemo.get(result, [], () => {
+		return resolveResultMemo.get(result, [getLocale()], () => {
 			const details = result.details;
-			const label = plainText(details?.label ?? "pending action");
-			const reason = plainText(details?.reason?.trim() || "No reason provided");
+			const label = plainText(details?.label ?? t("tools.resolve.pending"));
+			const reason = plainText(details?.reason?.trim() || t("tools.resolve.no_reason"));
 			const action = details?.action ?? "apply";
 			const isApply = action === "apply" && !result.isError;
-			const verb = isApply ? "Accept" : action === "apply" ? "Failed" : "Discard";
+			const verb = isApply
+				? t("tools.resolve.accept")
+				: action === "apply"
+					? t("tools.resolve.failed")
+					: t("tools.resolve.discard");
 			const tone = result.isError ? "error" : isApply ? "success" : "warning";
 			const separatorIndex = label.indexOf(": ");
 			const sourceLabel = separatorIndex > 0 ? label.slice(0, separatorIndex).trim() : undefined;

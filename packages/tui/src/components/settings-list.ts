@@ -60,8 +60,10 @@ export interface SettingItem {
 	description?: string;
 	/** Optional risk note shown in warning styling above the description, with a glyph on the row. */
 	warning?: string;
-	/** Current value to display (right side) */
+	/** Current editable value (right side). */
 	currentValue: string;
+	/** Display a caption without changing the value used by editors and events. */
+	valueLabel?: (value: string) => string;
 	/** Inherited source marker, kept separate from the editable value. */
 	valueSymbol?: SymbolKey;
 	/** Use file presence for the value color, even while selected or outside the active section. */
@@ -189,9 +191,16 @@ export interface SettingsListNavigationState {
 	submenu: unknown;
 }
 
+function settingItemValueLabel(item: SettingItem): string {
+	const value = String(item.currentValue ?? "");
+	return item.valueLabel?.(value) ?? value;
+}
+
 /** Searchable text for a setting item: label, id, value, description, warning, and cycle values. */
 export function getSettingItemFilterText(item: SettingItem): string {
 	let text = `${item.label} ${item.id} ${item.currentValue}`;
+	const shown = settingItemValueLabel(item);
+	if (shown !== item.currentValue) text += ` ${shown}`;
 	if (item.description) {
 		text += ` ${item.description}`;
 	}
@@ -200,6 +209,13 @@ export function getSettingItemFilterText(item: SettingItem): string {
 	}
 	if (item.values) {
 		text += ` ${item.values.join(" ")}`;
+		if (item.valueLabel) {
+			for (const value of item.values) {
+				if (value === item.currentValue) continue;
+				const label = item.valueLabel(value);
+				if (label !== value) text += ` ${label}`;
+			}
+		}
 	}
 	return sanitizeSingleLine(text);
 }
@@ -844,7 +860,7 @@ export class SettingsList implements Component {
 
 	#describeItem(item: NativeDescribedSetting): NativeNode {
 		const symbol = item.valueSymbol ? activeThemeSymbol(item.valueSymbol) : "";
-		const current = String(item.currentValue ?? "");
+		const current = settingItemValueLabel(item);
 		const value = plainLine(symbol && current ? `${current} ${symbol}` : symbol || current);
 		const changed = item.changed === true;
 		const signature = `${item.heading === true}\0${item.label}\0${value}\0${changed}\0${item.warning ?? ""}\0${item.description ?? ""}`;
@@ -922,7 +938,7 @@ export class SettingsList implements Component {
 		const labelPad = padding(Math.max(0, maxLabelWidth - visibleWidth(labelPlain)));
 		const separator = "  ";
 		const valueMaxWidth = rowWidth - prefixWidth - maxLabelWidth - visibleWidth(separator) - 2;
-		const current = String(item.currentValue ?? "");
+		const current = settingItemValueLabel(item);
 		let valuePlain: string;
 		if (item.valueSymbol) {
 			const symbol = activeThemeSymbol(item.valueSymbol);

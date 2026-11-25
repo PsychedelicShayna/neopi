@@ -4,6 +4,7 @@ import { buildSessionTraceFromSnapshots } from "@oh-my-pi/omp-stats/trace";
 import type { SessionTrace } from "@oh-my-pi/omp-stats/types";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
+import { getCatalog, getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import { getResolvedThemeColors, getThemeExportColors } from "@oh-my-pi/pi-tui/theme";
 import type { SessionEntry, SessionHeader } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
@@ -19,7 +20,8 @@ import { exportThemeStyles, webExportThemeVars } from "./web-palette";
 
 export { type ExportThemeNames, parseExportArgs } from "./args";
 
-let cachedTemplate: string | undefined;
+const cachedTemplates: Partial<Record<Locale, string>> = {};
+const VIEWER_CATALOG_PREFIX = "tools.export.";
 const SESSION_DATA_MARKER = "{{SESSION_DATA}}";
 
 /** Resolve file-loader assets without treating Windows drive letters as URL schemes. */
@@ -33,17 +35,42 @@ function inlineScript(source: string): string {
 }
 
 /** Compose a standalone export with the shared viewer and both libraries embedded. */
-export function getTemplate(): string {
-	if (cachedTemplate) return cachedTemplate;
+export function getTemplate(locale: Locale = "en"): string {
+	const cached = cachedTemplates[locale];
+	if (cached) return cached;
 	const marked = fs.readFileSync(resolveBundledHtmlAssetPath(markedJsPath), "utf8");
 	const highlight = fs.readFileSync(resolveBundledHtmlAssetPath(highlightJsPath), "utf8");
 	const viewer = fs.readFileSync(resolveBundledHtmlAssetPath(viewerJsPath), "utf8");
-	cachedTemplate = templateHtml
+	const template = localizeDocumentTemplate(locale)
 		.replace("<template-marked/>", () => inlineScript(marked))
 		.replace("<template-highlight/>", () => inlineScript(highlight))
 		.replace("{{THIRD_PARTY_NOTICES}}", () => Bun.escapeHTML(vendorNotices))
 		.replace("<viewer-script/>", () => inlineScript(viewer));
-	return cachedTemplate;
+	cachedTemplates[locale] = template;
+	return template;
+}
+
+/** The small viewer dictionary is separate from the existing transcript JSON payload. */
+function localizeDocumentTemplate(locale: Locale): string {
+	const defaults = getCatalog("en");
+	const viewerStrings = Object.fromEntries(
+		Object.entries(getCatalog(locale)).filter(
+			([key, value]) => key.startsWith(VIEWER_CATALOG_PREFIX) && value !== defaults[key],
+		),
+	);
+	const json = JSON.stringify(viewerStrings).replaceAll("<", "\\u003c");
+	return templateHtml
+		.replace('<html lang="en">', `<html lang="${locale}">`)
+		.replace('name="omp-export-locale" content="en"', `name="omp-export-locale" content="${locale}"`)
+		.replace('id="viewer-i18n" type="application/json">{}', () => `id="viewer-i18n" type="application/json">${json}`)
+		.replace(
+			/(<(?:title|p|noscript|summary)\b[^>]*data-export-text="(tools\.export\.[a-z_]+)"[^>]*>)[^<]*/g,
+			(_match, open: string, key: string) => open + Bun.escapeHTML(t(locale, key)),
+		)
+		.replace(
+			'data-error-prefix="Failed to load viewer: "',
+			() => `data-error-prefix="${Bun.escapeHTML(t(locale, "tools.export.viewer_error"))}"`,
+		);
 }
 
 export interface ExportOptions {
@@ -205,7 +232,9 @@ async function writeExportHtml(sessionData: SessionData, outputPath: string, opt
 	const palette = opts.palette ?? (opts.themeName ? "theme" : "web");
 	const themeStyles = palette === "theme" ? await generateThemeStyles(palette, opts.themeNames, opts.themeName) : "";
 	// Function replacement so `$'`, `$&`, `$$`, `$n` in the CSS are not substitution patterns.
-	const page = getTemplate().replace("<theme-vars/>", () => (themeStyles ? `<style>${themeStyles}</style>` : ""));
+	const page = getTemplate(getLocale()).replace("<theme-vars/>", () =>
+		themeStyles ? `<style>${themeStyles}</style>` : "",
+	);
 	const marker = page.indexOf(SESSION_DATA_MARKER);
 
 	// Unlike `Bun.write`, a `FileSink` does not create missing parent directories.

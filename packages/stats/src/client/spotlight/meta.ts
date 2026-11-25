@@ -27,6 +27,7 @@ import {
 	Wrench,
 } from "lucide-react";
 import { formatCompact, formatCost } from "../data/formatters";
+import type { Translation } from "../types";
 import type {
 	SpotlightCutGroup,
 	SpotlightDashboardStats,
@@ -141,6 +142,25 @@ export const CUT_GROUP: Record<SpotlightCutGroup, CutGroupMeta> = {
 	},
 };
 
+export function cutGroupLabel(tr: Translation, group: SpotlightCutGroup): string {
+	return tr(`insights.group.${group}.label`, CUT_GROUP[group].label);
+}
+
+export function cutGroupRule(tr: Translation, group: SpotlightCutGroup): string {
+	return tr(`insights.group.${group}.rule`, CUT_GROUP[group].rule);
+}
+
+export function recoveryLabel(tr: Translation, kind: SpotlightRecoveryKind, plural = false): string {
+	const meta = RECOVERY_KIND[kind];
+	return plural
+		? tr(`insights.recovery.${kind}.plural`, meta.plural)
+		: tr(`insights.recovery.${kind}.label`, meta.label);
+}
+
+export function recoveryRule(tr: Translation, kind: SpotlightRecoveryKind): string {
+	return tr(`insights.recovery.${kind}.rule`, RECOVERY_KIND[kind].rule);
+}
+
 export const CUT_GROUPS: readonly SpotlightCutGroup[] = ["applied", "scoreFree", "holdout", "gated", "reference"];
 
 export const SIZE_BINS: readonly SpotlightSizeBin[] = ["<250", "250–1k", "1k–4k", "≥4k"];
@@ -170,11 +190,11 @@ export function toolIcon(tool: SpotlightTool): LucideIcon {
 	return Object.hasOwn(TOOL_ICON, tool) ? TOOL_ICON[tool] : Wrench;
 }
 
-/** What one time bucket of the range is called in prose ("hour", "day"). */
-export function bucketNoun(bucketMs: number): string {
-	if (bucketMs >= 86_400_000) return "day";
-	if (bucketMs >= 3_600_000) return "hour";
-	return `${Math.round(bucketMs / 60_000)} minutes`;
+/** What one time bucket of the range is called in prose (tr("insights.bucket.hour", "hour"), tr("insights.bucket.day", "day")). */
+export function bucketNoun(tr: Translation, bucketMs: number): string {
+	if (bucketMs >= 86_400_000) return tr("insights.bucket.day", "day");
+	if (bucketMs >= 3_600_000) return tr("insights.bucket.hour", "hour");
+	return tr("insights.bucket.minutes", "{count} minutes", { count: Math.round(bucketMs / 60_000) });
 }
 
 /** Compact token count with a real minus sign. */

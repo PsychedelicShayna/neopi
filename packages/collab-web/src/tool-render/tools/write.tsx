@@ -1,5 +1,6 @@
 /** `write` — file create/overwrite: content preview plus write confirmation. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, CodeBlock, InvalidArg, Note, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, languageFromPath, str } from "../util";
@@ -25,6 +26,7 @@ function diagnosticsOf(details: Record<string, unknown> | null): WriteDiagnostic
 }
 
 function Summary({ args }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const path = str(args.file_path ?? args.path);
 	const content = str(args.content);
 	const lines = content ? content.split("\n").length : 0;
@@ -34,7 +36,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 			{lines > 1 && (
 				<>
 					{" "}
-					<Badge>{lines} lines</Badge>
+					<Badge>{t("guesttools.write.lines", "{count} lines", { count: lines })}</Badge>
 				</>
 			)}
 		</>
@@ -42,6 +44,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const path = str(args.file_path ?? args.path);
 	const content = str(args.content);
 	const details = detailsRecord(result);
@@ -50,7 +53,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		<>
 			<Badges
 				items={[
-					details?.madeExecutable === true && <Badge tone="ok">made executable</Badge>,
+					details?.madeExecutable === true && (
+						<Badge tone="ok">{t("guesttools.write.executable", "made executable")}</Badge>
+					),
 					diagnostics?.summary && (
 						<Badge tone={diagnostics.errored ? "err" : "warn"}>
 							{diagnostics.server ? `${diagnostics.server}: ` : ""}
@@ -61,7 +66,8 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			/>
 			{content === null ? (
 				<Note tone="err">
-					<InvalidArg what="content" /> — expected string
+					<InvalidArg what="content" />
+					{t("guesttools.write.expected_string", " — expected string")}
 				</Note>
 			) : (
 				content && <CodeBlock code={content} lang={path ? languageFromPath(path) : null} maxLines={12} />
@@ -70,7 +76,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			{diagnostics && diagnostics.messages.length > 0 && (
 				<Output
 					text={diagnostics.messages.join("\n")}
-					title="diagnostics"
+					title={t("guesttools.label.diagnostics", "diagnostics")}
 					error={diagnostics.errored}
 					maxLines={8}
 				/>

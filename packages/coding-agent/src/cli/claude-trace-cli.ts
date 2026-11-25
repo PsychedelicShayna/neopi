@@ -11,6 +11,7 @@ import * as tls from "node:tls";
 import * as zlib from "node:zlib";
 import { PtySession } from "@oh-my-pi/pi-natives";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import xterm from "@oh-my-pi/pi-utils/vterm";
 
 const DEFAULT_PROXY_HOST = "127.0.0.1";
@@ -435,24 +436,24 @@ export function formatCapturedMessagesExchange(exchange: CapturedMessagesExchang
 	const responseLine =
 		`${exchange.response.version || "HTTP"} ${exchange.response.statusCode ?? ""} ${exchange.response.statusMessage}`.trim();
 	return [
-		`# /v1/messages capture (${exchange.target})`,
+		t("cli.commands.claude-trace.title", { target: exchange.target }),
 		"",
-		"## Request",
+		t("cli.commands.claude-trace.request"),
 		`${exchange.request.method} ${exchange.request.path} ${exchange.request.version}`.trim(),
 		"",
-		"### Headers",
+		t("cli.commands.claude-trace.headers"),
 		requestHeaders,
 		"",
-		"### Body",
+		t("cli.commands.claude-trace.body"),
 		exchange.request.body,
 		"",
-		"## Response",
+		t("cli.commands.claude-trace.response"),
 		responseLine,
 		"",
-		"### Headers",
+		t("cli.commands.claude-trace.headers"),
 		responseHeaders,
 		"",
-		"### Body",
+		t("cli.commands.claude-trace.body"),
 		exchange.response.body,
 		"",
 	].join("\n");
@@ -498,7 +499,7 @@ export class ClaudeMessagesProxy {
 			server.off("error", onError);
 			const address = server.address();
 			if (!address || typeof address === "string") {
-				reject(new Error("Proxy did not bind to a TCP address"));
+				reject(new Error(t("cli.commands.claude-trace.proxyAddressUnavailable")));
 				return;
 			}
 			this.#port = address.port;
@@ -511,7 +512,7 @@ export class ClaudeMessagesProxy {
 		this.#stopped = true;
 		for (const waiter of this.#waiters.splice(0)) {
 			clearTimeout(waiter.timer);
-			waiter.reject(new Error("Proxy stopped before a /v1/messages response completed"));
+			waiter.reject(new Error(t("cli.commands.claude-trace.proxyStoppedEarly")));
 		}
 		for (const socket of this.#sockets) {
 			socket.destroy();
@@ -531,12 +532,12 @@ export class ClaudeMessagesProxy {
 	waitForCapture(timeoutMs: number): Promise<CapturedMessagesExchange> {
 		const existing = this.#completed.shift();
 		if (existing) return Promise.resolve(existing);
-		if (this.#stopped) return Promise.reject(new Error("Proxy is stopped"));
+		if (this.#stopped) return Promise.reject(new Error(t("cli.commands.claude-trace.proxyStopped")));
 		const { promise, resolve, reject } = Promise.withResolvers<CapturedMessagesExchange>();
 		const timer = setTimeout(() => {
 			const index = this.#waiters.findIndex(waiter => waiter.resolve === resolve);
 			if (index >= 0) this.#waiters.splice(index, 1);
-			reject(new Error("Timed out waiting for a completed /v1/messages response"));
+			reject(new Error(t("cli.commands.claude-trace.responseTimeout")));
 		}, timeoutMs);
 		this.#waiters.push({ resolve, reject, timer });
 		return promise;
@@ -758,13 +759,14 @@ export async function runClaudeMessagesCapture(args: ClaudeTraceCommandArgs = {}
 		},
 	);
 	try {
-		const outputSuffix = () => (ptyOutput.trim() ? `\n\nClaude output:\n${ptyOutput}` : "");
+		const outputSuffix = () =>
+			ptyOutput.trim() ? t("cli.commands.claude-trace.claudeOutput", { output: ptyOutput }) : "";
 		void (async () => {
 			await Bun.sleep(args.inputDelayMs ?? DEFAULT_INPUT_DELAY_MS);
 			try {
 				session.write(`${message}\r`);
 			} catch (error) {
-				ptyOutput += `\n[${APP_NAME} input write failed: ${errorMessage(error)}]\n`;
+				ptyOutput += t("cli.commands.claude-trace.inputWriteFailed", { app: APP_NAME, error: errorMessage(error) });
 			}
 		})();
 		const captureRace = proxy.waitForCapture(timeoutMs).then(
@@ -790,10 +792,10 @@ export async function runClaudeMessagesCapture(args: ClaudeTraceCommandArgs = {}
 		}
 		if (first.kind === "pty-error") {
 			throw new Error(
-				`Claude command failed before /v1/messages completed: ${errorMessage(first.error)}${outputSuffix()}`,
+				t("cli.commands.claude-trace.commandFailed", { error: errorMessage(first.error), output: outputSuffix() }),
 			);
 		}
-		throw new Error(`Claude command exited before /v1/messages completed${outputSuffix()}`);
+		throw new Error(t("cli.commands.claude-trace.commandExited", { output: outputSuffix() }));
 	} finally {
 		terminal.dispose();
 		await proxy.stop();
@@ -802,7 +804,7 @@ export async function runClaudeMessagesCapture(args: ClaudeTraceCommandArgs = {}
 
 export async function runClaudeTraceCommand(args: ClaudeTraceCommandArgs = {}): Promise<void> {
 	process.stderr.write(
-		`Starting Claude trace proxy on ${args.host ?? DEFAULT_PROXY_HOST}:${args.port ?? DEFAULT_PROXY_PORT}\n`,
+		`${t("cli.commands.claude-trace.proxyStarting", { host: args.host ?? DEFAULT_PROXY_HOST, port: args.port ?? DEFAULT_PROXY_PORT })}\n`,
 	);
 	const exchange = await runClaudeMessagesCapture(args);
 	const output = args.json ? `${JSON.stringify(exchange, null, 2)}\n` : formatCapturedMessagesExchange(exchange);

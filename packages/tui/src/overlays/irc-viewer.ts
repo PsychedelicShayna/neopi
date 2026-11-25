@@ -4,6 +4,7 @@
  * transcript shows the same messages in full where they arrived. Read-only;
  * it never changes what any agent can see.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";
 import { MenuKeyReader, MenuSearchField, type MenuSearchState } from "../components/menu-navigation";
@@ -67,7 +68,7 @@ export class IrcViewerComponent implements Component {
 	readonly #unsubscribe: () => void;
 	readonly #filter = new MenuSearchField();
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp("jk gg/G C-u d e y", "End follows the newest messages.");
+	readonly #help = new MenuHelp("jk gg/G C-u d e y", () => t("overlays.irc_viewer.irc_viewer_follow_help"));
 	/** Index into the filtered entries; the last entry while following. */
 	#selected = 0;
 	/** Stable anchor when an earlier send finishes after the selected message. */
@@ -190,7 +191,7 @@ export class IrcViewerComponent implements Component {
 		if (entry.broadcast) meta.push("broadcast");
 		if (message.replyTo) meta.push("reply");
 		if (message.wakeRelay) meta.push("relay");
-		if (entry.outcome === "queued") meta.push("queued");
+		if (entry.outcome === "queued") meta.push(t("overlays.irc_viewer.irc_viewer_queued"));
 		const failed =
 			entry.outcome === "failed"
 				? `  ${theme.fg("error", `failed${entry.error ? `: ${sanitizeDisplaySingleLine(entry.error)}` : ""}`)}`
@@ -214,7 +215,9 @@ export class IrcViewerComponent implements Component {
 		const lines = shown.map(line => `${gutter} ${quote} ${theme.fg("toolOutput", line)}`);
 		const hidden = wrapped.length - shown.length;
 		if (hidden > 0) {
-			lines.push(`${gutter} ${quote} ${theme.fg("dim", `… +${hidden} more ${hidden === 1 ? "line" : "lines"}`)}`);
+			lines.push(
+				`${gutter} ${quote} ${theme.fg("dim", t("overlays.irc_viewer.irc_viewer_hidden_lines", { hidden: `${hidden}`, value: `${hidden === 1 ? "line" : "lines"}` }))}`,
+			);
 		}
 		return lines;
 	}
@@ -225,15 +228,15 @@ export class IrcViewerComponent implements Component {
 		const editing = this.#filter.focused || (this.#compose && this.#draft.focused);
 		const hints = menuHintLines(
 			this.#filter.focused
-				? "enter apply · esc clear"
+				? t("overlays.irc_viewer.irc_viewer_filter_controls")
 				: this.#compose
 					? this.#draft.focused
-						? "enter send · Tab view · esc leave field"
-						: "Tab edit reply · esc cancel reply · ? help"
-					: `enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
-							"esc",
-							...this.#options.viewerKeys.map(key => formatKeyHint(key)),
-						].join("/")} close · ? help`,
+						? t("overlays.irc_viewer.irc_viewer_draft_controls")
+						: t("overlays.irc_viewer.irc_viewer_reply_controls")
+					: t("overlays.irc_viewer.irc_viewer_controls", {
+							value: `${this.#options.reply ? t("overlays.irc_viewer.irc_viewer_reply_hint") : ""}`,
+							join: `${["esc", ...this.#options.viewerKeys.map(key => formatKeyHint(key))].join("/")}`,
+						}),
 			inner,
 			editing ? "" : "jk gg/G C-u d e y",
 		);
@@ -278,7 +281,9 @@ export class IrcViewerComponent implements Component {
 				? [
 						theme.fg(
 							"dim",
-							all.length === 0 ? "No agent messages in this session yet." : "No messages match the filter.",
+							all.length === 0
+								? t("overlays.irc_viewer.irc_viewer_empty")
+								: t("overlays.irc_viewer.irc_viewer_no_matches"),
 						),
 					]
 				: list.slice(this.#top, this.#top + this.#listRows);
@@ -286,7 +291,13 @@ export class IrcViewerComponent implements Component {
 
 		const participants = new Set(all.flatMap(entry => [entry.message.from, entry.message.to])).size;
 		const broadcasts = all.filter(entry => entry.broadcast).length;
-		const counts = `${all.length} ${all.length === 1 ? "message" : "messages"} · ${broadcasts} broadcast · ${participants} ${participants === 1 ? "participant" : "participants"}`;
+		const counts = t("overlays.irc_viewer.irc_viewer_counts", {
+			length: `${all.length}`,
+			value: `${all.length === 1 ? "message" : "messages"}`,
+			broadcasts: `${broadcasts}`,
+			participants: `${participants}`,
+			value2: `${participants === 1 ? "participant" : "participants"}`,
+		});
 		const query = this.#filter.value;
 		const draft = this.#compose
 			? (this.#draft.input.render(Math.max(0, inner - 12 - this.#compose.to.length))[0] ?? "")
@@ -295,11 +306,17 @@ export class IrcViewerComponent implements Component {
 		const status = this.#filter.focused
 			? filter
 			: this.#compose
-				? theme.fg("accent", `reply to ${sanitizeDisplaySingleLine(this.#compose.to)}: ${draft}`)
+				? theme.fg(
+						"accent",
+						t("overlays.irc_viewer.irc_viewer_reply_to", {
+							to: `${sanitizeDisplaySingleLine(this.#compose.to)}`,
+							draft: `${draft}`,
+						}),
+					)
 				: this.#notice
 					? theme.fg(this.#notice.isError ? "error" : "success", sanitizeDisplaySingleLine(this.#notice.text))
 					: query
-						? `${filter}${theme.fg("dim", `  ${visible.length} shown · ${counts}`)}`
+						? `${filter}${theme.fg("dim", t("overlays.irc_viewer.irc_viewer_shown_count", { length: `${visible.length}`, counts: `${counts}` }))}`
 						: theme.fg("dim", counts);
 
 		const frame = [

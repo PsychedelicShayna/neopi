@@ -1,5 +1,6 @@
 /** `github` — gh CLI dispatch: repo views, PRs, searches, Actions run watch. */
 import type { ReactNode } from "react";
+import { type Translation, useTranslation } from "../../lib/i18n";
 import { Badge, InvalidArg, Kv, KvGrid, Note, Output, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, normalizeWs, num, shortenPath, str, truncate } from "../util";
@@ -24,7 +25,7 @@ function issueId(value: string): string | null {
 	return truncate(trimmed, 40);
 }
 
-function formatPr(pr: unknown): string | null {
+function formatPr(pr: unknown, t: Translation): string | null {
 	if (typeof pr === "string") return issueId(pr);
 	if (!Array.isArray(pr)) return null;
 	const parts: string[] = [];
@@ -34,7 +35,12 @@ function formatPr(pr: unknown): string | null {
 		if (id) parts.push(id);
 	}
 	if (parts.length === 0) return null;
-	if (parts.length > 3) return `${parts.slice(0, 3).join(", ")}, +${parts.length - 3} more`;
+	if (parts.length > 3) {
+		return t("guesttools.github.more_prs", "{ids}, +{count} more", {
+			ids: parts.slice(0, 3).join(", "),
+			count: parts.length - 3,
+		});
+	}
 	return parts.join(", ");
 }
 
@@ -43,6 +49,7 @@ function shortSha(sha: string): string {
 }
 
 function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
+	const t = useTranslation();
 	const op = str(args.op) ?? "";
 	const repo = str(args.repo);
 	if (op.startsWith("search_")) {
@@ -55,7 +62,7 @@ function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
 		);
 	}
 	if (op === "pr_checkout" || op === "pr_push") {
-		const target = formatPr(args.pr) ?? str(args.branch);
+		const target = formatPr(args.pr, t) ?? str(args.branch);
 		return (
 			<>
 				{target && <span>{target}</span>}
@@ -66,13 +73,19 @@ function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
 	if (op === "pr_create") {
 		const title = str(args.title);
 		if (title) return <span>{truncate(normalizeWs(title), 60)}</span>;
-		return args.fill === true ? <span className="tv-muted">fill from commits</span> : null;
+		return args.fill === true ? (
+			<span className="tv-muted">{t("guesttools.github.fill_from_commits", "fill from commits")}</span>
+		) : null;
 	}
 	if (op === "run_watch") {
 		const run = str(args.run);
 		const branch = str(args.branch);
-		if (run) return <span>run {truncate(run, 50)}</span>;
-		return <span className="tv-muted">{branch ?? "HEAD"} workflow runs</span>;
+		if (run) return <span>{t("guesttools.github.run_number", "run {id}", { id: truncate(run, 50) })}</span>;
+		return (
+			<span className="tv-muted">
+				{t("guesttools.github.branch_runs", "{branch} workflow runs", { branch: branch ?? "HEAD" })}
+			</span>
+		);
 	}
 	const branch = str(args.branch);
 	return (
@@ -84,10 +97,16 @@ function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
 }
 
 function Summary(props: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const op = str(props.args.op);
 	return (
 		<>
-			{op ? <Badge tone="accent">{op}</Badge> : <Badge tone="warn">no op</Badge>} <Salient args={props.args} />
+			{op ? (
+				<Badge tone="accent">{op}</Badge>
+			) : (
+				<Badge tone="warn">{t("guesttools.github.no_operation", "no op")}</Badge>
+			)}{" "}
+			<Salient args={props.args} />
 		</>
 	);
 }
@@ -130,6 +149,7 @@ function jobVisual(job: Record<string, unknown>): { icon: string; cls: string } 
 }
 
 function RunBlock({ run }: { run: Record<string, unknown> }): ReactNode {
+	const t = useTranslation();
 	const label = str(run.workflowName) ?? str(run.displayTitle) ?? "GitHub Actions";
 	const meta: string[] = [];
 	const branch = str(run.branch);
@@ -157,7 +177,7 @@ function RunBlock({ run }: { run: Record<string, unknown> }): ReactNode {
 			</Row>
 			{jobs.length === 0 && (
 				<Row>
-					<span className="tv-faint">waiting for workflow jobs…</span>
+					<span className="tv-faint">{t("guesttools.github.waiting_jobs", "waiting for workflow jobs…")}</span>
 				</Row>
 			)}
 			{jobs.map((job, index) => {
@@ -166,7 +186,8 @@ function RunBlock({ run }: { run: Record<string, unknown> }): ReactNode {
 				const duration = num(job.durationSeconds);
 				return (
 					<Row key={num(job.id) ?? index}>
-						<span className={visual.cls}>{visual.icon}</span> <span>{str(job.name) ?? "job"}</span>
+						<span className={visual.cls}>{visual.icon}</span>{" "}
+						<span>{str(job.name) ?? t("guesttools.label.job", "job")}</span>
 						{duration !== null && <span className="tv-faint"> {duration}s</span>}
 					</Row>
 				);
@@ -176,17 +197,22 @@ function RunBlock({ run }: { run: Record<string, unknown> }): ReactNode {
 }
 
 function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
+	const t = useTranslation();
 	const repo = str(watch.repo) ?? "";
 	const watching = str(watch.state) === "watching";
 	const run = isRecord(watch.run) ? watch.run : null;
 	const runId = run ? num(run.id) : null;
 	let header: string;
 	if (str(watch.mode) === "run" && runId !== null) {
-		header = `${watching ? "watching " : ""}run #${runId} on ${repo}`;
+		header = watching
+			? t("guesttools.github.watching_run", "watching run #{id} on {repo}", { id: runId, repo })
+			: t("guesttools.github.run_in_repo", "run #{id} on {repo}", { id: runId, repo });
 	} else {
 		const sha = str(watch.headSha);
-		const target = sha ? shortSha(sha) : "this commit";
-		header = watching ? `watching ${target} on ${repo}` : `workflow runs for ${target} on ${repo}`;
+		const target = sha ? shortSha(sha) : t("guesttools.github.this_commit", "this commit");
+		header = watching
+			? t("guesttools.github.watching_commit", "watching {target} on {repo}", { target, repo })
+			: t("guesttools.github.runs_for_commit", "workflow runs for {target} on {repo}", { target, repo });
 	}
 	const note = str(watch.note);
 	const runs: Record<string, unknown>[] = [];
@@ -201,22 +227,24 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 		<>
 			<div className="tv-muted">{header}</div>
 			{note && <div className="tv-faint">{note}</div>}
-			{runs.length === 0 && <div className="tv-faint">waiting for workflow runs…</div>}
+			{runs.length === 0 && (
+				<div className="tv-faint">{t("guesttools.github.waiting_runs", "waiting for workflow runs…")}</div>
+			)}
 			{runs.map((item, index) => (
 				<RunBlock run={item} key={num(item.id) ?? index} />
 			))}
 			{failedLogs.map((entry, index) => {
 				if (!isRecord(entry)) return null;
-				const jobName = str(entry.jobName) ?? "job";
+				const jobName = str(entry.jobName) ?? t("guesttools.label.job", "job");
 				const workflow = str(entry.workflowName);
 				const failedRunId = num(entry.runId);
-				const context = workflow ?? "run";
+				const context = workflow ?? t("guesttools.label.run", "run");
 				const title = `${jobName} — ${context}${failedRunId !== null ? ` #${failedRunId}` : ""}`;
 				const tail = str(entry.tail);
 				if (!tail || entry.available === false) {
 					return (
 						<Note tone="warn" key={index}>
-							{title}: log tail unavailable
+							{t("guesttools.github.log_unavailable", "{title}: log tail unavailable", { title })}
 						</Note>
 					);
 				}
@@ -227,6 +255,7 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 }
 
 function CheckoutRows({ checkouts }: { checkouts: readonly unknown[] }): ReactNode {
+	const t = useTranslation();
 	return (
 		<div className="tv-list">
 			{checkouts.map((entry, index) => {
@@ -237,7 +266,7 @@ function CheckoutRows({ checkouts }: { checkouts: readonly unknown[] }): ReactNo
 					<Row k={prNumber !== null ? `#${prNumber}` : "PR"} key={prNumber ?? index}>
 						<span>{str(entry.branch) ?? ""}</span>
 						{worktree && <span className="tv-muted"> {shortenPath(worktree)}</span>}
-						{entry.reused === true && <Badge>reused</Badge>}
+						{entry.reused === true && <Badge>{t("guesttools.github.reused", "reused")}</Badge>}
 					</Row>
 				);
 			})}
@@ -246,31 +275,32 @@ function CheckoutRows({ checkouts }: { checkouts: readonly unknown[] }): ReactNo
 }
 
 const DETAIL_KEYS = [
-	"repo",
-	"branch",
-	"worktreePath",
-	"remote",
-	"remoteBranch",
-	"headSha",
-	"runId",
-	"status",
-	"conclusion",
-];
+	["repo", "guesttools.github.repo"],
+	["branch", "guesttools.github.branch"],
+	["worktreePath", "guesttools.github.worktreePath"],
+	["remote", "guesttools.github.remote"],
+	["remoteBranch", "guesttools.github.remoteBranch"],
+	["headSha", "guesttools.github.headSha"],
+	["runId", "guesttools.github.runId"],
+	["status", "guesttools.github.status"],
+	["conclusion", "guesttools.github.conclusion"],
+] as const;
 
 function DetailsGrid({ details }: { details: Record<string, unknown> }): ReactNode {
+	const t = useTranslation();
 	const rows: ReactNode[] = [];
-	for (const key of DETAIL_KEYS) {
+	for (const [key, messageKey] of DETAIL_KEYS) {
 		const value = details[key];
 		if (typeof value === "number") {
 			rows.push(
-				<Kv k={key} key={key}>
+				<Kv k={t(messageKey, key)} key={key}>
 					{String(value)}
 				</Kv>,
 			);
 		} else if (typeof value === "string" && value) {
 			const text = key === "worktreePath" ? shortenPath(value) : key === "headSha" ? shortSha(value) : value;
 			rows.push(
-				<Kv k={key} key={key}>
+				<Kv k={t(messageKey, key)} key={key}>
 					{text}
 				</Kv>,
 			);
@@ -283,7 +313,7 @@ function DetailsGrid({ details }: { details: Record<string, unknown> }): ReactNo
 		}
 		if (ids.length > 0) {
 			rows.push(
-				<Kv k="runs" key="runs">
+				<Kv k={t("guesttools.label.runs", "runs")} key="runs">
 					{ids.join(", ")}
 				</Kv>,
 			);
@@ -296,7 +326,7 @@ function DetailsGrid({ details }: { details: Record<string, unknown> }): ReactNo
 		}
 		if (jobs.length > 0) {
 			rows.push(
-				<Kv k="failedJobs" key="failedJobs">
+				<Kv k={t("guesttools.label.failed_jobs", "failedJobs")} key="failedJobs">
 					<span className="tv-err-text">{jobs.join(", ")}</span>
 				</Kv>,
 			);
@@ -306,6 +336,7 @@ function DetailsGrid({ details }: { details: Record<string, unknown> }): ReactNo
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const watch = details && isRecord(details.watch) ? details.watch : null;
 	const checkouts = details && Array.isArray(details.checkouts) ? details.checkouts : null;
@@ -313,7 +344,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<ArgsGrid args={args} />
-			{bodyText && <Output text={bodyText} maxLines={8} title="body" />}
+			{bodyText && <Output text={bodyText} maxLines={8} title={t("guesttools.label.body", "body")} />}
 			{watch && <WatchView watch={watch} />}
 			{checkouts && checkouts.length > 0 && <CheckoutRows checkouts={checkouts} />}
 			{details && !watch && <DetailsGrid details={details} />}

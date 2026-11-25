@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { Input } from "../components/input";
 import { SelectList, type SelectItem } from "../components/select-list";
@@ -12,8 +13,6 @@ import { truncateToWidth } from "../utils";
 import type { HubModelVariant, HubModelVariantDraft, HubModelVariantField, ModelRoleSelectionScope } from "./model-hub";
 
 export const MODEL_VARIANTS_FEATURE = "model-variants";
-const TITLE = "Model Variants";
-const DESCRIPTION = "Save a named version of a model. Fields set to Inherit follow the base model.";
 
 interface VariantHost {
 	scope(): ModelRoleSelectionScope | undefined;
@@ -46,10 +45,10 @@ const variantId = (id: string) => `variant:${id}`;
 const selectorFor = (model: Model) => `${model.provider}/${model.id}`;
 
 function numberError(field: Extract<HubModelVariantField, { kind: "number" | "number-list" }>, value: unknown) {
-	if (typeof value !== "number" || !Number.isFinite(value)) return "Enter a finite number.";
-	if (field.integer && !Number.isSafeInteger(value)) return "Enter a whole number within the safe integer range.";
-	if (field.min !== undefined && value < field.min) return `Use a value of at least ${field.min}.`;
-	if (field.max !== undefined && value > field.max) return `Use a value of at most ${field.max}.`;
+	if (typeof value !== "number" || !Number.isFinite(value)) return t("overlaysModel.variants.error.finite");
+	if (field.integer && !Number.isSafeInteger(value)) return t("overlaysModel.variants.error.integer");
+	if (field.min !== undefined && value < field.min) return t("overlaysModel.variants.error.min", { min: field.min });
+	if (field.max !== undefined && value > field.max) return t("overlaysModel.variants.error.max", { max: field.max });
 }
 
 function validationError(field: HubModelVariantField, value: unknown): string | undefined {
@@ -57,18 +56,24 @@ function validationError(field: HubModelVariantField, value: unknown): string | 
 		const error = numberError(field, value);
 		if (error) return error;
 	} else if (field.kind === "number-list") {
-		if (!Array.isArray(value)) return "Enter a JSON array of numbers.";
+		if (!Array.isArray(value)) return t("overlaysModel.variants.error.numberList");
 		for (const item of value) {
 			const error = numberError(field, item);
 			if (error) return error;
 		}
 	} else if (field.kind === "string-list") {
 		if (!Array.isArray(value) || !value.every(item => typeof item === "string")) {
-			return "Enter a JSON array of strings.";
+			return t("overlaysModel.variants.error.stringList");
 		}
 	} else if (field.kind === "choice") {
-		if (typeof value !== "string" || !field.choices.includes(value)) return "Choose a listed value.";
-	} else if (typeof value !== field.kind) return `Enter a ${field.kind} value.`;
+		if (typeof value !== "string" || !field.choices.includes(value)) return t("overlaysModel.variants.error.choice");
+	} else if (typeof value !== field.kind)
+		return t("overlaysModel.variants.error.kind", {
+			kind:
+				field.kind === "boolean"
+					? t("overlaysModel.variants.kind.boolean")
+					: t("overlaysModel.variants.kind.string"),
+		});
 	return field.validate?.(value);
 }
 
@@ -78,7 +83,11 @@ function decodedInput(field: HubModelVariantField, value: string): unknown {
 		try {
 			return JSON.parse(value);
 		} catch {
-			throw new Error(`Enter a JSON array of ${field.kind === "number-list" ? "numbers" : "strings"}.`);
+			throw new Error(
+				field.kind === "number-list"
+					? t("overlaysModel.variants.error.numberList")
+					: t("overlaysModel.variants.error.stringList"),
+			);
 		}
 	}
 	return value;
@@ -91,6 +100,7 @@ function displayedOverride(value: unknown): string {
 /** The Model Variants editor owns only draft/UI state; the hub source owns persistence and IDs. */
 export class ModelVariantsPanel {
 	#list = new SelectList([], 12, getSelectListTheme(), { search: "always", activateOnSpace: false });
+	#labelsLocale = getLocale();
 	#view: View = { kind: "list" };
 	#draft?: VariantDraft;
 	#entries: readonly HubModelVariant[] = [];
@@ -114,20 +124,20 @@ export class ModelVariantsPanel {
 	}
 
 	get hint(): string {
-		if (this.#pending) return "Saving…";
+		if (this.#pending) return t("overlaysModel.variants.saving");
 		switch (this.#view.kind) {
 			case "list":
-				return "Enter edit/create · x delete · / search · Esc sidebar · Tab pane";
+				return t("overlaysModel.variants.hint.list");
 			case "editor":
-				return "Enter edit · x inherit · s save · Esc discard · Tab pane";
+				return t("overlaysModel.variants.hint.editor");
 			case "base":
-				return "Enter choose base · / search · Esc back";
+				return t("overlaysModel.variants.hint.base");
 			case "choice":
-				return "Enter choose value · Esc back";
+				return t("overlaysModel.variants.hint.choice");
 			case "text":
-				return "Enter apply · Esc cancel";
+				return t("overlaysModel.variants.hint.text");
 			case "delete":
-				return "Enter confirm · Esc keep variant";
+				return t("overlaysModel.variants.hint.delete");
 		}
 	}
 
@@ -155,6 +165,7 @@ export class ModelVariantsPanel {
 	}
 
 	#rebuild(): void {
+		this.#labelsLocale = getLocale();
 		const view = this.#view;
 		const draft = this.#draft;
 		let items: SelectItem[];
@@ -165,27 +176,31 @@ export class ModelVariantsPanel {
 					label: sanitizeDisplayWarning(entry.name),
 					description: sanitizeDisplayWarning(entry.baseModel),
 				}));
-				items.push({ value: "new", label: "+ New variant" });
+				items.push({ value: "new", label: t("overlaysModel.variants.add") });
 				break;
 			case "editor":
 				if (!draft) return;
 				items = [
-					{ value: "name", label: "Name", description: sanitizeDisplayWarning(draft.name) || "Required" },
+					{
+						value: "name",
+						label: t("overlaysModel.variants.name"),
+						description: sanitizeDisplayWarning(draft.name) || t("overlaysModel.variants.required"),
+					},
 					{
 						value: "base",
-						label: "Base model ▾",
-						description: sanitizeDisplayWarning(draft.baseModel) || "Required",
+						label: t("overlaysModel.variants.base"),
+						description: sanitizeDisplayWarning(draft.baseModel) || t("overlaysModel.variants.required"),
 					},
 					...this.host.fields().map(field => ({
 						value: fieldId(field),
 						label: field.label,
 						description: Object.hasOwn(draft.overrides, field.key)
 							? displayedOverride(draft.overrides[field.key])
-							: "Inherit",
+							: t("overlaysModel.variants.inherit"),
 					})),
-					{ value: "save", label: "Save variant" },
+					{ value: "save", label: t("overlaysModel.variants.save") },
 				];
-				if (draft.id !== undefined) items.push({ value: "delete", label: "Delete variant…" });
+				if (draft.id !== undefined) items.push({ value: "delete", label: t("overlaysModel.variants.delete") });
 				break;
 			case "base": {
 				const models = new Map<string, SelectItem>();
@@ -203,22 +218,22 @@ export class ModelVariantsPanel {
 			}
 			case "choice":
 				items = [
-					{ value: "inherit", label: "Inherit" },
+					{ value: "inherit", label: t("overlaysModel.variants.inherit") },
 					...view.choices.map((choice, index) => ({ value: `choice:${index}`, label: String(choice) })),
 				];
 				break;
 			case "text":
-				items = [{ value: "apply", label: "Apply value" }];
-				if (view.field) items.push({ value: "inherit", label: "Inherit" });
-				items.push({ value: "cancel", label: "Cancel" });
+				items = [{ value: "apply", label: t("overlaysModel.variants.apply") }];
+				if (view.field) items.push({ value: "inherit", label: t("overlaysModel.variants.inherit") });
+				items.push({ value: "cancel", label: t("overlaysModel.variants.cancel") });
 				break;
 			case "delete":
 				items = [
-					{ value: "keep", label: "Keep variant" },
+					{ value: "keep", label: t("overlaysModel.variants.keep") },
 					{
 						value: "confirm-delete",
-						label: `Delete ${sanitizeDisplayWarning(view.variant.name)}`,
-						confirmation: "Enter again to delete this variant",
+						label: t("overlaysModel.variants.deleteNamed", { name: sanitizeDisplayWarning(view.variant.name) }),
+						confirmation: t("overlaysModel.variants.confirmDelete"),
 					},
 				];
 				break;
@@ -344,7 +359,7 @@ export class ModelVariantsPanel {
 						if (view.field) this.#setOverride(view.field, decodedInput(view.field, inputValue));
 						else {
 							const name = inputValue.trim();
-							if (!name) throw new Error("Enter a variant name.");
+							if (!name) throw new Error(t("overlaysModel.variants.error.name"));
 							draft.name = name;
 							this.#back();
 						}
@@ -367,11 +382,11 @@ export class ModelVariantsPanel {
 	#save(draft: VariantDraft): void {
 		if (!draft.name) {
 			this.#list.setSelectedValue("name");
-			throw new Error("Enter a variant name.");
+			throw new Error(t("overlaysModel.variants.error.name"));
 		}
 		if (!this.host.models().some(model => !model.variant && selectorFor(model) === draft.baseModel)) {
 			this.#list.setSelectedValue("base");
-			throw new Error("Choose an ordinary model as the base.");
+			throw new Error(t("overlaysModel.variants.error.base"));
 		}
 		for (const field of this.host.fields()) {
 			if (!Object.hasOwn(draft.overrides, field.key)) continue;
@@ -438,25 +453,29 @@ export class ModelVariantsPanel {
 		const view = this.#view;
 		switch (view.kind) {
 			case "list":
-				return DESCRIPTION;
+				return t("overlaysModel.variants.description");
 			case "editor":
-				return this.#draft?.id === undefined ? "New variant" : `Edit ${sanitizeDisplayWarning(this.#draft.name)}`;
+				return this.#draft?.id === undefined
+					? t("overlaysModel.variants.new")
+					: t("overlaysModel.variants.editNamed", { name: sanitizeDisplayWarning(this.#draft.name) });
 			case "base":
-				return "Choose a base model";
+				return t("overlaysModel.variants.chooseBase");
 			case "choice":
 				return view.field.label;
 			case "text":
 				if (view.field?.kind === "number-list" || view.field?.kind === "string-list") {
-					return `${view.field.label} · JSON array`;
+					return t("overlaysModel.variants.jsonField", { field: view.field.label });
 				}
-				return view.field?.label ?? "Variant name";
+				return view.field?.label ?? t("overlaysModel.variants.variantName");
 			case "delete":
-				return "Delete variant?";
+				return t("overlaysModel.variants.deleteQuestion");
 		}
 	}
 
 	render(width: number, rows: number): string[] {
-		const title = theme.bold(TITLE) + uiProvenanceSuffix("features", MODEL_VARIANTS_FEATURE, true);
+		if (this.#labelsLocale !== getLocale()) this.#rebuild();
+		const title =
+			theme.bold(t("overlaysModel.variants.title")) + uiProvenanceSuffix("features", MODEL_VARIANTS_FEATURE, true);
 		const heading = Bun.wrapAnsi(this.#heading(), width).split("\n");
 		const lines = [truncateToWidth(title, width), ...heading.map(line => truncateToWidth(line, width))];
 		if (this.#error) lines.push(truncateToWidth(theme.fg("error", this.#error), width));
@@ -467,12 +486,13 @@ export class ModelVariantsPanel {
 	}
 
 	describe(): NativeNode {
+		if (this.#labelsLocale !== getLocale()) this.#rebuild();
 		return node(
 			"col",
 			{ gap: "sm", grow: 1 },
 			[
 				text([
-					span(TITLE),
+					span(t("overlaysModel.variants.title")),
 					span(
 						uiProvenanceSuffix("features", MODEL_VARIANTS_FEATURE),
 						provenanceColor(uiProvenance("features", MODEL_VARIANTS_FEATURE)),

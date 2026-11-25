@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { CONTEXT_PRESENTATION } from "../chrome/context-presentation";
 import type { ContextViewCategory, ContextViewData, ContextViewEntry } from "../chrome/context-view-model";
@@ -153,15 +154,15 @@ export class ContextViewer implements Component {
 		this.#requestRender = options.requestRender;
 		this.#getRows = options.getRows;
 		const { breakdown } = data;
-		this.#modelLabel = safeText(breakdown.model?.name ?? breakdown.model?.id ?? "no model");
+		this.#modelLabel = safeText(
+			breakdown.model?.name ?? breakdown.model?.id ?? t("overlays.context_viewer.no_model"),
+		);
 		const window = breakdown.contextWindow;
 		const allocation = allocateUsage(data.categories, breakdown.usedTokens);
 		this.#drawableAllocation = window > 0 && Number.isFinite(window) ? allocation : undefined;
 		this.#overviewNotes = [
 			...(data.notices ?? []),
-			...(allocation
-				? ["Category totals split Used by estimated share; the entries inside may not add up to them."]
-				: []),
+			...(allocation ? [t("overlays.context_viewer.category_allocation_note")] : []),
 			...contextSnapcompactLines(breakdown),
 		];
 		const drawable = this.#drawableAllocation;
@@ -214,7 +215,7 @@ export class ContextViewer implements Component {
 					size: "lg",
 					anchor: "center",
 					head: [
-						span("Context", "strong"),
+						span(t("settings.tab.context.label"), "strong"),
 						span(` · ${category ? safeText(category.label) : this.#modelLabel}`, "muted"),
 					],
 				},
@@ -364,7 +365,10 @@ export class ContextViewer implements Component {
 	#summary(): string[] {
 		if (this.#state !== "overview") return [];
 		const labels = contextUsageSummary(this.#data.breakdown);
-		return [`Used ${labels.used}${labels.detail}`, labels.room];
+		return [
+			t("overlays.context_viewer.used_tokens", { used: `${labels.used}`, detail: `${labels.detail}` }),
+			labels.room,
+		];
 	}
 
 	/** Both backends wrap previews to `width` with the same row and source bounds. */
@@ -399,7 +403,9 @@ export class ContextViewer implements Component {
 		const terminalRows = Math.max(1, this.#getRows());
 		const summary = this.#layout();
 		this.#panel.title =
-			this.#state === "overview" ? `Context · ${this.#modelLabel}` : safeText(this.#category!.label);
+			this.#state === "overview"
+				? t("overlays.context_viewer.context_model_title", { modelLabel: `${this.#modelLabel}` })
+				: safeText(this.#category!.label);
 		this.#header.setHeight(summary.length);
 		this.#header.setLines(summary.map(line => truncateToWidth(theme.fg("dim", line), this.#bodyWidth)));
 		this.#body.setLines(
@@ -426,16 +432,22 @@ export class ContextViewer implements Component {
 				: this.#state === "category" && !!this.#entrySelection.selectedItem;
 		const confirm = canOpen ? editorKey("tui.select.confirm") : "";
 		const cancel = editorKey("tui.select.cancel");
-		const movement = this.#state === "overview" ? "select/scroll" : this.#state === "category" ? "select" : "scroll";
+		const movement =
+			this.#state === "overview"
+				? "select/scroll"
+				: this.#state === "category"
+					? t("tui.ask.hint.select")
+					: "scroll";
 		const paging =
 			this.#state === "entry"
 				? [editorKey("tui.select.pageUp"), editorKey("tui.select.pageDown")].filter(Boolean).join("/")
 				: "";
 		return [
 			navigation && `${navigation} ${movement}`,
-			paging && `${paging} page`,
-			confirm && `${confirm} open`,
-			cancel && `${cancel} ${this.#state === "overview" ? "close" : "back"}`,
+			paging && t("overlays.context_viewer.page_hint", { paging: `${paging}` }),
+			confirm && t("overlays.context_viewer.open_hint", { confirm: `${confirm}` }),
+			cancel &&
+				`${cancel} ${this.#state === "overview" ? t("settings.selector.close") : t("overlays.context_viewer.back_hint")}`,
 		]
 			.filter(Boolean)
 			.join(" · ");
@@ -573,8 +585,8 @@ export class ContextViewer implements Component {
 		children.push(
 			actionBar([
 				null,
-				...(this.#state !== "overview" ? [actionButton("Back", "back")] : []),
-				actionButton("Close", "close"),
+				...(this.#state !== "overview" ? [actionButton(t("overlays.context_viewer.back_button"), "back")] : []),
+				actionButton(t("tui.picker.close"), "close"),
 			]),
 		);
 		return col(children, {

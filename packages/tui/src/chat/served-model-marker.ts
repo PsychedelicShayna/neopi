@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { classifyModel } from "@oh-my-pi/pi-catalog/identity";
 import { MessageDividerComponent } from "../chrome/message-divider";
@@ -81,7 +82,14 @@ export class ServedModelMarkerComponent extends MessageDividerComponent {
 			label: () => {
 				const dot = theme.sep.dot.trim();
 				const via = info.upstreamProvider ? `${info.provider}/${info.upstreamProvider}` : info.provider;
-				return `${theme.status.warning} served ${info.served} ${dot} requested ${info.requested} ${dot} via ${via}`;
+				return t("overlays.served_model_marker.served_model_status", {
+					warning: `${theme.status.warning}`,
+					served: `${info.served}`,
+					dot: `${dot}`,
+					requested: `${info.requested}`,
+					dot2: `${dot}`,
+					via: `${via}`,
+				});
 			},
 			labelColor: "warning",
 			ruleColor: "dim",
@@ -91,7 +99,11 @@ export class ServedModelMarkerComponent extends MessageDividerComponent {
 				icon: "warn",
 				label: () => {
 					const via = info.upstreamProvider ? `${info.provider}/${info.upstreamProvider}` : info.provider;
-					return `Served ${info.served} · requested ${info.requested} · via ${via}`;
+					return t("overlays.served_model_marker.served_model", {
+						served: `${info.served}`,
+						requested: `${info.requested}`,
+						via: `${via}`,
+					});
 				},
 			},
 		});

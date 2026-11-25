@@ -1,5 +1,6 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { runBenchCommand } from "../cli/bench-cli";
 import { benchHelp as commandHelp } from "../cli/command-help";
 import { SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
@@ -57,17 +58,19 @@ export default class Bench extends Command {
 		}),
 	};
 
-	static examples = [
-		`# Compare TTFT and tok/s of two models\n  ${APP_NAME} bench anthropic/claude-opus-4-5 openai/gpt-5.2`,
-		`# Fuzzy selectors work\n  ${APP_NAME} bench opus sonnet`,
-		`# Average over 3 runs each\n  ${APP_NAME} bench opus gpt-5.2 --runs 3`,
-		`# Rotate chat, prefill, and generation challenges in one run\n  ${APP_NAME} bench opus sonnet --profile mix`,
-		`# Isolate prompt-ingestion speed with a 64 KiB cache-busted input\n  ${APP_NAME} bench opus sonnet --profile prefill --prefill-bytes 65536`,
-		`# Isolate sustained decode throughput\n  ${APP_NAME} bench opus sonnet --profile generation`,
-		`# Compare single-user vs 8 concurrent users, plus prefill speed\n  ${APP_NAME} bench apple --detailed --par 8`,
-		`# Force priority serving tier\n  ${APP_NAME} bench openai-codex/gpt-5.5:low --runs 10 --service-tier priority`,
-		`# Measure one cold/warm prompt-cache pair\n  ${APP_NAME} bench openai/gpt-5.6 --cache --json`,
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.bench.example.compare")}\n  ${APP_NAME} bench anthropic/claude-opus-4-5 openai/gpt-5.2`,
+			`# ${t("cli.commands.bench.example.fuzzy")}\n  ${APP_NAME} bench opus sonnet`,
+			`# ${t("cli.commands.bench.example.runs")}\n  ${APP_NAME} bench opus gpt-5.2 --runs 3`,
+			`# ${t("cli.commands.bench.example.mix")}\n  ${APP_NAME} bench opus sonnet --profile mix`,
+			`# ${t("cli.commands.bench.example.prefill")}\n  ${APP_NAME} bench opus sonnet --profile prefill --prefill-bytes 65536`,
+			`# ${t("cli.commands.bench.example.generation")}\n  ${APP_NAME} bench opus sonnet --profile generation`,
+			`# ${t("cli.commands.bench.example.parallel")}\n  ${APP_NAME} bench apple --detailed --par 8`,
+			`# ${t("cli.commands.bench.example.priority")}\n  ${APP_NAME} bench openai-codex/gpt-5.5:low --runs 10 --service-tier priority`,
+			`# ${t("cli.commands.bench.example.cache")}\n  ${APP_NAME} bench openai/gpt-5.6 --cache --json`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Bench);

@@ -1,3 +1,4 @@
+import { useTranslation } from "../../lib/i18n";
 import type { AssistantMessage, ImageContent, SessionEntry, TextContent, ToolResultMessage } from "@oh-my-pi/pi-wire";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
@@ -65,20 +66,26 @@ function Row({
 }
 
 function ThinkingBlock({ text, redacted }: { text: string; redacted?: boolean }): ReactNode {
+	const tr = useTranslation();
 	const [open, setOpen] = useState(false);
 	return (
 		<div className="tr-think">
 			<button type="button" className="tr-think-head" onClick={() => setOpen(v => !v)}>
 				<ChevronRight size={11} className={`tr-chev${open ? " tr-chev--open" : ""}`} />
-				thinking{redacted ? " · redacted" : ""}
+				{redacted
+					? tr("transcript.redacted_thinking", "thinking · redacted")
+					: tr("transcript.thinking", "thinking")}
 			</button>
-			{open && <div className="tr-think-body">{redacted ? "(redacted by provider)" : text}</div>}
+			{open && (
+				<div className="tr-think-body">{redacted ? tr("transcript.redacted", "(redacted by provider)") : text}</div>
+			)}
 		</div>
 	);
 }
 
 /** Markdown + image thumbnails for user / custom message content. */
 function MsgContent({ content }: { content: string | readonly (TextContent | ImageContent)[] }): ReactNode {
+	const tr = useTranslation();
 	if (typeof content === "string") return <Markdown text={content} />;
 	return (
 		<>
@@ -92,7 +99,7 @@ function MsgContent({ content }: { content: string | readonly (TextContent | Ima
 								key={i}
 								className="tr-msg-img"
 								src={`data:${block.mimeType};base64,${block.data}`}
-								alt="attachment"
+								alt={tr("viewer.transcript.attachment", "attachment")}
 							/>
 						);
 					default:
@@ -117,6 +124,7 @@ function AssistantBody({
 	pending: boolean;
 	host?: ToolRenderHost;
 }): ReactNode {
+	const tr = useTranslation();
 	const blocks = message.content.map((block, i) => {
 		switch (block.type) {
 			case "thinking":
@@ -154,7 +162,9 @@ function AssistantBody({
 			{blocks}
 			{failed && (
 				<div className="tr-stop">
-					<span className={`tr-chip ${stop === "error" ? "tr-chip--err" : "tr-chip--warn"}`}>{stop}</span>
+					<span className={`tr-chip ${stop === "error" ? "tr-chip--err" : "tr-chip--warn"}`}>
+						{tr(`viewer.reply_stop.${stop}`, stop)}
+					</span>
 					{message.errorMessage !== undefined && message.errorMessage.length > 0 && (
 						<span className="tr-stop-msg">{message.errorMessage}</span>
 					)}
@@ -185,19 +195,20 @@ function entryRowEqual(prev: EntryRowProps, next: EntryRowProps): boolean {
 }
 
 const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryRowProps): ReactNode {
+	const tr = useTranslation();
 	switch (entry.type) {
 		case "message": {
 			const msg = entry.message;
 			switch (msg.role) {
 				case "user":
 					return (
-						<Row kind="user" gutter="host" title={entry.timestamp}>
+						<Row kind="user" gutter={tr("transcript.host", "host")} title={entry.timestamp}>
 							<MsgContent content={msg.content} />
 						</Row>
 					);
 				case "assistant":
 					return (
-						<Row kind="assistant" gutter="agent" title={entry.timestamp}>
+						<Row kind="assistant" gutter={tr("transcript.agent", "agent")} title={entry.timestamp}>
 							<AssistantBody message={msg} results={results} active={active} pending={false} host={host} />
 						</Row>
 					);
@@ -234,25 +245,37 @@ const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryR
 		case "compaction":
 			return (
 				<div className="tr-divider" title={entry.shortSummary ?? entry.summary}>
-					<span>context compacted · {fmtTokens(entry.tokensBefore)} tokens</span>
+					<span>
+						{tr("transcript.compacted", "context compacted · {tokens} tokens").replace(
+							"{tokens}",
+							fmtTokens(entry.tokensBefore),
+						)}
+					</span>
 				</div>
 			);
 		case "branch_summary":
 			return (
 				<div className="tr-divider" title={entry.summary}>
-					<span>branch summary</span>
+					<span>{tr("transcript.branch_summary", "branch summary")}</span>
 				</div>
 			);
 		case "model_change":
 			return (
 				<Row kind="marker" gutter="" title={entry.timestamp}>
-					<span className="tr-marker">model → {entry.model}</span>
+					<span className="tr-marker">
+						{tr("transcript.model_changed", "model → {model}").replace("{model}", entry.model)}
+					</span>
 				</Row>
 			);
 		case "thinking_level_change":
 			return (
 				<Row kind="marker" gutter="" title={entry.timestamp}>
-					<span className="tr-marker">thinking → {entry.thinkingLevel ?? "off"}</span>
+					<span className="tr-marker">
+						{tr("transcript.thinking_changed", "thinking → {level}").replace(
+							"{level}",
+							entry.thinkingLevel ?? tr("transcript.thinking_off", "off"),
+						)}
+					</span>
 				</Row>
 			);
 		default:
@@ -271,6 +294,7 @@ const WINDOW = 100;
 const EARLIER_TRIGGER_PX = 200;
 
 export function Transcript(props: TranscriptProps): ReactNode {
+	const tr = useTranslation();
 	const { entries, stream, streamDone, activeTools, working, compact, host, phase } = props;
 
 	// null follows the tail. A number pins the first mounted entry while the
@@ -385,11 +409,11 @@ export function Transcript(props: TranscriptProps): ReactNode {
 			}}
 		>
 			{settled && entries.length === 0 && stream === null && !working && (
-				<div className="tr-empty">no activity yet</div>
+				<div className="tr-empty">{tr("transcript.no_activity", "no activity yet")}</div>
 			)}
 			{start > 0 && (
 				<button type="button" className="tr-earlier" onClick={showEarlier}>
-					show {start.toLocaleString("en-US")} earlier
+					{tr("transcript.show_earlier", "show {count} earlier").replace("{count}", start.toLocaleString("en-US"))}
 				</button>
 			)}
 			{visible.map(entry => (
@@ -423,8 +447,8 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				</Row>
 			)}
 			{working && stream === null && activeTools.size === 0 && (
-				<Row kind="assistant" gutter="agent">
-					<div className="tr-shimmer">thinking…</div>
+				<Row kind="assistant" gutter={tr("transcript.agent", "agent")}>
+					<div className="tr-shimmer">{tr("transcript.thinking_now", "thinking…")}</div>
 				</Row>
 			)}
 		</div>

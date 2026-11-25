@@ -1,5 +1,5 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
-import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
+import { getLocale, t, type Locale, t as translate } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatDoubleTap, formatKeyHint, formatKeyHints, type KeyName } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
@@ -21,8 +21,7 @@ import { renderClassicWelcome } from "./classic-welcome";
  *  is live, since a live one means the user is already in Tern. */
 const NO_TERN_TIP_MARKER = /^\[NO-TERN\]\s*/;
 
-/** tips.txt lines embedded at build time; blanks dropped. Key placeholders
- *  (see {@link expandTipKeys}) stay raw until render time. */
+/** Message keys in display order. Tip and keybinding copy is resolved only when rendered. */
 const TIP_LINES: readonly string[] = tipsText
 	.split("\n")
 	.map(line => line.trim())
@@ -40,7 +39,6 @@ const TSP_TIPS: readonly string[] = TIP_LINES.filter(line => !NO_TERN_TIP_MARKER
 const NEW_TIP_MARKER = /\s*\[NEW\]\s*$/;
 
 /** Visible text rendered in place of {@link NEW_TIP_MARKER}. */
-const NEW_TAG_TEXT = "NEW!";
 
 /** Milliseconds for one full hue rotation of the rainbow "NEW!" tag. */
 const NEW_GLOW_PERIOD_MS = 1500;
@@ -73,7 +71,7 @@ function renderNewTag(phase: number, encoding: ColorEncoding): string {
 	const bold = "\x1b[1m";
 	const reset = "\x1b[0m";
 	const wrapped = ((phase % 1) + 1) % 1;
-	const chars = [...NEW_TAG_TEXT];
+	const chars = [...translate("overlays.welcome.new_tag")];
 	let out = bold;
 	let prev = "";
 	for (let i = 0; i < chars.length; i++) {
@@ -179,7 +177,7 @@ export function renderWelcomeTip(tip: string, width: number, phase = 0): string[
 		// a line of its own so the styled glyphs never overflow the width.
 		const encoding: ColorEncoding = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
 		const tag = renderNewTag(phase, encoding);
-		const tagWidth = 1 + visibleWidth(NEW_TAG_TEXT); // 1 = space separator
+		const tagWidth = 1 + visibleWidth(translate("overlays.welcome.new_tag")); // 1 = space separator
 		const lastLine = lines[lines.length - 1];
 		if (lastLine !== undefined && visibleWidth(lastLine) + tagWidth <= width) {
 			lines[lines.length - 1] = `${lastLine} ${tag}`;
@@ -237,9 +235,13 @@ export class WelcomeComponent implements Component {
 		this.#nagRoll ??= Math.random();
 		this.#tipRoll ??= Math.random();
 		if (theme.getSymbolPreset() === "unicode" && this.#nagRoll < 0.1) {
-			return "Please use nerdfont 😭.";
+			return translate("overlays.welcome.nerdfont_hint");
 		}
-		return pickWeightedTip(isNativeRendering() ? TSP_TIPS : TIPS, this.#tipRoll) || undefined;
+		const entry = pickWeightedTip(isNativeRendering() ? TSP_TIPS : TIPS, this.#tipRoll);
+		if (!entry) return undefined;
+		const key = entry.replace(NEW_TIP_MARKER, "");
+		const tip = t(`overlays.welcome_tip.${key}`);
+		return entry === key ? tip : `${tip} [NEW]`;
 	}
 
 	invalidate(): void {
@@ -279,8 +281,8 @@ export class WelcomeComponent implements Component {
 					),
 					art([span(t("tui.welcome.tips"), "strong")], "omp.welcome.heading"),
 					...[
-						"# for prompt actions",
-						"/ for commands",
+						translate("overlays.welcome.prompt_actions_hint"),
+						translate("overlays.welcome.commands_hint"),
 						`!${t("tui.welcome.bash_suffix")}`,
 						`$${t("tui.welcome.python_suffix")}`,
 					].map((shortcut, index) => art([span(shortcut, "muted")], `omp.welcome.shortcut.${index}`)),
@@ -311,7 +313,10 @@ export class WelcomeComponent implements Component {
 			node("icon", { name: "lightbulb", role: "omp.welcome.tip-icon" }),
 			text(tipText, { wrap: "word", role: "omp.welcome.tip-text" }),
 		];
-		if (isNew) tipRow.push(node("shimmer", { text: "New", role: "omp.welcome.new" }));
+		if (isNew)
+			tipRow.push(
+				node("shimmer", { text: translate("settings.option.startupBranding.new.label"), role: "omp.welcome.new" }),
+			);
 		body.push(node("row", { gap: "sm", align: "start", role: "omp.welcome.tip" }, tipRow, "tip"));
 	}
 
@@ -546,7 +551,7 @@ function versionUpdateLabels(update: VersionUpdate): string[] {
 	let compact = head;
 	if (update.phase === "updating") {
 		if (update.fraction === undefined) {
-			detail = theme.fg("muted", "updating…");
+			detail = theme.fg("muted", translate("overlays.welcome.updating"));
 		} else {
 			const percent = theme.fg("accent", updatePercent(update.fraction));
 			const bar = renderProgressBar(update.fraction, UPDATE_BAR_WIDTH, {
@@ -561,9 +566,15 @@ function versionUpdateLabels(update: VersionUpdate): string[] {
 			compact = `${head} ${percent}`;
 		}
 	} else if (update.phase === "ready") {
-		detail = theme.fg("success", `${theme.status.success} next launch`);
+		detail = theme.fg(
+			"success",
+			translate("overlays.welcome.next_launch_status", { success: `${theme.status.success}` }),
+		);
 	} else {
-		detail = theme.fg("warning", `${theme.status.warning} update failed`);
+		detail = theme.fg(
+			"warning",
+			translate("overlays.welcome.update_failed_status", { warning: `${theme.status.warning}` }),
+		);
 	}
 	return [`${head} ${detail}`, compact];
 }
@@ -585,9 +596,9 @@ function appendVersionUpdate(lines: string[], update: VersionUpdate, termWidth: 
 function versionUpdateSpans(update: VersionUpdate): TspSpan[] {
 	const tone = updateTone(update);
 	const head = span(` → v${update.version}`, `${tone} mono`);
-	if (update.phase === "ready") return [head, span(" next launch", tone)];
-	if (update.phase === "failed") return [head, span(" update failed", tone)];
-	if (update.fraction === undefined) return [head, span(" updating…", "muted")];
+	if (update.phase === "ready") return [head, span(translate("overlays.welcome.next_launch_suffix"), tone)];
+	if (update.phase === "failed") return [head, span(translate("overlays.welcome.update_failed_suffix"), tone)];
+	if (update.fraction === undefined) return [head, span(translate("overlays.welcome.updating_suffix"), "muted")];
 	return [head, span(` ${updatePercent(update.fraction)}`, `${tone} mono`)];
 }
 

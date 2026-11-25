@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { NativeToolHead, NativeToolView, ToolRenderer, ToolRenderResult } from "./renderer";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { compact, md, node, row, span, text } from "../native/describe";
@@ -290,7 +291,9 @@ function renderAnswerOptionLines(
 
 	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
 	if (selected.size === 0 && customInput === undefined && !notes?.length) {
-		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
+		return [
+			` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", t("tools.ask.cancelled"))}`,
+		];
 	}
 
 	const out: string[] = [];
@@ -308,7 +311,7 @@ function renderAnswerOptionLines(
 	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
 	const otherNote = notes?.find(entry => entry.option === undefined);
 	if (otherNote) {
-		if (customInput === undefined) out.push(` ${uiTheme.fg("muted", "Other")}`);
+		if (customInput === undefined) out.push(` ${uiTheme.fg("muted", t("tools.ask.other"))}`);
 		out.push(...renderNoteLines(uiTheme, otherNote.note, width));
 	}
 	return out;
@@ -345,7 +348,7 @@ function describeAnswers(
 ): NativeChild[] {
 	const selected = new Set(selectedOptions ?? []);
 	if (selected.size === 0 && customInput === undefined && !notes?.length) {
-		return [text([span("Cancelled", "warning")], { tone: "warning" })];
+		return [text([span(t("tools.ask.cancelled"), "warning")], { tone: "warning" })];
 	}
 	const labels = options && options.length > 0 ? options : (selectedOptions ?? []);
 	const rows = labels.map((label, index) => {
@@ -358,10 +361,13 @@ function describeAnswers(
 	return [
 		...rows,
 		...(notes ?? []).map(entry =>
-			text([span(`${plainText(entry.option ?? "Other")}: `, "dim"), span(plainText(entry.note), "muted")], {
-				wrap: "word",
-				role: "omp.tool.context",
-			}),
+			text(
+				[span(`${plainText(entry.option ?? t("tools.ask.other"))}: `, "dim"), span(plainText(entry.note), "muted")],
+				{
+					wrap: "word",
+					role: "omp.tool.context",
+				},
+			),
 		),
 	];
 }
@@ -374,7 +380,7 @@ function describeAskCall(args: AskRenderArgs): NativeToolView {
 	return {
 		tool: askHead(first, more),
 		inline: true,
-		body: [text([span("Waiting for your answer…", "muted")])],
+		body: [text([span(t("tools.ask.waiting"), "muted")])],
 	};
 }
 
@@ -391,7 +397,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 
 	if (details.chatRedirect) {
 		return {
-			tool: askHead(details.questions?.[0] ?? argQuestion, "chat redirect"),
+			tool: askHead(details.questions?.[0] ?? argQuestion, t("tools.ask.chat_redirect")),
 			tone: "info",
 			body: (details.questions ?? []).map(q => md(plainText(q))),
 		};
@@ -444,7 +450,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				details.notes,
 			),
 			details.timedOut
-				? text([span("auto-selected after timeout — not a user choice", "muted")], {
+				? text([span(t("tools.ask.auto_selected"), "muted")], {
 						wrap: "word",
 						role: "omp.tool.notice",
 					})
@@ -459,14 +465,14 @@ const askResultMemo = new OwnerMemo<NativeToolView | undefined>();
 /** Render question forms and their recorded answers. */
 export const askToolRenderer = {
 	describeCall(args: AskRenderArgs): NativeToolView | undefined {
-		return askCallMemo.get(args, [JSON.stringify(args)], () => describeAskCall(args));
+		return askCallMemo.get(args, [getLocale(), JSON.stringify(args)], () => describeAskCall(args));
 	},
 	describeResult(
 		result: ToolRenderResult<AskToolDetails>,
 		_options?: RenderResultOptions,
 		args?: AskRenderArgs,
 	): NativeToolView | undefined {
-		return askResultMemo.get(result, [], () => describeAskResult(result, args));
+		return askResultMemo.get(result, [getLocale()], () => describeAskResult(result, args));
 	},
 	mergeCallAndResult: true,
 	renderCall(args: AskRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
@@ -501,7 +507,7 @@ export const askToolRenderer = {
 
 		// Single question
 		if (typeof args.question !== "string" || !args.question) {
-			const errorLine = formatErrorMessage("No question provided", uiTheme);
+			const errorLine = formatErrorMessage(t("tools.ask.no_question"), uiTheme);
 			return framedToolCard(uiTheme, () => ({
 				header: errorLine,
 				sections: [],
@@ -554,7 +560,7 @@ export const askToolRenderer = {
 
 		// Chat redirect: user chose "Chat about this" instead of answering.
 		if (details.chatRedirect) {
-			const header = renderStatusLine({ icon: "info", title: "Ask", meta: ["chat redirect"] }, uiTheme);
+			const header = renderStatusLine({ icon: "info", title: "Ask", meta: [t("tools.ask.chat_redirect")] }, uiTheme);
 			const questions = details.questions ?? [];
 			return framedToolCard(uiTheme, ({ width }) => ({
 				header,
@@ -652,7 +658,7 @@ export const askToolRenderer = {
 			];
 			if (dTimedOut) {
 				// Distinguish auto-selection from a real user choice in the transcript.
-				bodyLines.push(uiTheme.fg("dim", "auto-selected after timeout — not a user choice"));
+				bodyLines.push(uiTheme.fg("dim", t("tools.ask.auto_selected")));
 			}
 			return {
 				header,

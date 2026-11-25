@@ -8,6 +8,17 @@ import tuiEn from "./i18n-catalogs/tui.en.toml" with { type: "text" };
 import tuiEs from "./i18n-catalogs/tui.es.toml" with { type: "text" };
 import cliEn from "./i18n-catalogs/cli.en.toml" with { type: "text" };
 import cliEs from "./i18n-catalogs/cli.es.toml" with { type: "text" };
+import cliCommandsEn from "./i18n-catalogs/cli-commands.en.toml" with { type: "text" };
+import cliCommandsEs from "./i18n-catalogs/cli-commands.es.toml" with { type: "text" };
+import commandsEn from "./i18n-catalogs/commands.en.toml" with { type: "text" };
+import commandsEs from "./i18n-catalogs/commands.es.toml" with { type: "text" };
+import moaStudioEs from "./i18n-catalogs/moa-studio.es.toml" with { type: "text" };
+import overlaysModelEn from "./i18n-catalogs/overlays-model.en.toml" with { type: "text" };
+import overlaysModelEs from "./i18n-catalogs/overlays-model.es.toml" with { type: "text" };
+import overlaysEn from "./i18n-catalogs/overlays.en.toml" with { type: "text" };
+import overlaysEs from "./i18n-catalogs/overlays.es.toml" with { type: "text" };
+import toolsEn from "./i18n-catalogs/tools.en.toml" with { type: "text" };
+import toolsEs from "./i18n-catalogs/tools.es.toml" with { type: "text" };
 
 export type TranslationValues = Readonly<Record<string, string | number>>;
 export type Catalog = Readonly<Record<string, string>>;
@@ -30,9 +41,34 @@ function loadCatalog(sources: readonly string[]): Catalog {
 	return catalog;
 }
 
-const english = loadCatalog([baseEn, settingsEn, statusEn, tuiEn, cliEn]);
+const english = loadCatalog([
+	baseEn,
+	settingsEn,
+	statusEn,
+	tuiEn,
+	cliEn,
+	cliCommandsEn,
+	commandsEn,
+	overlaysModelEn,
+	overlaysEn,
+	toolsEn,
+]);
 const spanish = Object.fromEntries(
-	Object.entries(loadCatalog([baseEs, settingsEs, statusEs, tuiEs, cliEs])).filter(([, value]) => value !== ""),
+	Object.entries(
+		loadCatalog([
+			baseEs,
+			settingsEs,
+			statusEs,
+			tuiEs,
+			cliEs,
+			cliCommandsEs,
+			commandsEs,
+			moaStudioEs,
+			overlaysModelEs,
+			overlaysEs,
+			toolsEs,
+		]),
+	).filter(([, value]) => value !== ""),
 );
 const localeRegistry = {
 	en: { name: "English", alternateName: "Inglés", catalog: english, overrides: english },

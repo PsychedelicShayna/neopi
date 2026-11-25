@@ -1,5 +1,6 @@
 /** `goal` — goal-mode lifecycle: set/check/complete/resume/drop an objective with an optional token budget. */
 import type { ReactNode } from "react";
+import { type Translation, useTranslation } from "../../lib/i18n";
 import type { Tone } from "../parts";
 import { Badge, InvalidArg, Kv, KvGrid, Note, Output, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -30,12 +31,12 @@ function goalOf(details: Record<string, unknown> | null): GoalView | null {
 }
 
 /** Mirrors the TUI's describeOp: "create" reads as "set", "get" as "check". */
-function describeOp(op: string | null): string {
+function describeOp(op: string | null, t: Translation): string {
 	switch (op) {
 		case "create":
-			return "set";
+			return t("guesttools.goal.set", "set");
 		case "get":
-			return "check";
+			return t("guesttools.goal.check", "check");
 		default:
 			return op ?? "?";
 	}
@@ -79,14 +80,19 @@ function fmtDuration(seconds: number): string {
 }
 
 /** "12K / 100K tokens (88K left)" or "12K tokens" without a budget. */
-function tokensLine(goal: GoalView): string {
+function tokensLine(goal: GoalView, t: Translation): string {
 	const used = fmtNum(goal.tokensUsed ?? 0);
-	if (goal.tokenBudget === null) return `${used} tokens`;
+	if (goal.tokenBudget === null) return t("guesttools.goal.tokens_count", "{count} tokens", { count: used });
 	const left = Math.max(0, goal.tokenBudget - (goal.tokensUsed ?? 0));
-	return `${used} / ${fmtNum(goal.tokenBudget)} tokens (${fmtNum(left)} left)`;
+	return t("guesttools.goal.tokens_budget", "{used} / {budget} tokens ({left} left)", {
+		used,
+		budget: fmtNum(goal.tokenBudget),
+		left: fmtNum(left),
+	});
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const goal = goalOf(details);
 	const op = str(details?.op) ?? str(args.op);
@@ -94,17 +100,22 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	const budget = num(args.token_budget);
 	return (
 		<>
-			{op === null && args.op !== undefined ? <InvalidArg what="op" /> : <span>{describeOp(op)}</span>}
+			{op === null && args.op !== undefined ? <InvalidArg what="op" /> : <span>{describeOp(op, t)}</span>}
 			{goal && <Badge tone={statusTone(goal.status)}>{goal.status}</Badge>}
 			{objective !== null && objective.trim() !== "" && (
 				<span className="tv-muted">“{truncate(normalizeWs(objective), 64)}”</span>
 			)}
-			{budget !== null && <span className="tv-faint">budget {fmtNum(budget)}</span>}
+			{budget !== null && (
+				<span className="tv-faint">
+					{t("guesttools.goal.budget", "budget {budget}", { budget: fmtNum(budget) })}
+				</span>
+			)}
 		</>
 	);
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const goal = goalOf(details);
 	const op = str(details?.op) ?? str(args.op);
@@ -115,24 +126,34 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				<Kv k="op">{describeOp(op)}</Kv>
+				<Kv k={t("guesttools.label.operation_short", "op")}>{describeOp(op, t)}</Kv>
 				{goal && (
-					<Kv k="status">
+					<Kv k={t("guesttools.label.status", "status")}>
 						<Badge tone={statusTone(goal.status)}>{goal.status}</Badge>
 					</Kv>
 				)}
-				{objective !== null && objective.trim() !== "" && <Kv k="objective">{objective.trim()}</Kv>}
+				{objective !== null && objective.trim() !== "" && (
+					<Kv k={t("guesttools.label.objective", "objective")}>{objective.trim()}</Kv>
+				)}
 				{hasTokens && goal ? (
-					<Kv k="tokens">{tokensLine(goal)}</Kv>
+					<Kv k="tokens">{tokensLine(goal, t)}</Kv>
 				) : (
-					budgetArg !== null && <Kv k="budget">{fmtNum(budgetArg)} tokens</Kv>
+					budgetArg !== null && (
+						<Kv k={t("guesttools.label.budget", "budget")}>
+							{t("guesttools.goal.tokens_count", "{count} tokens", { count: fmtNum(budgetArg) })}
+						</Kv>
+					)
 				)}
 				{goal !== null && goal.timeUsedSeconds !== null && goal.timeUsedSeconds > 0 && (
-					<Kv k="elapsed">{fmtDuration(goal.timeUsedSeconds)}</Kv>
+					<Kv k={t("guesttools.label.elapsed", "elapsed")}>{fmtDuration(goal.timeUsedSeconds)}</Kv>
 				)}
 			</KvGrid>
-			{details !== null && goal === null && !result?.isError && <Note tone="warn">no active goal</Note>}
-			{report !== null && report !== "" && <Output text={report} title="Report" maxLines={12} />}
+			{details !== null && goal === null && !result?.isError && (
+				<Note tone="warn">{t("guesttools.goal.no_goal", "no active goal")}</Note>
+			)}
+			{report !== null && report !== "" && (
+				<Output text={report} title={t("guesttools.label.report", "Report")} maxLines={12} />
+			)}
 			{(goal === null || result?.isError) && <ResultText result={result} maxLines={10} />}
 		</>
 	);

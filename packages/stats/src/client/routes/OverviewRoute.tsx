@@ -24,8 +24,8 @@ import {
 	type TokenShareSegment,
 	type TokenShareView,
 } from "../data/view-models";
-import { useTranslation } from "../i18n";
-import type { AgentType, MessageStats, TimeRange } from "../types";
+import { useTranslation, useLocale } from "../i18n";
+import type { AgentType, Locale, MessageStats, TimeRange } from "../types";
 import {
 	Badge,
 	Card,
@@ -70,10 +70,12 @@ const TOKEN_MIX = [
 ] as const;
 
 export function OverviewRoute({ active, range, onRequestClick }: OverviewRouteProps) {
+	const locale = useLocale();
 	const tr = useTranslation();
 	const overview = useQuery(["overview", range], ({ signal }) => getOverviewStats(range, signal), { enabled: active });
 	const recent = useQuery(["recent-requests"], ({ signal }) => getRecentRequests(12, signal), { enabled: active });
 	const [metric, setMetric] = useState<ActivityMetric>("requests");
+	const columns = useMemo(() => requestColumns(tr, locale), [tr, locale]);
 	const meta = rangeMeta(range);
 
 	const series = useMemo(() => {
@@ -104,18 +106,40 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 	const chartSeries =
 		metric === "requests"
 			? [
-					{ key: "ok", label: "Succeeded", color: "var(--chart-primary)", values: series.requests },
-					{ key: "err", label: "Failed", color: "var(--bad)", values: series.errors },
+					{
+						key: "ok",
+						label: tr("overview.succeeded", "Succeeded"),
+						color: "var(--chart-primary)",
+						values: series.requests,
+					},
+					{ key: "err", label: tr("common.failed", "Failed"), color: "var(--bad)", values: series.errors },
 				]
 			: metric === "tokens"
-				? [{ key: "tokens", label: "Tokens", color: "var(--chart-primary)", values: series.tokens }]
-				: [{ key: "cost", label: "API-equivalent", color: "var(--chart-secondary)", values: series.cost }];
+				? [
+						{
+							key: "tokens",
+							label: tr("common.tokens", "Tokens"),
+							color: "var(--chart-primary)",
+							values: series.tokens,
+						},
+					]
+				: [
+						{
+							key: "cost",
+							label: tr("overview.api_equivalent", "API-equivalent"),
+							color: "var(--chart-secondary)",
+							values: series.cost,
+						},
+					];
 
 	return (
 		<div className="page">
 			<PageHeader
 				title={tr("nav.overview", "Overview")}
-				description={`Everything omp did across your sessions in ${meta.windowLabel}.`}
+				description={tr("overview.description", "Everything omp did across your sessions in {window}.").replace(
+					"{window}",
+					tr(`costs.window.${range}`, meta.windowLabel),
+				)}
 			/>
 
 			<QueryView query={overview} skeleton={<ChartSkeleton height={112} />}>
@@ -123,12 +147,15 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 					<div data-stale={overview.stale} className="stack" style={{ gap: 16 }}>
 						<StatGrid min={190}>
 							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
+								label={tr("overview.api_cost", "API-equivalent cost")}
+								title={tr("costs.estimate_title", "What this usage would cost at public API rates")}
 								value={formatEstimatedCost(overall.totalCost, overall.unpricedRequests)}
 								hint={
 									overall.unpricedRequests > 0
-										? `${formatInteger(overall.unpricedRequests)} unpriced`
+										? tr("overview.unpriced", "{count} unpriced").replace(
+												"{count}",
+												formatInteger(overall.unpricedRequests),
+											)
 										: undefined
 								}
 								spark={series.cost}
@@ -137,43 +164,86 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 							<Stat
 								label={tr("nav.requests", "Requests")}
 								value={formatInteger(overall.totalRequests)}
-								hint={`${formatInteger(overall.failedRequests)} failed`}
+								hint={tr("overview.failed_count", "{count} failed").replace(
+									"{count}",
+									formatInteger(overall.failedRequests),
+								)}
 								spark={series.all}
 							/>
 							<Stat
-								label="Conversation tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								label={tr("overview.conversation_tokens", "Conversation tokens")}
+								title={tr(
+									"overview.conversation_tokens_hint",
+									"Uncached input + cache reads + cache writes + output",
+								)}
 								value={formatCompact(sumConversationTokens(overall))}
-								hint={`${formatCompact(overall.totalOutputTokens)} output`}
+								hint={tr("overview.output_count", "{count} output").replace(
+									"{count}",
+									formatCompact(overall.totalOutputTokens),
+								)}
 								spark={series.tokens}
 							/>
 							<Stat
-								label="Cache rate"
-								title="Cache reads ÷ (uncached input + cache reads)"
+								label={tr("overview.cache_rate", "Cache rate")}
+								title={tr("overview.cache_rate_hint", "Cache reads ÷ (uncached input + cache reads)")}
 								value={formatPercent(overall.cacheRate)}
-								hint={`${formatPercent(overall.cacheSavings)} saved`}
+								hint={tr("overview.saved", "{percent} saved").replace(
+									"{percent}",
+									formatPercent(overall.cacheSavings),
+								)}
 							/>
 							<Stat
-								label="Error rate"
+								label={tr("overview.error_rate", "Error rate")}
 								value={formatErrorRate(overall.errorRate)}
-								hint={`${formatInteger(overall.successfulRequests)} succeeded`}
+								hint={tr("overview.succeeded_count", "{count} succeeded").replace(
+									"{count}",
+									formatInteger(overall.successfulRequests),
+								)}
 								spark={series.errors}
 								sparkColor="var(--bad)"
 							/>
 						</StatGrid>
 						<StatGrid min={140}>
-							<Stat size="sm" label="Uncached input" value={formatCompact(overall.totalInputTokens)} />
-							<Stat size="sm" label="Cache read" value={formatCompact(overall.totalCacheReadTokens)} />
-							<Stat size="sm" label="Cache write" value={formatCompact(overall.totalCacheWriteTokens)} />
-							<Stat size="sm" label="Output" value={formatCompact(overall.totalOutputTokens)} />
 							<Stat
 								size="sm"
-								label="Premium requests"
+								label={tr("overview.token_input", "Uncached input")}
+								value={formatCompact(overall.totalInputTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={tr("components.costCacheRead", "Cache read")}
+								value={formatCompact(overall.totalCacheReadTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={tr("components.costCacheWrite", "Cache write")}
+								value={formatCompact(overall.totalCacheWriteTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={tr("components.costOutput", "Output")}
+								value={formatCompact(overall.totalOutputTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={tr("overview.premium", "Premium requests")}
 								value={formatInteger(Math.round(overall.totalPremiumRequests * 100) / 100)}
 							/>
-							<Stat size="sm" label="Tokens/s" value={formatTokensPerSecond(overall.avgTokensPerSecond)} />
-							<Stat size="sm" label="Avg latency" value={formatDurationMs(overall.avgDuration)} />
-							<Stat size="sm" label="Avg TTFT" value={formatDurationMs(overall.avgTtft)} />
+							<Stat
+								size="sm"
+								label={tr("overview.tokens_per_second", "Tokens/s")}
+								value={formatTokensPerSecond(overall.avgTokensPerSecond)}
+							/>
+							<Stat
+								size="sm"
+								label={tr("overview.average_latency", "Avg latency")}
+								value={formatDurationMs(overall.avgDuration)}
+							/>
+							<Stat
+								size="sm"
+								label={tr("overview.average_ttft", "Avg TTFT")}
+								value={formatDurationMs(overall.avgTtft)}
+							/>
 						</StatGrid>
 					</div>
 				)}
@@ -183,8 +253,24 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 				<Card
 					index={1}
 					title={tr("nav.activity", "Activity")}
-					description={`Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}`}
-					actions={<Segmented size="sm" options={ACTIVITY_OPTIONS} value={metric} onChange={setMetric} />}
+					description={
+						meta.bucketMs < 3_600_000
+							? tr("overview.per_5m", "Per 5 minutes")
+							: meta.bucketMs < 86_400_000
+								? tr("overview.per_hour", "Per hour")
+								: tr("overview.per_day", "Per day")
+					}
+					actions={
+						<Segmented
+							size="sm"
+							options={ACTIVITY_OPTIONS.map(option => ({
+								...option,
+								label: tr(`overview.activity_${option.value}`, option.label),
+							}))}
+							value={metric}
+							onChange={setMetric}
+						/>
+					}
 					stale={overview.stale}
 				>
 					<QueryView query={overview} skeleton={<ChartSkeleton height={260} />}>
@@ -200,7 +286,12 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 					</QueryView>
 				</Card>
 
-				<Card index={2} title="Token mix" description="Where conversation tokens went" stale={overview.stale}>
+				<Card
+					index={2}
+					title={tr("overview.token_mix", "Token mix")}
+					description={tr("overview.token_mix_hint", "Where conversation tokens went")}
+					stale={overview.stale}
+				>
 					<QueryView query={overview} skeleton={<ChartSkeleton height={260} />}>
 						{({ overall }) => {
 							const mix = {
@@ -216,7 +307,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 										<ShareBar
 											segments={TOKEN_MIX.map(t => ({
 												key: t.key,
-												label: t.label,
+												label: tr(`overview.token_${t.key}`, t.label),
 												value: mix[t.key],
 												color: t.color,
 											}))}
@@ -224,7 +315,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 										<Legend
 											items={TOKEN_MIX.map(t => ({
 												key: t.key,
-												label: t.label,
+												label: tr(`overview.token_${t.key}`, t.label),
 												color: t.color,
 												value: total > 0 ? formatPercent(mix[t.key] / total, 0) : "–",
 											}))}
@@ -248,8 +339,8 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 			{attribution && attribution.decisions.segments.length > 0 && (
 				<Card
 					index={3}
-					title="Decision models"
-					description="Where decision-model tokens went, by use case"
+					title={tr("overview.decision_models", "Decision models")}
+					description={tr("overview.decision_models_hint", "Where decision-model tokens went, by use case")}
 					stale={overview.stale}
 				>
 					<ShareBreakdown view={attribution.decisions} wide />
@@ -260,10 +351,10 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 				index={4}
 				title={
 					<>
-						<Dot tone="live" pulse /> Latest requests
+						<Dot tone="live" pulse /> {tr("overview.recent", "Latest requests")}
 					</>
 				}
-				description="Most recent model calls across every session"
+				description={tr("overview.recent_hint", "Most recent model calls across every session")}
 				actions={
 					<a className="btn" data-size="sm" data-variant="ghost" href={`#/requests?range=${range}`}>
 						All requests <ArrowRight size={13} />
@@ -277,7 +368,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 							rows={rows}
 							rowKey={row => row.id ?? `${row.sessionFile}:${row.entryId}`}
 							onRowClick={row => row.id !== undefined && onRequestClick(row.id)}
-							columns={REQUEST_COLUMNS}
+							columns={columns}
 							dense
 						/>
 					)}
@@ -336,40 +427,42 @@ function ShareBreakdown({ view, wide = false }: { view: TokenShareView; wide?: b
 	);
 }
 
-const REQUEST_COLUMNS = [
-	{
-		key: "model",
-		header: "Model",
-		render: (row: MessageStats) => <LabelCell primary={row.model} secondary={row.provider} />,
-	},
-	{
-		key: "time",
-		header: "When",
-		render: (row: MessageStats) => <span className="muted">{formatRelativeTime(row.timestamp)}</span>,
-	},
-	{
-		key: "tokens",
-		header: "Tokens",
-		align: "right" as const,
-		render: (row: MessageStats) => <span className="num">{formatInteger(row.usage.totalTokens)}</span>,
-	},
-	{
-		key: "cost",
-		header: "Cost",
-		align: "right" as const,
-		render: (row: MessageStats) => <span className="num">{formatMessageCost(row, 4)}</span>,
-	},
-	{
-		key: "duration",
-		header: "Duration",
-		align: "right" as const,
-		render: (row: MessageStats) => <span className="num">{formatDurationMs(row.duration)}</span>,
-	},
-	{
-		key: "status",
-		header: "Status",
-		align: "right" as const,
-		render: (row: MessageStats) =>
-			row.errorMessage ? <Badge tone="bad">Failed</Badge> : <Badge tone="ok">OK</Badge>,
-	},
-];
+function requestColumns(tr: (key: string, english: string) => string, locale: Locale) {
+	return [
+		{
+			key: "model",
+			header: tr("common.model", "Model"),
+			render: (row: MessageStats) => <LabelCell primary={row.model} secondary={row.provider} />,
+		},
+		{
+			key: "time",
+			header: tr("overview.when", "When"),
+			render: (row: MessageStats) => <span className="muted">{formatRelativeTime(row.timestamp, locale)}</span>,
+		},
+		{
+			key: "tokens",
+			header: tr("common.tokens", "Tokens"),
+			align: "right" as const,
+			render: (row: MessageStats) => <span className="num">{formatInteger(row.usage.totalTokens)}</span>,
+		},
+		{
+			key: "cost",
+			header: tr("common.cost", "Cost"),
+			align: "right" as const,
+			render: (row: MessageStats) => <span className="num">{formatMessageCost(row, 4)}</span>,
+		},
+		{
+			key: "duration",
+			header: tr("common.duration", "Duration"),
+			align: "right" as const,
+			render: (row: MessageStats) => <span className="num">{formatDurationMs(row.duration)}</span>,
+		},
+		{
+			key: "status",
+			header: tr("common.status", "Status"),
+			align: "right" as const,
+			render: (row: MessageStats) =>
+				row.errorMessage ? <Badge tone="bad">{tr("common.failed", "Failed")}</Badge> : <Badge tone="ok">OK</Badge>,
+		},
+	];
+}

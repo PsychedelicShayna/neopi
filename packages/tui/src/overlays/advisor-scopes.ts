@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component, TUI } from "../tui";
 import { SelectList, type SelectItem, type SelectListNavigationState } from "../components/select-list";
 import { SplitPane } from "../components/layout/split-pane";
@@ -41,12 +42,18 @@ import {
 	type AdvisorActivationSetSource,
 } from "./advisor-activation-sets";
 
-const SCOPE_LABELS: Record<AdvisorConfigScope, string> = {
-	user: "User",
-	project: "Project root",
-	"project-omp": "Project .omp",
-	session: "Session",
-};
+function scopeLabel(scope: AdvisorConfigScope): string {
+	switch (scope) {
+		case "user":
+			return t("overlaysModel.advisorScopes.scope.user");
+		case "project":
+			return t("overlaysModel.advisorScopes.scope.project");
+		case "project-omp":
+			return t("overlaysModel.advisorScopes.scope.project-omp");
+		case "session":
+			return t("overlaysModel.advisorScopes.scope.session");
+	}
+}
 
 export interface AdvisorConfigFile {
 	path: string;
@@ -88,8 +95,12 @@ export class AdvisorScopeOverlayComponent implements Component {
 	#scopeFocused = true;
 	readonly #scopeStrip: StripState<StripChip<AdvisorConfigScope>> = {
 		chips: (["user", "project", "project-omp", "session"] as const).map(scope => ({
-			label: SCOPE_LABELS[scope],
-			styled: SCOPE_LABELS[scope],
+			get label() {
+				return scopeLabel(scope);
+			},
+			get styled() {
+				return scopeLabel(scope);
+			},
 			action: scope,
 		})),
 		index: 0,
@@ -152,27 +163,32 @@ export class AdvisorScopeOverlayComponent implements Component {
 			.filter(file => file.scope === this.#scope())
 			.map(file => ({
 				value: file.path,
-				label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
+				label: `${file.doc.enabled === false ? "○" : "●"} ${scopeLabel(file.scope)}`,
 				description: sanitizeDisplayLine(shortenPath(file.path)),
 			}));
 		items.push(
 			{ value: "divider", label: "────────────────", disabled: true },
-			{ value: "disable", label: "Disable all active advisors" },
-			{ value: "enable", label: "Enable all advisors" },
-			{ value: "invert", label: "Invert enabled and disabled" },
-			{ value: "apply", label: "Apply saved configuration" },
-			{ value: "close", label: "Close" },
+			{ value: "disable", label: t("overlaysModel.advisorScopes.disableAll") },
+			{ value: "enable", label: t("overlaysModel.advisorScopes.enableAll") },
+			{ value: "invert", label: t("overlaysModel.advisorScopes.invert") },
+			{ value: "apply", label: t("overlaysModel.advisorScopes.applySaved") },
+			{ value: "close", label: t("overlaysModel.advisorScopes.close") },
 		);
 		if (this.#cb.activationSets && this.#scope() !== "project") {
 			items.push({
 				value: "roles-heading",
-				label: `Role activation sets · ${this.#scope() === "session" ? "settings.yml" : "config.yml"}`,
+				label: t("overlaysModel.advisorScopes.roleSets", {
+					file: this.#scope() === "session" ? "settings.yml" : "config.yml",
+				}),
 				disabled: true,
 			});
 			for (const role of this.#cb.activationSets.getRoles()) {
 				items.push({
 					value: `role:${role.id}`,
-					label: `Role: ${sanitizeDisplayLine(role.id)} (${sanitizeDisplayLine(role.label)})`,
+					label: t("overlaysModel.advisorScopes.roleLabel", {
+						id: sanitizeDisplayLine(role.id),
+						label: sanitizeDisplayLine(role.label),
+					}),
 				});
 			}
 		}
@@ -196,27 +212,33 @@ export class AdvisorScopeOverlayComponent implements Component {
 		const value = this.#list.getSelectedItem()?.value;
 		if (value?.startsWith("role:"))
 			return [
-				`Role ${sanitizeDisplayLine(value.slice(5))} · ${SCOPE_LABELS[this.#scope()]}`,
-				"Enter edits this role's advisor activation set by stable ID.",
-				"A set replaces individual enabled flags. Clear restores per-advisor flags.",
-				"Role sets persist in User / Project .omp config.yml or Session settings.yml, not root WATCHDOG.",
+				t("overlaysModel.advisorScopes.roleScope", {
+					role: sanitizeDisplayLine(value.slice(5)),
+					scope: scopeLabel(this.#scope()),
+				}),
+				t("overlaysModel.advisorScopes.editRoleHint"),
+				t("overlaysModel.advisorScopes.setHint"),
+				t("overlaysModel.advisorScopes.persistenceHint"),
 			];
 		const file = this.#selectedFile();
 		if (!file)
 			return [
-				`Bulk actions affect only ${SCOPE_LABELS[this.#scope()]} advisor entries.`,
-				"Whole-file switches stay unchanged.",
-				"Select a file to preview its advisors.",
-				"Space toggles a whole file. Enter edits that file.",
+				t("overlaysModel.advisorScopes.bulkScope", { scope: scopeLabel(this.#scope()) }),
+				t("overlaysModel.advisorScopes.fileSwitchesUnchanged"),
+				t("overlaysModel.advisorScopes.previewHint"),
+				t("overlaysModel.advisorScopes.fileControlsHint"),
 			];
 		return [
 			sanitizeDisplayLine(shortenPath(file.path)),
-			file.doc.enabled === false ? "File disabled. Entries remain editable." : "File enabled",
+			file.doc.enabled === false
+				? t("overlaysModel.advisorScopes.fileDisabled")
+				: t("overlaysModel.advisorScopes.fileEnabled"),
 			"",
 			...file.doc.advisors.map(
-				advisor => `${advisor.enabled === false ? "○ disabled" : "● enabled"} ${sanitizeDisplayLine(advisor.name)}`,
+				advisor =>
+					`${advisor.enabled === false ? t("overlaysModel.advisorScopes.advisorDisabled") : t("overlaysModel.advisorScopes.advisorEnabled")} ${sanitizeDisplayLine(advisor.name)}`,
 			),
-			...(file.doc.advisors.length === 0 ? ["No explicit advisors"] : []),
+			...(file.doc.advisors.length === 0 ? [t("overlaysModel.advisorScopes.noExplicitAdvisors")] : []),
 			...(file.doc.warnings ?? []).map(sanitizeDisplayLine),
 		];
 	}
@@ -226,7 +248,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.#busy = true;
 		void operation()
 			.catch(error => {
-				this.#cb.notify(`Advisor config: ${error instanceof Error ? error.message : String(error)}`);
+				this.#cb.notify(
+					t("overlaysModel.advisorScopes.error", {
+						error: error instanceof Error ? error.message : String(error),
+					}),
+				);
 			})
 			.finally(() => {
 				this.#busy = false;
@@ -248,7 +274,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 		doc.enabled = doc.enabled === false ? undefined : false;
 		await this.#write(file, doc);
 		this.#list = this.#buildList(this.#list.navigationState());
-		this.#cb.notify("Saved file state. Press a to apply it to live advisors.");
+		this.#cb.notify(t("overlaysModel.advisorScopes.savedFileState"));
 	}
 
 	async #openSelectedFile(): Promise<void> {
@@ -293,8 +319,8 @@ export class AdvisorScopeOverlayComponent implements Component {
 			this.#list = this.#buildList(this.#list.navigationState());
 			this.#cb.notify(
 				changed > 0
-					? `Saved ${changed} ${SCOPE_LABELS[scope]} advisor entry states; file switches unchanged. Press a to apply.`
-					: `No ${SCOPE_LABELS[scope]} advisor entry states changed; file switches and implicit defaults unchanged.`,
+					? t("overlaysModel.advisorScopes.savedBulk", { count: changed, scope: scopeLabel(scope) })
+					: t("overlaysModel.advisorScopes.noBulkChanges", { scope: scopeLabel(scope) }),
 			);
 			return;
 		}
@@ -338,7 +364,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 					),
 				copyAdvisor: async (advisor, targetPath) => {
 					const target = this.#files.find(source => source.path === targetPath);
-					if (!target) throw new Error("Advisor copy destination no longer exists");
+					if (!target) throw new Error(t("overlaysModel.advisorScopes.copyDestinationMissing"));
 					const doc = await this.#cb.loadFile(targetPath);
 					doc.advisors.push(cloneAdvisorConfig(advisor, doc.advisors));
 					await this.#write(target, doc);
@@ -421,20 +447,28 @@ export class AdvisorScopeOverlayComponent implements Component {
 		if (this.#activationEditor) return this.#activationEditor.render(width);
 		if (this.#editor) return this.#editor.render(width);
 		const hints = menuHintLines(
-			`↑ scope · ←/→ cycle scope · Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close · ? help`,
+			t("overlaysModel.advisorScopes.terminalHint", {
+				editFile: this.#cb.openFile ? t("overlaysModel.advisorScopes.editFileSuffix") : "",
+			}),
 			Math.max(1, width - 4),
 		);
 		this.#rows = Math.max(10, (process.stdout.rows || 40) - 5 - hints.length);
 		this.#split.setHeight(this.#rows);
 		this.#split.setNarrowPane(this.#previewFocused ? "right" : "left");
-		const title = `Advisor configuration · files${this.#busy ? " · saving" : this.#pendingApply ? " · saved, not applied" : ""}`;
+		const title = t("overlaysModel.advisorScopes.title", {
+			state: this.#busy
+				? t("overlaysModel.advisorScopes.savingSuffix")
+				: this.#pendingApply
+					? t("overlaysModel.advisorScopes.pendingApplySuffix")
+					: "",
+		});
 		return this.#help.render(
 			[
 				topBorder(width, title),
 				row(
 					renderHubChips(
 						width - 4,
-						`${this.#scopeFocused ? "›" : " "} Scope: `,
+						t("overlaysModel.advisorScopes.scopePrefix", { focus: this.#scopeFocused ? "›" : " " }),
 						this.#scopeStrip,
 						this.#scopeRanges,
 					),
@@ -461,26 +495,28 @@ export class AdvisorScopeOverlayComponent implements Component {
 		if (this.#help.open) return this.#help.describe();
 		const preview = this.#preview().map(line => text(line, { wrap: "word" }));
 		if (cx.supports("picker"))
-			return overlayCard("omp.overlay.advisor-scopes", "Advisor configuration", [
-				describeHubChips(this.#scopeStrip, "Scope", "scope"),
+			return overlayCard("omp.overlay.advisor-scopes", t("overlaysModel.advisorScopes.heading"), [
+				describeHubChips(this.#scopeStrip, t("overlaysModel.advisorScopes.scope"), "scope"),
 				node("rule"),
 				picker(
 					{
-						...selectListPicker(this.#list, { title: SCOPE_LABELS[this.#scope()], searchable: true }),
+						...selectListPicker(this.#list, { title: scopeLabel(this.#scope()), searchable: true }),
 						preview: "side",
 						actions: [
-							pickerAction("confirm", "Edit", "enter", { primary: true }),
-							pickerAction("toggle", "Toggle file", "space"),
-							pickerAction("apply", "Apply", "a"),
-							...(this.#cb.openFile ? [pickerAction("edit-file", "Edit config file", "ctrl+g")] : []),
-							CLOSE_ACTION,
+							pickerAction("confirm", t("overlaysModel.advisorScopes.edit"), "enter", { primary: true }),
+							pickerAction("toggle", t("overlaysModel.advisorScopes.toggleFile"), "space"),
+							pickerAction("apply", t("overlaysModel.advisorScopes.apply"), "a"),
+							...(this.#cb.openFile
+								? [pickerAction("edit-file", t("overlaysModel.advisorScopes.editFile"), "ctrl+g")]
+								: []),
+							{ ...CLOSE_ACTION, label: t("overlaysModel.advisorScopes.close") },
 						],
 					},
 					preview,
 				),
 			]);
-		return overlayCard("omp.overlay.advisor-scopes", "Advisor configuration · files", [
-			describeHubChips(this.#scopeStrip, "Scope", "scope"),
+		return overlayCard("omp.overlay.advisor-scopes", t("overlaysModel.advisorScopes.filesHeading"), [
+			describeHubChips(this.#scopeStrip, t("overlaysModel.advisorScopes.scope"), "scope"),
 			node("rule"),
 			node("row", { gap: "md" }, [this.#list, node("col", undefined, preview)]),
 		]);

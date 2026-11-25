@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as url from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { KeyEventType } from "@oh-my-pi/pi-natives";
@@ -67,9 +68,7 @@ export interface ChainLock {
 const SHELL_SIGIL_RE = /^\s*(?:!!?|\$\$?|\?)[ \t]?/;
 
 /** The untitled session's TSP placeholder; the rotating ANSI hints (thinking effort, …) move into control tooltips. */
-const NATIVE_COMPOSER_PLACEHOLDER = "What are we cooking?";
 /** The TSP placeholder while an ask waits above the composer. */
-const ASK_PLACEHOLDER = "Answer above, or type here to skip the questions";
 
 /** Live composer state the TSP layout shows; the interactive host wires {@link CustomEditor.composerState}. */
 export interface ComposerNativeState {
@@ -1041,7 +1040,7 @@ export class CustomEditor extends Editor {
 					);
 					if (this.#queueShorthandActive && (value.startsWith("->") || value.startsWith("=>"))) {
 						const icon = typeof theme === "undefined" ? "➤" : theme.nav.selected;
-						return `${fgOrPlain("dim", `Queueing ${icon}`)}${highlighted.slice(2)}`;
+						return `${fgOrPlain("dim", t("overlays.custom_editor.queueing", { icon: `${icon}` }))}${highlighted.slice(2)}`;
 					}
 					if (this.#queueListActive) {
 						const markerMatch = QUEUE_LIST_MARKER_RE.exec(value);
@@ -1282,11 +1281,11 @@ export class CustomEditor extends Editor {
 	 */
 	override describePlaceholder = (): TspText => {
 		const { viewing, title, btw, ask } = this.composerState();
-		if (btw) return "Ask about this…";
-		if (ask) return ASK_PLACEHOLDER;
+		if (btw) return t("overlays.custom_editor.ask_placeholder");
+		if (ask) return t("overlays.custom_editor.ask_placeholder_2");
 		const agent = viewing?.at(-1);
-		if (agent !== undefined) return `Message ${agent}`;
-		if (!title) return NATIVE_COMPOSER_PLACEHOLDER;
+		if (agent !== undefined) return t("overlays.custom_editor.message_agent", { agent: `${agent}` });
+		if (!title) return t("overlays.custom_editor.composer_placeholder");
 		if (this.#titlePlaceholder?.title !== title) {
 			this.#titlePlaceholder = { title, text: [{ t: `“${title}”`, s: "em" }] };
 		}
@@ -1382,7 +1381,12 @@ export class CustomEditor extends Editor {
 								rate !== undefined &&
 									node(
 										"rate",
-										{ value: rate, unit: "tok/s", role: "omp.composer.rate", title: "Generation rate" },
+										{
+											value: rate,
+											unit: "tok/s",
+											role: "omp.composer.rate",
+											title: t("overlays.custom_editor.generation_rate"),
+										},
 										undefined,
 										"rate",
 									),
@@ -1432,7 +1436,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.crumb",
 					text: id,
 					wrap: "none",
-					title: `View ${id}`,
+					title: t("overlays.custom_editor.view_crumb", { id: `${id}` }),
 					actions: { click: `${FOCUS_ACTION}${id}` },
 				},
 				undefined,
@@ -1443,7 +1447,7 @@ export class CustomEditor extends Editor {
 			row(
 				[
 					node("icon", { name: "eye" }, undefined, "icon"),
-					node("text", { text: "Viewing", wrap: "none" }, undefined, "label"),
+					node("text", { text: t("overlays.custom_editor.viewing"), wrap: "none" }, undefined, "label"),
 					...crumbs,
 					node("text", { role: "omp.composer.agent", text: agent, wrap: "none" }, undefined, "agent"),
 					node(
@@ -1452,7 +1456,7 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.exit",
 							gap: "xs",
 							align: "center",
-							title: `Back to the main session  ${back}`,
+							title: t("overlays.custom_editor.back_main_session", { back: `${back}` }),
 							actions: { click: `${FOCUS_ACTION}${MAIN_AGENT_ID}` },
 						},
 						[
@@ -1466,7 +1470,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.focus",
 					gap: "xs",
 					align: "center",
-					title: `Viewing subagent ${agent}: what you send goes to it`,
+					title: t("overlays.custom_editor.viewing_subagent", { agent: `${agent}` }),
 				},
 			),
 			"focus",
@@ -1483,7 +1487,7 @@ export class CustomEditor extends Editor {
 				role: "omp.composer.mode",
 				gap: "xs",
 				align: "center",
-				title: `Asking the side question · back to the chat  ${formatTooltipKey(interruptKey)}`,
+				title: t("overlays.custom_editor.side_question", { interruptKey: `${formatTooltipKey(interruptKey)}` }),
 				actions: { click: "interrupt" },
 			}),
 			"mode",
@@ -1511,7 +1515,10 @@ export class CustomEditor extends Editor {
 						{
 							level: thinking,
 							role: "omp.composer.model.effort",
-							title: `Thinking effort: ${thinking}${thinkingHint}`,
+							title: t("overlays.custom_editor.thinking_effort_value", {
+								thinking: `${thinking}`,
+								thinkingHint: `${thinkingHint}`,
+							}),
 							actions: { click: "thinking.cycle" },
 						},
 						undefined,
@@ -1527,7 +1534,9 @@ export class CustomEditor extends Editor {
 					gap: "xs",
 					align: "center",
 					tone: facts.model.tone,
-					title: modelKey ? `Switch model  ${formatTooltipKey(modelKey)}` : "Switch model",
+					title: modelKey
+						? t("overlays.custom_editor.switch_model_key", { modelKey: `${formatTooltipKey(modelKey)}` })
+						: t("overlays.custom_editor.switch_model"),
 					actions: { click: "status.model" },
 				},
 				[
@@ -1546,7 +1555,7 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.effort",
 							gap: "xs",
 							align: "center",
-							title: `Thinking effort${thinkingHint}`,
+							title: t("overlays.custom_editor.thinking_effort", { thinkingHint: `${thinkingHint}` }),
 							actions: { click: "thinking.cycle" },
 						},
 						[
@@ -1577,20 +1586,37 @@ export class CustomEditor extends Editor {
 							align: "center",
 							tone: recording ? "error" : starting || transcribing ? "pending" : undefined,
 							title: recording
-								? "Stop recording and transcribe"
+								? t("overlays.custom_editor.stop_recording")
 								: starting
-									? "Cancel dictation"
+									? t("overlays.custom_editor.cancel_dictation")
 									: transcribing
-										? "Transcribing dictation"
-										: "Start dictation",
+										? t("overlays.custom_editor.transcribing_dictation")
+										: t("overlays.custom_editor.start_dictation"),
 							// The model can take a while to load on first use, so a start stays cancellable.
 							actions: transcribing ? undefined : { click: "dictation.toggle" },
 						},
 						starting || transcribing
-							? [node("spinner", { label: starting ? "Starting…" : "Transcribing…" }, undefined, "pending")]
+							? [
+									node(
+										"spinner",
+										{
+											label: starting
+												? t("overlays.custom_editor.starting")
+												: t("overlays.custom_editor.transcribing"),
+										},
+										undefined,
+										"pending",
+									),
+								]
 							: compact([
 									node("icon", { name: recording ? "stop" : "mic" }, undefined, "icon"),
-									recording && node("text", { text: "Recording · Stop", wrap: "none" }, undefined, "label"),
+									recording &&
+										node(
+											"text",
+											{ text: t("overlays.custom_editor.recording_stop"), wrap: "none" },
+											undefined,
+											"label",
+										),
 								]),
 						"dictation",
 					);
@@ -1601,9 +1627,9 @@ export class CustomEditor extends Editor {
 						"text",
 						{
 							role: "omp.composer.skip",
-							text: "Skip & send",
+							text: t("overlays.custom_editor.skip_send"),
 							tone: "warning",
-							title: `Send this message instead of answering the questions  ${formatTooltipKey("enter")}`,
+							title: t("overlays.custom_editor.send_skip_questions", { value: `${formatTooltipKey("enter")}` }),
 							actions: { click: "submit" },
 						},
 						undefined,
@@ -1614,9 +1640,11 @@ export class CustomEditor extends Editor {
 							"text",
 							{
 								role: "omp.composer.stop",
-								text: "Stop",
+								text: t("tui.components.loader.stop"),
 								tone: "error",
-								title: `Stop  ${formatTooltipKey(interruptKey)}`,
+								title: t("overlays.custom_editor.stop_key", {
+									interruptKey: `${formatTooltipKey(interruptKey)}`,
+								}),
 								actions: { click: "interrupt" },
 							},
 							undefined,
@@ -1627,7 +1655,9 @@ export class CustomEditor extends Editor {
 							{
 								role: "omp.composer.send",
 								keys: ["enter"],
-								title: dictating ? "Finish dictation before sending" : `Send  ${formatTooltipKey("enter")}`,
+								title: dictating
+									? t("overlays.custom_editor.finish_dictation")
+									: t("overlays.custom_editor.send_key", { value: `${formatTooltipKey("enter")}` }),
 								tone: dictating ? "muted" : undefined,
 								actions: dictating ? undefined : { click: "submit" },
 							},
@@ -1639,13 +1669,23 @@ export class CustomEditor extends Editor {
 				? this.#describeBtwChip(interruptKey)
 				: state.ask === "skip"
 					? keyed(
-							row([node("text", { spans: [span("skips ask", "warning")], wrap: "none" }, undefined, "label")], {
-								role: "omp.composer.mode",
-								tone: "warning",
-								gap: "xs",
-								align: "center",
-								title: "Sending this message skips the questions above",
-							}),
+							row(
+								[
+									node(
+										"text",
+										{ spans: [span(t("overlays.custom_editor.skips_ask"), "warning")], wrap: "none" },
+										undefined,
+										"label",
+									),
+								],
+								{
+									role: "omp.composer.mode",
+									tone: "warning",
+									gap: "xs",
+									align: "center",
+									title: t("overlays.custom_editor.skips_questions"),
+								},
+							),
 							"mode",
 						)
 					: undefined;
@@ -1653,22 +1693,27 @@ export class CustomEditor extends Editor {
 		}
 		const runs =
 			shell.kind === "bash"
-				? "Runs in your shell"
+				? t("overlays.custom_editor.runs_shell")
 				: shell.kind === "python"
-					? "Runs in Python"
-					: "Asks a /btw side question";
+					? t("overlays.custom_editor.runs_python")
+					: t("overlays.custom_editor.asks_btw");
 		const mode = keyed(
 			row(
 				compact([
 					shell.excluded &&
-						node("icon", { name: "eye-off", title: "Not sent to the model" }, undefined, "excluded"),
+						node(
+							"icon",
+							{ name: "eye-off", title: t("overlays.custom_editor.not_sent_model") },
+							undefined,
+							"excluded",
+						),
 					node("text", { spans: [span(shell.kind, `${shell.kind}Mode`)], wrap: "none" }, undefined, "label"),
 				]),
 				{
 					role: "omp.composer.mode",
 					gap: "xs",
 					align: "center",
-					title: shell.excluded ? `${runs} · not sent to the model` : runs,
+					title: shell.excluded ? t("overlays.custom_editor.runs_excluded", { runs: `${runs}` }) : runs,
 				},
 			),
 			"mode",

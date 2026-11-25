@@ -407,7 +407,7 @@ export class TextFormField extends FormField {
 				return;
 			}
 			if (empty === "reject") {
-				this.setError(this.#options.emptyError ?? "A value is required.");
+				this.setError(this.#options.emptyError ?? t("overlays.form.value_required"));
 				return;
 			}
 		}

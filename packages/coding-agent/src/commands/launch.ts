@@ -19,7 +19,9 @@ export default class Index extends Command {
 	static hidden = launchHelp.hidden;
 	static args = launchHelp.args;
 	static flags = launchHelp.flags;
-	static examples = launchHelp.examples;
+	static get examples() {
+		return launchHelp.examples;
+	}
 
 	static strict = false;
 

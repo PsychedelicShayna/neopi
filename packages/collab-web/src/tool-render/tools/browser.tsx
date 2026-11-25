@@ -1,5 +1,6 @@
 /** `browser` — drive a Chromium tab: open/close named tabs, run puppeteer scripts. */
 import type { ReactNode } from "react";
+import { type Translation, useTranslation } from "../../lib/i18n";
 import { Badge, CodeBlock, ResultImages, ResultText, type Tone } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, num, shortenPath, str, truncate } from "../util";
@@ -46,13 +47,14 @@ function actionTone(action: string): Tone | undefined {
 }
 
 /** Mirrors the TUI's `describeBrowser`: explicit app args win over reported mode. */
-function describeBrowser(app: AppArg | null, details: BrowserDetails): string | null {
-	if (app?.cdpUrl) return `connected ${app.cdpUrl}`;
-	if (app?.path) return `spawned ${shortenPath(app.path)}`;
+function describeBrowser(app: AppArg | null, details: BrowserDetails, t: Translation): string | null {
+	if (app?.cdpUrl) return t("guesttools.browser.connected", "connected {url}", { url: app.cdpUrl });
+	if (app?.path) return t("guesttools.browser.spawned", "spawned {path}", { path: shortenPath(app.path) });
 	return details.browser;
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsOf(result);
 	const action = str(args.action) ?? details.action ?? "?";
 	const closeAll = action === "close" && (args.all === true || (str(args.name) === null && details.name === null));
@@ -61,7 +63,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<Badge tone={actionTone(action)}>{action}</Badge>
-			<span>{closeAll ? "all tabs" : tab}</span>
+			<span>{closeAll ? t("guesttools.browser.all_tabs", "all tabs") : tab}</span>
 			{args.kill === true && <Badge tone="err">kill</Badge>}
 			{url && <span className="tv-faint">{truncate(shortenPath(url), 72)}</span>}
 		</>
@@ -69,12 +71,13 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsOf(result);
 	const action = str(args.action) ?? details.action;
 	const app = appOf(args);
 	const tab = details.name ?? str(args.name);
 	const url = details.url ?? str(args.url);
-	const browserDesc = describeBrowser(app, details);
+	const browserDesc = describeBrowser(app, details, t);
 	const viewport = isRecord(args.viewport) ? args.viewport : null;
 	const vpWidth = viewport ? num(viewport.width) : null;
 	const vpHeight = viewport ? num(viewport.height) : null;
@@ -83,10 +86,10 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<span className="tv-badges">
-				{tab !== null && <Badge>tab {tab}</Badge>}
+				{tab !== null && <Badge>{t("guesttools.browser.tab", "tab {name}", { name: tab })}</Badge>}
 				{url && <Badge tone="accent">{truncate(shortenPath(url), 120)}</Badge>}
 				{browserDesc && <Badge>{browserDesc}</Badge>}
-				{app?.target && <Badge>target {app.target}</Badge>}
+				{app?.target && <Badge>{t("guesttools.browser.target", "target {target}", { target: app.target })}</Badge>}
 				{args.all === true && <Badge tone="warn">all</Badge>}
 				{args.kill === true && <Badge tone="err">kill</Badge>}
 				{vpWidth !== null && vpHeight !== null && (

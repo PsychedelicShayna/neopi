@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { computeSessionContextBreakdown } from "../../session/context-usage-runtime";
 import type { SlashCommandRuntime } from "../types";
 import { renderAsciiBar } from "@oh-my-pi/pi-tui/chrome/format";
@@ -11,56 +12,89 @@ export function buildContextReportText(runtime: SlashCommandRuntime): string {
 	try {
 		const breakdown = computeSessionContextBreakdown(runtime.session, { snapcompactSavings: true });
 		if (breakdown.contextWindow <= 0) {
-			return "Context usage is unavailable: no model is selected for this session.";
+			return t("commands.contextReport.noModel");
 		}
 		const usedPct = Math.round((breakdown.usedTokens / breakdown.contextWindow) * 100);
-		const lines = [`Context window: ${breakdown.contextWindow} tokens (${usedPct}% used)`];
+		const lines = [t("commands.contextReport.windowUsage", { tokens: breakdown.contextWindow, percent: usedPct })];
 		for (const category of breakdown.categories) {
 			if (category.tokens === 0) continue;
 			const fraction = category.tokens / breakdown.contextWindow;
-			lines.push(`  ${category.label.padEnd(16)} ${renderAsciiBar(fraction)}  ${category.tokens} tokens`);
+			lines.push(
+				t("commands.contextReport.tokenRow", {
+					label: category.label.padEnd(16),
+					bar: renderAsciiBar(fraction),
+					tokens: category.tokens,
+				}),
+			);
 		}
 		if (breakdown.autoCompactBufferTokens > 0) {
 			const fraction = breakdown.autoCompactBufferTokens / breakdown.contextWindow;
 			lines.push(
-				`  ${"Auto-compact buf".padEnd(16)} ${renderAsciiBar(fraction)}  ${breakdown.autoCompactBufferTokens} tokens`,
+				t("commands.contextReport.tokenRow", {
+					label: t("commands.contextReport.autoCompactBuffer").padEnd(16),
+					bar: renderAsciiBar(fraction),
+					tokens: breakdown.autoCompactBufferTokens,
+				}),
 			);
 		}
 		if (breakdown.freeTokens > 0) {
 			const fraction = breakdown.freeTokens / breakdown.contextWindow;
-			lines.push(`  ${"Free".padEnd(16)} ${renderAsciiBar(fraction)}  ${breakdown.freeTokens} tokens`);
+			lines.push(
+				t("commands.contextReport.tokenRow", {
+					label: t("commands.contextReport.free").padEnd(16),
+					bar: renderAsciiBar(fraction),
+					tokens: breakdown.freeTokens,
+				}),
+			);
 		}
 		const snap = breakdown.snapcompact;
 		if (snap) {
 			if (!snap.visionCapable) {
-				lines.push("Snapcompact: inactive (model has no image input)");
+				lines.push(t("commands.contextReport.snapInactive"));
 			} else {
-				lines.push("Snapcompact (estimated wire savings):");
+				lines.push(t("commands.contextReport.snapSavings"));
 				if (snap.systemPrompt) {
 					const sp = snap.systemPrompt;
 					lines.push(
 						sp.applied
-							? `  System prompt: ${sp.textTokens} text tokens → ${sp.frames} frame${sp.frames === 1 ? "" : "s"} ≈ ${sp.imageTokens} tokens (saves ~${sp.savedTokens})`
-							: "  System prompt: stays text (no net savings)",
+							? t("commands.contextReport.snapPrompt", {
+									textTokens: sp.textTokens,
+									frames: sp.frames,
+									plural: sp.frames === 1 ? "" : "s",
+									imageTokens: sp.imageTokens,
+									savedTokens: sp.savedTokens,
+								})
+							: t("commands.contextReport.snapPromptNoSavings"),
 					);
 				}
 				if (snap.toolResults) {
 					const tr = snap.toolResults;
 					lines.push(
 						tr.swapped > 0
-							? `  Tool results: ${tr.swapped} of ${tr.total} imaged, ${tr.textTokens} text tokens → ${tr.frames} frames ≈ ${tr.imageTokens} tokens (saves ~${tr.savedTokens})`
-							: `  Tool results: none imaged (${tr.total} in history)`,
+							? t("commands.contextReport.snapResult", {
+									swapped: tr.swapped,
+									total: tr.total,
+									textTokens: tr.textTokens,
+									frames: tr.frames,
+									imageTokens: tr.imageTokens,
+									savedTokens: tr.savedTokens,
+								})
+							: t("commands.contextReport.snapNoResult", { total: tr.total }),
 					);
 				}
 				if (snap.savedTokens > 0) {
-					lines.push(`  Estimated next request: ~${breakdown.usedTokens - snap.savedTokens} tokens on the wire`);
+					lines.push(t("commands.contextReport.nextRequest", { tokens: breakdown.usedTokens - snap.savedTokens }));
 				}
 			}
 		}
 		return lines.join("\n");
 	} catch {
 		const fallback = runtime.session.getContextUsage();
-		if (!fallback) return "Context usage is unavailable.";
-		return ["Context", `Window: ${fallback.contextWindow}`, `Used: ${fallback.tokens ?? 0}`].join("\n");
+		if (!fallback) return t("commands.contextReport.unavailable");
+		return [
+			t("commands.contextReport.heading"),
+			t("commands.contextReport.window", { tokens: fallback.contextWindow }),
+			t("commands.contextReport.used", { tokens: fallback.tokens ?? 0 }),
+		].join("\n");
 	}
 }

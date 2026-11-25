@@ -8,6 +8,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, getModelDbPath, getProjectDir, getSessionsDir } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import {
 	cfgChroniclerBackfillConcurrency,
@@ -83,7 +84,7 @@ export function parseBackfillDuration(text: string, flag: string): number {
 	const trimmed = text.trim().toLowerCase();
 	if (/^\d+(?:\.\d+)?$/.test(trimmed)) return Number(trimmed) * 1_000;
 	if (!/^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/.test(trimmed)) {
-		throw new CliUsageError(`--${flag} expects a duration like 90s, 10m, or 1h30m; got "${text}"`);
+		throw new CliUsageError(t("cli.commands.chronicle-backfill.invalidDuration", { flag, text }));
 	}
 	let total = 0;
 	for (const [, amount, unit] of trimmed.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)) {
@@ -97,7 +98,7 @@ export function parseBackfillSize(text: string): number {
 	const match = /^(\d+(?:\.\d+)?)\s*([a-z]*)$/i.exec(text.trim());
 	const unit = match ? SIZE_UNITS[match[2]!.toLowerCase()] : undefined;
 	if (!match || unit === undefined)
-		throw new CliUsageError(`--min-size expects a size like 4096, 64k, or 2MB; got "${text}"`);
+		throw new CliUsageError(t("cli.commands.chronicle-backfill.invalidSize", { text }));
 	return Number(match[1]) * unit;
 }
 
@@ -108,7 +109,7 @@ export function parseBackfillSize(text: string): number {
 export function parseBackfillDate(text: string, flag: "since" | "until"): number {
 	const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(text.trim());
 	const ms = dateOnly ? new Date(`${text.trim()}T00:00:00`).getTime() : Date.parse(text);
-	if (Number.isNaN(ms)) throw new CliUsageError(`--${flag} expects a date like 2026-09-01; got "${text}"`);
+	if (Number.isNaN(ms)) throw new CliUsageError(t("cli.commands.chronicle-backfill.invalidDate", { flag, text }));
 	return dateOnly && flag === "until" ? ms + 24 * 3_600_000 : ms;
 }
 
@@ -139,10 +140,14 @@ async function resolveSessionFiles(flags: ChronicleBackfillFlags, deps: Chronicl
 			continue;
 		}
 		const matches = (await listed()).filter(session => sessionMatchesResumeArg(session, arg));
-		if (matches.length === 0) throw new CliUsageError(`No stored session matches "${arg}"`);
+		if (matches.length === 0) throw new CliUsageError(t("cli.commands.chronicle-backfill.sessionNotFound", { arg }));
 		if (matches.length > 1) {
 			throw new CliUsageError(
-				`"${arg}" matches ${matches.length} sessions: ${matches.map(session => session.id).join(", ")}`,
+				t("cli.commands.chronicle-backfill.sessionAmbiguous", {
+					arg,
+					count: matches.length,
+					sessions: matches.map(session => session.id).join(", "),
+				}),
 			);
 		}
 		files.add(path.resolve(matches[0]!.path));
@@ -183,7 +188,12 @@ async function selectSessions(
 		if (!result) return;
 		if (result.status === "rejected") {
 			unreadable++;
-			deps.stderr(`${shortenPath(files[index]!)}: cannot read session: ${errorText(result.reason)}`);
+			deps.stderr(
+				t("cli.commands.chronicle-backfill.cannotReadSession", {
+					path: shortenPath(files[index]!),
+					error: errorText(result.reason),
+				}),
+			);
 			return;
 		}
 		const candidate = result.value;
@@ -202,18 +212,15 @@ function uncovered(coverage: BackfillCoverage): number {
 }
 
 function describeCoverage(coverage: BackfillCoverage): string {
-	return `${coverage.coveredEntries}/${coverage.totalEntries} entries`;
+	return t("cli.commands.chronicle-backfill.entries", {
+		covered: coverage.coveredEntries,
+		total: coverage.totalEntries,
+	});
 }
 
-const OUTCOME_LABEL: Readonly<Record<BackfillOutcome, string>> = {
-	complete: "complete",
-	incomplete: "incomplete (timeout; rerun to resume)",
-	halted: "halted",
-	no_model: "halted: no model resolved for the chronicler role",
-	leased: "skipped: another process holds this session's Chronicler lease",
-	disabled: "skipped: chronicler.enabled is false for this project",
-	legacy: "skipped: v1 transcript without persisted entry ids (resume it once to migrate)",
-};
+function outcomeLabel(outcome: BackfillOutcome): string {
+	return t(`cli.commands.chronicle-backfill.outcomes.${outcome}`);
+}
 
 /** Run the command; returns the process exit code. */
 export async function runChronicleBackfill(
@@ -221,10 +228,10 @@ export async function runChronicleBackfill(
 	deps: ChronicleBackfillDeps,
 ): Promise<number> {
 	if (flags.sessions.length === 0 && !flags.project && !flags.all) {
-		throw new CliUsageError("Select sessions by id or path, --project <dir>, or --all");
+		throw new CliUsageError(t("cli.commands.chronicle-backfill.selectSessions"));
 	}
 	if (flags.concurrency !== undefined && (!Number.isSafeInteger(flags.concurrency) || flags.concurrency < 1)) {
-		throw new CliUsageError("--concurrency must be a positive integer");
+		throw new CliUsageError(t("cli.commands.chronicle-backfill.invalidConcurrency"));
 	}
 	const timeoutOverride = flags.timeout === undefined ? undefined : parseBackfillDuration(flags.timeout, "timeout");
 	const drainOverride = flags.drain === undefined ? undefined : parseBackfillDuration(flags.drain, "drain");
@@ -233,9 +240,7 @@ export async function runChronicleBackfill(
 	const baseSettings = await deps.loadSettings(deps.cwd, overrides);
 	const concurrency = flags.concurrency ?? cfgChroniclerBackfillConcurrency.get(baseSettings);
 	if (!flags.dryRun && cfgChroniclerEnabled.get(baseSettings) !== true) {
-		deps.stderr(
-			"chronicler.enabled is not true in the effective settings; refusing. Pass --force to backfill anyway.",
-		);
+		deps.stderr(t("cli.commands.chronicle-backfill.disabled"));
 		return 2;
 	}
 
@@ -248,12 +253,19 @@ export async function runChronicleBackfill(
 		for (const candidate of pending) {
 			total += candidate.legacy ? 0 : uncovered(candidate);
 			const state = candidate.legacy
-				? "legacy v1 transcript (not backfillable headlessly)"
-				: `${uncovered(candidate)} of ${candidate.totalEntries} entries uncovered, ${candidate.beats} beats`;
+				? t("cli.commands.chronicle-backfill.legacy")
+				: t("cli.commands.chronicle-backfill.dryRunCoverage", {
+						uncovered: uncovered(candidate),
+						total: candidate.totalEntries,
+						beats: candidate.beats,
+					});
 			deps.stdout(`${candidate.sessionId}  ${state}  ${shortenPath(candidate.cwd)}`);
 		}
+		const summary = { sessions: pending.length, total, covered: covered.length, unreadable };
 		deps.stdout(
-			`${pending.length} session(s) need backfill (${total} uncovered entries); ${covered.length} already covered${unreadable ? `; ${unreadable} unreadable` : ""}.`,
+			unreadable
+				? t("cli.commands.chronicle-backfill.dryRunSummaryUnreadable", summary)
+				: t("cli.commands.chronicle-backfill.dryRunSummary", summary),
 		);
 		return unreadable > 0 ? 1 : 0;
 	}
@@ -264,11 +276,16 @@ export async function runChronicleBackfill(
 	const results = await mapWithConcurrencyLimitAllSettled(pending, concurrency, async candidate => {
 		const id = candidate.sessionId;
 		if (candidate.legacy) {
-			deps.stdout(`${id}  ${OUTCOME_LABEL.legacy}  ${shortenPath(candidate.cwd)}`);
+			deps.stdout(`${id}  ${outcomeLabel("legacy")}  ${shortenPath(candidate.cwd)}`);
 			return { outcome: "legacy", before: candidate, after: candidate } satisfies HeadlessBackfillResult;
 		}
 		deps.stdout(
-			`${id}  start  ${describeCoverage(candidate)}, ${candidate.beats} beats  ${shortenPath(candidate.cwd)}`,
+			t("cli.commands.chronicle-backfill.started", {
+				id,
+				coverage: describeCoverage(candidate),
+				beats: candidate.beats,
+				path: shortenPath(candidate.cwd),
+			}),
 		);
 		const settings = await deps.loadSettings(candidate.cwd, overrides);
 		const timeoutMs = timeoutOverride ?? cfgChroniclerBackfillTimeoutMs.get(settings);
@@ -282,11 +299,22 @@ export async function runChronicleBackfill(
 			timeoutMs,
 			drainMs,
 			onProgress: coverage =>
-				deps.stdout(`${id}  ${describeCoverage(coverage)}, +${coverage.beats - candidate.beats} beats  running`),
+				deps.stdout(
+					t("cli.commands.chronicle-backfill.running", {
+						id,
+						coverage: describeCoverage(coverage),
+						beats: coverage.beats - candidate.beats,
+					}),
+				),
 			onNotice: (level, message) => deps.stderr(`${id}  ${level}: ${message}`),
 		});
 		deps.stdout(
-			`${id}  ${describeCoverage(result.after)}, +${result.after.beats - candidate.beats} beats  ${OUTCOME_LABEL[result.outcome]}`,
+			t("cli.commands.chronicle-backfill.finished", {
+				id,
+				coverage: describeCoverage(result.after),
+				beats: result.after.beats - candidate.beats,
+				outcome: outcomeLabel(result.outcome),
+			}),
 		);
 		return result;
 	});
@@ -297,7 +325,12 @@ export async function runChronicleBackfill(
 		if (!settled) return;
 		if (settled.status === "rejected") {
 			counts.set("error", (counts.get("error") ?? 0) + 1);
-			deps.stderr(`${pending[index]!.sessionId}  error: ${errorText(settled.reason)}`);
+			deps.stderr(
+				t("cli.commands.chronicle-backfill.sessionFailed", {
+					id: pending[index]!.sessionId,
+					error: errorText(settled.reason),
+				}),
+			);
 			return;
 		}
 		const result: HeadlessBackfillResult = settled.value;
@@ -305,11 +338,14 @@ export async function runChronicleBackfill(
 		beatsAdded += result.after.beats - result.before.beats;
 	});
 
-	const parts = [`${pending.length} session(s)`, `+${beatsAdded} beats`];
+	const parts = [
+		t("cli.commands.chronicle-backfill.sessionCount", { count: pending.length }),
+		t("cli.commands.chronicle-backfill.beatsAdded", { count: beatsAdded }),
+	];
 	for (const [outcome, count] of counts) parts.push(`${outcome} ${count}`);
-	if (covered.length > 0) parts.push(`already covered ${covered.length}`);
-	if (unreadable > 0) parts.push(`unreadable ${unreadable}`);
-	deps.stdout(`Backfill: ${parts.join(", ")}`);
+	if (covered.length > 0) parts.push(t("cli.commands.chronicle-backfill.alreadyCovered", { count: covered.length }));
+	if (unreadable > 0) parts.push(t("cli.commands.chronicle-backfill.unreadable", { count: unreadable }));
+	deps.stdout(t("cli.commands.chronicle-backfill.summary", { parts: parts.join(", ") }));
 
 	const failed = (counts.get("halted") ?? 0) + (counts.get("no_model") ?? 0) + (counts.get("error") ?? 0);
 	return failed > 0 || unreadable > 0 ? 1 : 0;

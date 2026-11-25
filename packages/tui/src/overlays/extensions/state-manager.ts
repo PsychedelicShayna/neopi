@@ -1,4 +1,5 @@
 /** Pure dashboard tree, filtering, and selection state. */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { compileMenuRegex } from "../../menu-search";
 import { FuzzyQuery, FuzzyText } from "../../fuzzy";
 import {
@@ -190,25 +191,25 @@ export function applyFilter(extensions: Extension[], query: string): Extension[]
 function getKindDisplayName(kind: ExtensionKind): string {
 	switch (kind) {
 		case "extension-module":
-			return "Extension Modules";
+			return t("overlays.state_manager.extension_modules");
 		case "skill":
-			return "Skills";
+			return t("settings.group.skills");
 		case "rule":
-			return "Rules";
+			return t("overlays.state_manager.rules");
 		case "tool":
-			return "Tools";
+			return t("settings.tab.tools.label");
 		case "mcp":
-			return "MCP Servers";
+			return t("overlays.state_manager.mcp_servers");
 		case "prompt":
-			return "Prompts";
+			return t("overlays.state_manager.prompts");
 		case "instruction":
-			return "Instructions";
+			return t("overlays.state_manager.instructions");
 		case "context-file":
-			return "Context Files";
+			return t("overlays.state_manager.context_files");
 		case "hook":
-			return "Hooks";
+			return t("overlays.state_manager.hooks");
 		case "slash-command":
-			return "Slash Commands";
+			return t("overlays.state_manager.slash_commands");
 		default:
 			return kind;
 	}
@@ -230,7 +231,7 @@ export function buildProviderTabs(extensions: Extension[], providers: readonly E
 	// ALL tab first
 	tabs.push({
 		id: "all",
-		label: "ALL",
+		label: t("overlays.state_manager.all_tab"),
 		enabled: true,
 		count: extensions.length,
 	});

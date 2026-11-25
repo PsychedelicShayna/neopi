@@ -6,6 +6,7 @@
 
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Settings } from "../config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { renderSearchResult } from "@oh-my-pi/pi-tui/tools/web-search";
@@ -63,18 +64,20 @@ export function parseSearchArgs(args: string[]): SearchCommandArgs | undefined {
 
 export async function runSearchCommand(cmd: SearchCommandArgs): Promise<void> {
 	if (!cmd.query) {
-		process.stderr.write(`${chalk.red("Error: Query is required")}\n`);
+		process.stderr.write(`${chalk.red(t("cli.commands.webSearch.missingQuery"))}\n`);
 		process.exit(1);
 	}
 
 	if (cmd.recency && !RECENCY_OPTIONS.includes(cmd.recency)) {
-		process.stderr.write(`${chalk.red(`Error: Invalid recency "${cmd.recency}"`)}\n`);
-		process.stderr.write(`${chalk.dim(`Valid recency values: ${RECENCY_OPTIONS.join(", ")}`)}\n`);
+		process.stderr.write(`${chalk.red(t("cli.commands.webSearch.invalidRecency", { recency: cmd.recency }))}\n`);
+		process.stderr.write(
+			`${chalk.dim(t("cli.commands.webSearch.validRecency", { values: RECENCY_OPTIONS.join(", ") }))}\n`,
+		);
 		process.exit(1);
 	}
 
 	if (cmd.limit !== undefined && Number.isNaN(cmd.limit)) {
-		process.stderr.write(`${chalk.red("Error: --limit must be a number")}\n`);
+		process.stderr.write(`${chalk.red(t("cli.commands.webSearch.invalidLimit"))}\n`);
 		process.exit(1);
 	}
 
@@ -104,29 +107,28 @@ export async function runSearchCommand(cmd: SearchCommandArgs): Promise<void> {
 }
 
 export function printSearchHelp(): void {
-	process.stdout.write(`${chalk.bold(`${APP_NAME} q`)} - Test web search models
+	process.stdout.write(`${chalk.bold(`${APP_NAME} q`)} - ${t("cli.commands.webSearch.helpDescription")}
 
-${chalk.bold("Usage:")}
+${chalk.bold(t("cli.commands.grep.helpUsage"))}
   ${APP_NAME} q [options] <query>
   ${APP_NAME} web-search [options] <query>
 
-${chalk.bold("Arguments:")}
-  query      Search query text
+${chalk.bold(t("cli.commands.grep.helpArguments"))}
+  query      ${t("cli.commands.webSearch.helpQuery")}
 
-${chalk.bold("Options:")}
-  --model <selector>  Catalog model selector (for example, web/duckduckgo)
-  --recency <value>   Recency filter (when supported): ${RECENCY_OPTIONS.join(", ")}
-  -l, --limit <n>     Max results to return
-  --compact           Render condensed output
-  -h, --help          Show this help
+${chalk.bold(t("cli.config.help.options"))}
+  --model <selector>  ${t("cli.commands.webSearch.helpModel")}
+  --recency <value>   ${t("cli.commands.webSearch.helpRecency", { values: RECENCY_OPTIONS.join(", ") })}
+  -l, --limit <n>     ${t("cli.commands.webSearch.helpLimit")}
+  --compact           ${t("cli.commands.webSearch.helpCompact")}
+  -h, --help          ${t("cli.commands.grep.helpFlag")}
 
-${chalk.bold("Query directives:")}
+${chalk.bold(t("cli.commands.webSearch.helpDirectives"))}
   site:/-site:  after:/before: (YYYY-MM-DD)  inurl:  intitle:  filetype:
   "exact phrase"  -term  OR
-  Mapped to native provider filters where available, otherwise applied as a
-  lenient post-filter (a constraint matching nothing is relaxed, not fatal).
+${t("cli.commands.webSearch.helpFilters")}
 
-${chalk.bold("Examples:")}
+${chalk.bold(t("cli.config.help.examples"))}
   ${APP_NAME} q --model=web/duckduckgo "what's the color of the sky"
   ${APP_NAME} q --model=openrouter/google/gemini-2.5-flash --recency=week "latest TypeScript changes"
   ${APP_NAME} q 'transformer scaling site:arxiv.org after:2024 -site:reddit.com'

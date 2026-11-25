@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentProgress, AgentSource } from "../tools/task";
 
 /** EventBus channel for aggregated subagent progress */
@@ -141,7 +142,7 @@ export class SessionObserverRegistry {
 		this.#sessions.set("main", {
 			id: "main",
 			kind: "main",
-			label: "Main Session",
+			label: t("overlays.session_observer_registry.main_session"),
 			status: "active",
 			sessionFile: sessionFile ?? existing?.sessionFile,
 			lastUpdate: Date.now(),
@@ -248,7 +249,9 @@ export class SessionObserverRegistry {
 							this.#sessions.set(payload.id, {
 								id: payload.id,
 								kind: "subagent",
-								label: payload.description ?? `Subagent #${payload.index}`,
+								label:
+									payload.description ??
+									t("overlays.session_observer_registry.subagent_number", { index: `${payload.index}` }),
 								agent: payload.agent,
 								description: payload.description,
 								status,
@@ -289,7 +292,9 @@ export class SessionObserverRegistry {
 							this.#sessions.set(id, {
 								id,
 								kind: "subagent",
-								label: progress.description ?? `Subagent #${payload.index}`,
+								label:
+									progress.description ??
+									t("overlays.session_observer_registry.subagent_number", { index: `${payload.index}` }),
 								agent: payload.agent,
 								description: progress.description,
 								status: "active",

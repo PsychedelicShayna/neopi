@@ -15,6 +15,9 @@
 
 ### Added
 
+- Parents can set a running subagent's priority tier to fast, ultra, or off over ctl/RPC ([#915](https://github.com/PsychedelicShayna/neopi/issues/915)).
+- `/moa web` now edits every mixture NeoPi reads for the workspace. A sidebar that opens when you hover the left edge lists them by user and project file, and lets you rename them or move and copy them between scopes. Saving checks each file for edits made since it was loaded and reports a conflict instead of continuing. A move writes the receiving file before removing the original, so an interrupted save can leave a duplicate rather than lose the mixture at the points the tests interrupt it.
+- Alt+T opens the side panel immediately; its Agents view shows live assignments and wait timers, remembers your filters, and follows the newest agent state changes.
 - Open `/moa web` to edit your workspace's Mixture of Agents graph in a local browser and refresh the running session's roster when you save. Like Deck, it warns and asks for confirmation before saving a rewrite that drops source fields ([#849](https://github.com/PsychedelicShayna/neopi/issues/849)).
 - `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
 - `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available or its refresh temporarily fails; `live.endpoint` still overrides automatic routing.
@@ -34,9 +37,11 @@
 - `npi session lease --file <path>` checks the native single-writer gate without claiming it, including for untitled sessions with no turns, and reports a holder only when its live control instance attests ownership ([#833](https://github.com/PsychedelicShayna/neopi/issues/833)).
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
-- Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
+- Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, Mixtures validation messages, exported HTML, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
 - Switch interface languages live with `/language` or `/idioma` and Tab-complete the language name. Both spellings work in either language; the slash menu shows `/idioma` in English and `/language` in Spanish.
+- The Alt+T side panel shows Agents filters, navigation hints, and sorting controls in English or Spanish.
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
+- Mixture Studio follows the interface language, including Spanish labels, controls, and validation findings.
 
 - Tab-complete `session`, `project`, and `global` in `/roles`, or press Ctrl+S in the open menu to cycle the editing scope ([#761](https://github.com/PsychedelicShayna/neopi/issues/761)).
 - Choose session-start Chronicler consent with `chronicler.enabled: ask`, set recording limits by addressing Luna as `@chronicler`, see her blue-bordered notes, and read her optional editorial notes in atom front matter.
@@ -196,6 +201,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Sending `/irc` to a subagent while Main is idle no longer freezes the terminal ([#898](https://github.com/PsychedelicShayna/neopi/issues/898)).
 - IRC direct and group messages no longer fail when unused fields contain empty values ([#883](https://github.com/PsychedelicShayna/neopi/issues/883)).
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
 - Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).

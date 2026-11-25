@@ -1,4 +1,5 @@
 import * as stats from "@oh-my-pi/omp-stats";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { getLocale } from "@oh-my-pi/pi-utils/i18n";
 import { openTernPage } from "../../tools/browser/tern/user-page";
 import * as openUtils from "../../utils/open";
@@ -23,13 +24,16 @@ export interface StatsDashboardLaunchResult {
 
 let activeStatsServer: StatsDashboardServer | undefined;
 
-const STATS_DASHBOARD_USAGE = "Usage: /stats [--port <port>] [--host <host>]";
+function statsUsage() {
+	return t("commands.dashboard.usage");
+}
 
 function parsePort(value: string | undefined): number | string {
-	if (!value) return `Missing port. ${STATS_DASHBOARD_USAGE}`;
-	if (!/^\d+$/.test(value)) return `Invalid port: ${value}`;
+	if (!value) return t("commands.dashboard.missingPort", { usage: statsUsage() });
+	if (!/^\d+$/.test(value)) return t("commands.dashboard.invalidPort", { port: value });
 	const port = Number(value);
-	if (!Number.isInteger(port) || port < 0 || port > 65_535) return `Invalid port: ${value}`;
+	if (!Number.isInteger(port) || port < 0 || port > 65_535)
+		return t("commands.dashboard.invalidPort", { port: value });
 	return port;
 }
 
@@ -54,17 +58,17 @@ export function parseStatsDashboardArgs(args: string): StatsDashboardArgs | { er
 		}
 		if (token === "--host") {
 			const value = tokens[++i];
-			if (!value) return { error: `Missing host. ${STATS_DASHBOARD_USAGE}` };
+			if (!value) return { error: t("commands.dashboard.missingHost", { usage: statsUsage() }) };
 			host = value;
 			continue;
 		}
 		if (token.startsWith("--host=")) {
 			const value = token.slice("--host=".length);
-			if (!value) return { error: `Missing host. ${STATS_DASHBOARD_USAGE}` };
+			if (!value) return { error: t("commands.dashboard.missingHost", { usage: statsUsage() }) };
 			host = value;
 			continue;
 		}
-		return { error: `Unknown option: ${token}. ${STATS_DASHBOARD_USAGE}` };
+		return { error: t("commands.dashboard.unknownOption", { option: token, usage: statsUsage() }) };
 	}
 
 	return { port, host };
@@ -98,10 +102,10 @@ export async function launchStatsDashboard(
 	else openUtils.openPath(url);
 
 	const serverLine = requestedAddressIgnored
-		? `Dashboard already running at: ${url} (requested ${args.host}:${args.port} ignored)`
-		: `Dashboard available at: ${url}`;
+		? t("commands.dashboard.alreadyRunning", { url, host: args.host, port: args.port })
+		: t("commands.dashboard.available", { url });
 
-	return { url, message: `${serverLine} (sessions sync in the background)` };
+	return { url, message: t("commands.dashboard.syncing", { status: serverLine }) };
 }
 
 export function stopStatsDashboard(): void {

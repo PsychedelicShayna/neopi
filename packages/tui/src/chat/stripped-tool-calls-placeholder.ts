@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Text } from "../components/text";
 import { theme } from "../theme";
 import { span, text } from "../native/describe";
@@ -14,7 +15,10 @@ export class StrippedToolCallsPlaceholder extends Text {
 	#native: NativeNode | undefined;
 
 	constructor(strippedToolCalls: number, toolActivityVisible: boolean) {
-		const label = `${strippedToolCalls} tool call${strippedToolCalls === 1 ? "" : "s"} elided — no result on this branch`;
+		const label = t("overlays.stripped_tool_calls_placeholder.elided_calls", {
+			strippedToolCalls: `${strippedToolCalls}`,
+			plural: `${strippedToolCalls === 1 ? "" : "s"}`,
+		});
 		super(theme.fg("dim", theme.italic(label)), 1, 0);
 		this.#label = label;
 		this.#toolActivityVisible = toolActivityVisible;

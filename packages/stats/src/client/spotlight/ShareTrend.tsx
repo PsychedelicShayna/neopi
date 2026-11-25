@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { type ChartSeries, Legend, type SlotMarker, TimeChart } from "../charts";
 import { formatPercent } from "../data/formatters";
+import { useLocale, useTranslation } from "../i18n";
 import { bucketAxis, formatBucket, rangeMeta } from "../data/range";
 import { densify } from "../data/series";
 import type { SpotlightDashboardStats, SpotlightSharePoint, TimeRange } from "../types";
@@ -25,6 +26,8 @@ export interface ShareTrendProps {
 
 /** Share of context that is tool output, per session group, raw per bucket and as a rolling ratio. */
 export function ShareTrend({ stats, range, stale }: ShareTrendProps) {
+	const tr = useTranslation();
+	const locale = useLocale();
 	const meta = rangeMeta(range);
 	const chart = useMemo(() => {
 		const buckets = bucketAxis(
@@ -34,7 +37,8 @@ export function ShareTrend({ stats, range, stale }: ShareTrendProps) {
 		);
 		const series: ChartSeries[] = [];
 		const legend: { key: string; label: string; color: string; value?: string }[] = [];
-		for (const { group, label, color } of GROUPS) {
+		for (const { group, label: english, color } of GROUPS) {
+			const label = tr(`insights.share.group.${group}`, english);
 			const points = stats.share.filter(p => p.group === group);
 			const tool = densify(points, buckets, p => p.toolTokens);
 			const ctx = densify(points, buckets, p => p.contextTokens);
@@ -55,12 +59,18 @@ export function ShareTrend({ stats, range, stale }: ShareTrendProps) {
 			series.push(
 				{
 					key: `${group}:raw`,
-					label: `${label} · bucket`,
+					label: tr("insights.share.bucket", "{label} · bucket", { label }),
 					color,
 					kind: "dots",
 					values: buckets.map((_, i) => (ctx[i] > 0 ? tool[i] / ctx[i] : null)),
 				},
-				{ key: `${group}:avg`, label: `${label} · rolling`, color, kind: "line", values: rolling },
+				{
+					key: `${group}:avg`,
+					label: tr("insights.share.rolling", "{label} · rolling", { label }),
+					color,
+					kind: "line",
+					values: rolling,
+				},
 			);
 			legend.push({ key: group, label, color, value: formatShare(toolSum / ctxSum) });
 		}
@@ -68,23 +78,32 @@ export function ShareTrend({ stats, range, stale }: ShareTrendProps) {
 		if (stats.experimentStart !== null) {
 			const start = Math.floor(stats.experimentStart / meta.bucketMs) * meta.bucketMs;
 			const index = buckets.indexOf(start);
-			if (index >= 0) markers.push({ index, label: "experiment starts" });
+			if (index >= 0) markers.push({ index, label: tr("insights.share.starts", "experiment starts") });
 		}
 		return { buckets, series, legend, markers };
-	}, [stats.share, stats.experimentStart, range, meta.bucketMs]);
+	}, [stats.share, stats.experimentStart, range, meta.bucketMs, tr]);
 
 	return (
 		<Card
 			index={4}
-			title="Tool-output share of context"
+			title={tr("insights.share.title", "Tool-output share of context")}
 			description={
 				stats.experimentStart !== null && chart.markers.length === 0
-					? `Since ${formatBucket(stats.experimentStart, 86_400_000)}, shaped sessions should carry less tool output`
-					: "Shaped sessions should carry less tool output than the rest of your history"
+					? tr("insights.share.since", "Since {date}, shaped sessions should carry less tool output", {
+							date: formatBucket(stats.experimentStart, 86_400_000, locale),
+						})
+					: tr(
+							"insights.share.description",
+							"Shaped sessions should carry less tool output than the rest of your history",
+						)
 			}
 			actions={<Legend items={chart.legend} />}
 			stale={stale}
-			footer={`Tool tokens are result chars ÷ 4; context adds assistant output, your prompts (chars ÷ 4) and each session's first prompt. Dots are single buckets (one ${bucketNoun(meta.bucketMs)}); lines are the trailing ${ROLLING_WINDOW}-bucket ratio of sums.`}
+			footer={tr(
+				"insights.share.footer",
+				"Tool tokens are result chars ÷ 4; context adds assistant output, your prompts (chars ÷ 4) and each session's first prompt. Dots are single buckets (one {duration}); lines are the trailing {window}-bucket ratio of sums.",
+				{ duration: bucketNoun(tr, meta.bucketMs), window: ROLLING_WINDOW },
+			)}
 		>
 			<TimeChart
 				buckets={chart.buckets}
@@ -96,7 +115,7 @@ export function ShareTrend({ stats, range, stale }: ShareTrendProps) {
 				format={v => formatPercent(v, 0)}
 				formatTooltip={v => formatPercent(v)}
 				showTotal={false}
-				emptyLabel="No tool calls in this range"
+				emptyLabel={tr("insights.share.empty", "No tool calls in this range")}
 			/>
 		</Card>
 	);

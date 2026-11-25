@@ -1,13 +1,16 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { IrcBus } from "../../irc/bus";
 import { IRC_EVERYONE, type IrcGroupRequest } from "../../irc/groups";
 import type { ParsedSlashCommand, TuiSlashCommandRuntime } from "../types";
 import { clearSubmittedText } from "./draft";
 import { parseSubcommand } from "./parse";
 
-const IRC_USAGE =
-	"Usage: /irc [<peer>[,<peer>...]|#<group>|all <message>] or /irc group <list|mine|members|create|add|remove|leave|keep> …";
-const IRC_GROUP_USAGE =
-	"Usage: /irc group list|mine, members|leave <group>, create|add|remove <group> <peer>…, or keep <group> <reason>";
+function ircUsage() {
+	return t("commands.irc.usage");
+}
+function ircGroupUsage() {
+	return t("commands.irc.groupUsage");
+}
 
 function parseGroupCommand(input: string): IrcGroupRequest | undefined {
 	const { verb, rest } = parseSubcommand(input);
@@ -39,7 +42,7 @@ export async function handleIrcCommand(command: ParsedSlashCommand, runtime: Tui
 	}
 	const split = args.search(/\s/);
 	if (split < 0) {
-		ctx.showStatus(IRC_USAGE);
+		ctx.showStatus(ircUsage());
 		return;
 	}
 	const target = args.slice(0, split);
@@ -50,11 +53,11 @@ export async function handleIrcCommand(command: ParsedSlashCommand, runtime: Tui
 				? parseGroupCommand(body)
 				: { op: "send" as const, group: target === "all" ? IRC_EVERYONE : target.slice(1), message: body };
 		if (!request) {
-			ctx.showWarning(IRC_GROUP_USAGE);
+			ctx.showWarning(ircGroupUsage());
 			return;
 		}
 		if (!ctx.ircOperatorId) {
-			ctx.showWarning("You are not an IRC participant in this session.");
+			ctx.showWarning(t("commands.irc.notParticipant"));
 			return;
 		}
 		const result = await IrcBus.global().group(ctx.ircOperatorId, request);
@@ -64,7 +67,7 @@ export async function handleIrcCommand(command: ParsedSlashCommand, runtime: Tui
 	}
 	const peers = new Set(target.split(","));
 	if (peers.has("all") || peers.has("")) {
-		ctx.showWarning(IRC_USAGE);
+		ctx.showWarning(ircUsage());
 		return;
 	}
 	const results = await Promise.all([...peers].map(peer => ctx.sendAsIrcOperator(peer, body)));

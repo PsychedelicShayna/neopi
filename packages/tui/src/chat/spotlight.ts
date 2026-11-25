@@ -4,6 +4,7 @@
  * it, where the original is and how Spotlight scored and kept its lines. A native transcript draws it as a notice
  * row under the tool card ({@link SpotlightNotice}); a click on a "saved" or "held out" notice opens the sheet.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatNumber, isRecord } from "@oh-my-pi/pi-utils";
 import type { TspPropNode, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { col, node, propNode, span, text } from "../native/describe";
@@ -346,10 +347,15 @@ export function spotlightNoticeCard(original: SpotlightOriginal, heldOut = false
 		else if (spotlightTone(original, i) === "error") hot++;
 	}
 	const facts = [
-		`${heldOut ? "would keep" : "kept"} ${kept.toLocaleString("en-US")} of ${original.lines.toLocaleString("en-US")} lines`,
+		t("overlays.spotlight.kept_lines", {
+			value: `${heldOut ? t("overlays.spotlight.would_keep") : "kept"}`,
+			toLocaleString: `${kept.toLocaleString("en-US")}`,
+			toLocaleString2: `${original.lines.toLocaleString("en-US")}`,
+		}),
 	];
-	if (scored > 0) facts.push(`${scored.toLocaleString("en-US")} by score`);
-	if (hot > 0) facts.push(`${hot.toLocaleString("en-US")} cut though hot`);
+	if (scored > 0)
+		facts.push(t("overlays.spotlight.by_score", { toLocaleString: `${scored.toLocaleString("en-US")}` }));
+	if (hot > 0) facts.push(t("overlays.spotlight.cut_hot", { toLocaleString: `${hot.toLocaleString("en-US")}` }));
 	return propNode(
 		col(
 			[
@@ -377,8 +383,16 @@ const SHOOTING_STAR_TOKENS = 10_000;
 function noticeSpans(spotlight: SpotlightDetails): TspSpan[] {
 	const saving = spotlightSaving(spotlight);
 	if (spotlight.holdout || spotlight.gated) {
-		const why = spotlight.gated ? "kept whole for editing" : "held out";
-		return [span(STAR_OFF, "icon"), span(`spotlight: ${why} · would save ${formatNumber(Math.max(0, saving))} toks`)];
+		const why = spotlight.gated ? t("overlays.spotlight.kept_for_editing") : t("overlays.spotlight.held_out");
+		return [
+			span(STAR_OFF, "icon"),
+			span(
+				t("overlays.spotlight.spotlight_would_save", {
+					why: `${why}`,
+					max: `${formatNumber(Math.max(0, saving))}`,
+				}),
+			),
+		];
 	}
 	if (!spotlight.original) return [span(STAR_OFF, "icon")];
 	const star = saving > SHOOTING_STAR_TOKENS ? SHOOTING_STAR : STAR;
@@ -386,8 +400,8 @@ function noticeSpans(spotlight: SpotlightDetails): TspSpan[] {
 		span(star, "icon", { fx: "pulse" }),
 		span(
 			saving > 0
-				? `spotlight: saved ${formatNumber(saving)} toks`
-				: `spotlight: reshaped, +${formatNumber(-saving)} toks`,
+				? t("overlays.spotlight.spotlight_saved", { saving: `${formatNumber(saving)}` })
+				: t("overlays.spotlight.spotlight_reshaped", { value: `${formatNumber(-saving)}` }),
 		),
 	];
 }
@@ -442,7 +456,10 @@ export class SpotlightNotice implements Component {
 							this.#spotlight.holdout === true || this.#spotlight.gated === true,
 						),
 					}
-				: { title: "Spotlight: passthrough", aria: "Spotlight: passthrough" }),
+				: {
+						title: t("overlays.spotlight.spotlight_passthrough"),
+						aria: t("overlays.spotlight.spotlight_passthrough"),
+					}),
 			...(original && hasTranscriptActions() ? { actions: { click: "spotlight" } } : {}),
 			...(this.#hidden ? { hidden: true } : {}),
 		});

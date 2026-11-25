@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Box } from "../components/box";
 import { Disclosure } from "../components/disclosure";
 import { type Component } from "../tui";
@@ -223,7 +224,12 @@ function compactionNativeLabel(message: CompactionSummaryMessage): TspSpan[] {
 		spans.push(
 			span(` · ${formatNumber(message.tokensBefore)}`, "muted mono"),
 			span(" → ", "dim"),
-			span(`${formatNumber(message.tokensAfter)} tokens`, "muted mono"),
+			span(
+				t("overlays.compaction_summary_message.token_count", {
+					tokensAfter: `${formatNumber(message.tokensAfter)}`,
+				}),
+				"muted mono",
+			),
 		);
 	}
 	if (message.warning) spans.push(span(` ${theme.icon.warning}`, "warning"));
@@ -235,8 +241,11 @@ function compactionNativeDetail(message: CompactionSummaryMessage): NativeChild[
 	const frames = message.images?.length ?? 0;
 	const caption =
 		frames > 0
-			? `Summary · ${frames} snapcompact frame${frames === 1 ? "" : "s"} attached`
-			: "Summary of the earlier conversation";
+			? t("overlays.compaction_summary_message.summary_frames", {
+					frames: `${frames}`,
+					plural: `${frames === 1 ? "" : "s"}`,
+				})
+			: t("overlays.compaction_summary_message.earlier_summary");
 	const detail: NativeChild[] = [text([span(caption, "dim")], { role: "omp.compaction.caption", key: "caption" })];
 	if (message.warning) detail.push(noticeRow("warning", message.warning, { key: "warning" }));
 	detail.push(md(message.summary, { key: "summary" }));
@@ -256,15 +265,32 @@ function compactionDetailMarkdown(message: CompactionSummaryMessage): string {
 	const tokenLine =
 		message.tokensBefore > 0
 			? message.tokensAfter !== undefined
-				? `Compacted from ${message.tokensBefore.toLocaleString()} to ${message.tokensAfter.toLocaleString()} tokens`
-				: `Compacted from ${message.tokensBefore.toLocaleString()} tokens`
+				? t("overlays.compaction_summary_message.compacted_range", {
+						toLocaleString: `${message.tokensBefore.toLocaleString()}`,
+						toLocaleString2: `${message.tokensAfter.toLocaleString()}`,
+					})
+				: t("overlays.compaction_summary_message.compacted_from", {
+						toLocaleString: `${message.tokensBefore.toLocaleString()}`,
+					})
 			: message.tokensAfter !== undefined
-				? `Compacted to ${message.tokensAfter.toLocaleString()} tokens`
-				: "Compacted context";
+				? t("overlays.compaction_summary_message.compacted_to", {
+						toLocaleString: `${message.tokensAfter.toLocaleString()}`,
+					})
+				: t("overlays.compaction_summary_message.compacted_context");
 	const frameCount = message.images?.length ?? 0;
 	const frameNote =
-		frameCount > 0 ? `\n\n_${frameCount} snapcompact frame${frameCount === 1 ? "" : "s"} attached_` : "";
-	const warningNote = message.warning ? `\n\n${theme.icon.warning} **Warning:** ${message.warning}` : "";
+		frameCount > 0
+			? t("overlays.compaction_summary_message.attached_frames", {
+					frameCount: `${frameCount}`,
+					plural: `${frameCount === 1 ? "" : "s"}`,
+				})
+			: "";
+	const warningNote = message.warning
+		? t("overlays.compaction_summary_message.warning", {
+				warning: `${theme.icon.warning}`,
+				warning2: `${message.warning}`,
+			})
+		: "";
 	return `**${tokenLine}**${warningNote}\n\n${message.summary}${frameNote}`;
 }
 
@@ -276,12 +302,14 @@ function compactionDetailMarkdown(message: CompactionSummaryMessage): string {
 export class HandoffSummaryMessageComponent extends SummaryMessageComponent {
 	constructor(message: CustomMessage<unknown>) {
 		super({
-			label: () => `${theme.icon.context} handed-off`,
-			nativeLabel: () => [span("Handed off", "muted")],
+			label: () => t("overlays.compaction_summary_message.handoff_label", { context: `${theme.icon.context}` }),
+			nativeLabel: () => [span(t("overlays.compaction_summary_message.handed_off"), "muted")],
 			role: "omp.handoff",
 			detailMarkdown: () => {
 				const document = extractHandoffDocument(getCustomMessageText(message));
-				return `**Handoff context**\n\n${document || "_No handoff content._"}`;
+				return t("overlays.compaction_summary_message.handoff_context", {
+					value: `${document || "_No handoff content._"}`,
+				});
 			},
 		});
 	}
@@ -305,10 +333,11 @@ export function createHandoffSummaryMessageComponent(
 export class BranchSummaryMessageComponent extends SummaryMessageComponent {
 	constructor(message: BranchSummaryMessage) {
 		super({
-			label: () => `${theme.icon.branch} branch`,
-			nativeLabel: () => [span("Branch summarized", "muted")],
+			label: () => t("overlays.compaction_summary_message.branch_label", { branch: `${theme.icon.branch}` }),
+			nativeLabel: () => [span(t("overlays.compaction_summary_message.branch_summarized"), "muted")],
 			role: "omp.branch",
-			detailMarkdown: () => `**Branch summary**\n\n${message.summary}`,
+			detailMarkdown: () =>
+				t("overlays.compaction_summary_message.branch_summary", { summary: `${message.summary}` }),
 		});
 	}
 }

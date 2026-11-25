@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	getSegmenter,
@@ -185,10 +186,14 @@ function drawBanner(
 	const esc = formatKeyHint("escape");
 	const subtitleText =
 		event.kind === "unscheduled-weekly-reset"
-			? `Weekly usage cleared early · ${esc} to return`
+			? t("overlays.codex_reset_fireworks.weekly_cleared_return", { esc: `${esc}` })
 			: event.added === 1
-				? `New reset banked · ${event.available} available · ${esc} to return`
-				: `${event.added} resets banked · ${event.available} available · ${esc} to return`;
+				? t("overlays.codex_reset_fireworks.new_reset_return", { available: `${event.available}`, esc: `${esc}` })
+				: t("overlays.codex_reset_fireworks.resets_return", {
+						added: `${event.added}`,
+						available: `${event.available}`,
+						esc: `${esc}`,
+					});
 	const title = truncateToWidth(titleText, innerWidth, "");
 	const subtitle = truncateToWidth(subtitleText, innerWidth, "");
 	const titleOffset = Math.floor((innerWidth - visibleWidth(title)) / 2);
@@ -267,13 +272,16 @@ function drawBurst(
  * is ANSI-only art.
  */
 function describeCodexResetFireworks(event: CodexResetFireworksEvent): NativeNode {
-	const title = event.kind === "unscheduled-weekly-reset" ? "OpenAI reset" : "Saved reset";
+	const title =
+		event.kind === "unscheduled-weekly-reset"
+			? t("overlays.codex_reset_fireworks.openai_reset")
+			: t("overlays.codex_reset_fireworks.saved_reset");
 	const subtitle =
 		event.kind === "unscheduled-weekly-reset"
-			? "Weekly usage cleared early"
+			? t("overlays.codex_reset_fireworks.weekly_cleared")
 			: event.added === 1
-				? `New reset banked · ${event.available} available`
-				: `${event.added} resets banked · ${event.available} available`;
+				? t("overlays.codex_reset_fireworks.new_reset", { available: `${event.available}` })
+				: t("overlays.codex_reset_fireworks.resets", { added: `${event.added}`, available: `${event.available}` });
 	const spark = (glyph: string, color: FireworkColor): TspSpan =>
 		span(glyph, FIREWORK_THEME_COLORS[color], { fx: "pulse" });
 	// The sheet is the frame (Tern bursts confetti from the pane's top edge for this role).
@@ -289,7 +297,7 @@ function describeCodexResetFireworks(event: CodexResetFireworksEvent): NativeNod
 				},
 			}),
 			text([span(subtitle, FIREWORK_THEME_COLORS.cyan)]),
-			actionBar([null, actionButton("Close", "close", { keys: "escape" })]),
+			actionBar([null, actionButton(t("tui.picker.close"), "close", { keys: "escape" })]),
 		],
 		{ align: "center", gap: "sm" },
 	);

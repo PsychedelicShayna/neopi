@@ -1,5 +1,6 @@
 import { TriangleAlert } from "lucide-react";
 import { formatCompact, formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import type { SpotlightDashboardStats } from "../types";
 import { Stat } from "../ui";
 import { foldTools, formatInterval, formatShare, formatSignedCompact, formatSignedCost, OTHER_TOOLS } from "./meta";
@@ -16,6 +17,7 @@ export interface SpotlightHeroProps {
  * full-output figure struck through as the baseline note, then gross, the excess fetch-back and the sample.
  */
 export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps) {
+	const tr = useTranslation();
 	const { gross, clawback, adjusted } = stats;
 	const net = adjusted.netTokens;
 	const netUsd = adjusted.netUsd;
@@ -25,9 +27,17 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 	const thin = adjusted.byTool.filter(row => row.cuts > 0 && row.holdouts < adjusted.minHoldouts).map(row => row.tool);
 	// Prose list: `read`, `read and bash`, `read, bash and eval`, `read, bash, … and 4 more tools`.
 	const thinFold = foldTools(thin);
-	const thinNames = thinFold.rest.length > 0 ? [...thinFold.listed, `${thinFold.rest.length} more tools`] : thin;
+	const thinNames =
+		thinFold.rest.length > 0
+			? [...thinFold.listed, tr("insights.more_tools", "{count} more tools", { count: thinFold.rest.length })]
+			: thin;
 	const thinProse =
-		thinNames.length < 2 ? (thinNames[0] ?? "") : `${thinNames.slice(0, -1).join(", ")} and ${thinNames.at(-1)}`;
+		thinNames.length < 2
+			? (thinNames[0] ?? "")
+			: tr("insights.hero.list", "{preceding} and {last}", {
+					preceding: thinNames.slice(0, -1).join(", "),
+					last: thinNames.at(-1) ?? "",
+				});
 	const heldFold = foldTools(adjusted.byTool);
 	const heldRows = heldFold.listed.map(row => ({
 		tool: row.tool,
@@ -44,14 +54,26 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 	const overstated = gross.fullSavedTokens > 0 ? 1 - gross.savedTokens / gross.fullSavedTokens : null;
 
 	return (
-		<section className="card rise spot-hero" data-stale={stale} aria-label="Spotlight savings summary">
+		<section
+			className="card rise spot-hero"
+			data-stale={stale}
+			aria-label={tr("insights.hero.aria", "Spotlight savings summary")}
+		>
 			<div className="spot-hero-main">
 				<div className="spot-hero-headline">
-					<div className="spot-eyebrow">Net saved in {windowLabel}, after fetch-backs a cut caused</div>
+					<div className="spot-eyebrow">
+						{tr("insights.hero.net_label", "Net saved in {window}, after fetch-backs a cut caused", {
+							window: windowLabel,
+						})}
+					</div>
 					<div className="spot-hero-figures">
 						<span
 							className="spot-hero-value gradient-text"
-							title={net.value === null ? undefined : `${formatInteger(net.value)} tokens`}
+							title={
+								net.value === null
+									? undefined
+									: tr("insights.tokens_count", "{count} tokens", { count: formatInteger(net.value) })
+							}
 						>
 							{net.value === null ? "–" : formatSignedCompact(net.value)}
 						</span>
@@ -60,7 +82,10 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 							<span
 								className="spot-hero-usd"
 								data-negative={netUsd.value < 0}
-								title="Avoided context priced at each later request's cache rates, minus the fetch-backs beyond the holdout baseline (priced the same way) and Spotlight's own bill"
+								title={tr(
+									"insights.hero.net_usd_tip",
+									"Avoided context priced at each later request's cache rates, minus the fetch-backs beyond the holdout baseline (priced the same way) and Spotlight's own bill",
+								)}
 							>
 								{formatSignedCost(netUsd.value)}
 							</span>
@@ -68,34 +93,71 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 					</div>
 					{(tokenInterval !== "" || usdInterval !== "") && (
 						<div className="spot-hero-interval">
-							90% interval{" "}
+							{tr("insights.hero.interval", "90% interval")}{" "}
 							<span className="num">{[tokenInterval, usdInterval].filter(Boolean).join(" · ")}</span>
 						</div>
 					)}
 				</div>
 				<div className="spot-hero-aside">
 					<p className="spot-hero-note">
-						Counted against what pi would have shown unshaped (<code>plain</code>) for the same call (its inline
-						cap and read page), with fetch-backs that held-out results show happen anyway added back.{" "}
+						{tr("insights.hero.plain_lead", "Counted against what pi would have shown unshaped (")}
+						<code>plain</code>
+						{tr(
+							"insights.hero.plain_end",
+							") for the same call (its inline cap and read page), with fetch-backs that held-out results show happen anyway added back.",
+						)}{" "}
 						{gross.fullSavedTokens > gross.savedTokens && (
 							<>
-								Against the full output the shaping read, the cuts would claim{" "}
-								<s className="spot-struck num">{formatCompact(gross.fullSavedTokens)}</s>, overstating the gross
-								by {formatShare(overstated)}.{" "}
+								{tr(
+									"insights.hero.full_lead",
+									"Against the full output the shaping read, the cuts would claim",
+								)}{" "}
+								<s className="spot-struck num">{formatCompact(gross.fullSavedTokens)}</s>
+								{tr("insights.hero.full_end", ", overstating the gross by {share}.", {
+									share: formatShare(overstated),
+								})}{" "}
 							</>
 						)}
 						{gross.widerThanPlain > 0 &&
-							`${formatInteger(gross.widerThanPlain)} ${gross.widerThanPlain === 1 ? "result was" : "results were"} wider than plain would have shown: cuts shown that way count as losses, results pi capped at plain's text save nothing. `}
+							(gross.widerThanPlain === 1
+								? tr(
+										"insights.hero.wider_one",
+										"{count} result was wider than plain would have shown: cuts shown that way count as losses, results pi capped at plain's text save nothing. ",
+										{ count: formatInteger(gross.widerThanPlain) },
+									)
+								: tr(
+										"insights.hero.wider_many",
+										"{count} results were wider than plain would have shown: cuts shown that way count as losses, results pi capped at plain's text save nothing. ",
+										{ count: formatInteger(gross.widerThanPlain) },
+									))}
 						{gross.estimatedPlain > 0 &&
-							`${formatInteger(gross.estimatedPlain)} older ${gross.estimatedPlain === 1 ? "result estimates" : "results estimate"} plain from the inline cap.`}
+							(gross.estimatedPlain === 1
+								? tr(
+										"insights.hero.estimated_one",
+										"{count} older result estimates plain from the inline cap.",
+										{ count: formatInteger(gross.estimatedPlain) },
+									)
+								: tr(
+										"insights.hero.estimated_many",
+										"{count} older results estimate plain from the inline cap.",
+										{ count: formatInteger(gross.estimatedPlain) },
+									))}
 					</p>
 					{thin.length > 0 && (
 						<p className="spot-hero-warn" role="note">
 							<TriangleAlert size={14} aria-hidden="true" />
 							<span>
-								{thinProse} {thin.length === 1 ? "has" : "have"} fewer than{" "}
-								{formatInteger(adjusted.minHoldouts)} held-out results: {thin.length === 1 ? "its" : "their"}{" "}
-								part of the net rests on a thin baseline.
+								{thin.length === 1
+									? tr(
+											"insights.hero.thin_one",
+											"{tools} has fewer than {count} held-out results: its part of the net rests on a thin baseline.",
+											{ tools: thinProse, count: formatInteger(adjusted.minHoldouts) },
+										)
+									: tr(
+											"insights.hero.thin_many",
+											"{tools} have fewer than {count} held-out results: their part of the net rests on a thin baseline.",
+											{ tools: thinProse, count: formatInteger(adjusted.minHoldouts) },
+										)}
 							</span>
 						</p>
 					)}
@@ -105,19 +167,31 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 			<div className="spot-hero-stats">
 				<Stat
 					size="sm"
-					label="Gross vs plain"
-					title="Σ (plain − shortened) tokens over shortened results; a cut that showed more than plain counts negative"
+					label={tr("insights.gross_vs_plain", "Gross vs plain")}
+					title={tr(
+						"insights.gross_vs_plain_tip",
+						"Σ (plain − shortened) tokens over shortened results; a cut that showed more than plain counts negative",
+					)}
 					value={formatSignedCompact(gross.savedTokens)}
-					hint={`${formatShare(gross.ofToolOutput)} of tool output · ${formatInteger(gross.shaped)} of ${formatInteger(gross.results)} results shortened`}
+					hint={tr("insights.hero.gross_hint", "{share} of tool output · {cut} of {total} results shortened", {
+						share: formatShare(gross.ofToolOutput),
+						cut: formatInteger(gross.shaped),
+						total: formatInteger(gross.results),
+					})}
 				/>
 				<Stat
 					size="sm"
-					label="Fetched back beyond baseline"
-					title="Fetch-back tokens beyond what held-out results (shown whole) fetch anyway, per tool (reads split by whether the agent was likely to edit them); 90% interval below"
+					label={tr("insights.hero.fetched", "Fetched back beyond baseline")}
+					title={tr(
+						"insights.hero.fetched_tip",
+						"Fetch-back tokens beyond what held-out results (shown whole) fetch anyway, per tool (reads split by whether the agent was likely to edit them); 90% interval below",
+					)}
 					value={adjusted.excessTokens.value === null ? "–" : formatSignedCompact(-adjusted.excessTokens.value)}
 					hint={
 						<>
-							of {formatCompact(clawback.tokens)} fetched back
+							{tr("insights.hero.fetched_hint", "of {count} fetched back", {
+								count: formatCompact(clawback.tokens),
+							})}
 							{adjusted.excessTokens.lo !== null && adjusted.excessTokens.hi !== null && (
 								<>
 									{" "}
@@ -134,8 +208,12 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 				/>
 				<Stat
 					size="sm"
-					label="Held out"
-					title={`Would-be cuts shown whole at random: the baseline per tool (under ${adjusted.minHoldouts} is thin)`}
+					label={tr("insights.group.holdout.label", "Held out")}
+					title={tr(
+						"insights.hero.holdout_tip",
+						"Would-be cuts shown whole at random: the baseline per tool (under {count} is thin)",
+						{ count: adjusted.minHoldouts },
+					)}
 					value={formatInteger(stats.holdouts)}
 					hint={
 						<span className="spot-hero-tools">
@@ -147,12 +225,20 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 										row.tool === OTHER_TOOLS
 											? heldFold.rest.map(rest => `${rest.tool} ${formatInteger(rest.holdouts)}`).join(", ")
 											: row.thin
-												? `${row.tool}: under ${adjusted.minHoldouts} held out`
+												? tr("insights.hero.thin_tip", "{tool}: under {count} held out", {
+														tool: row.tool,
+														count: adjusted.minHoldouts,
+													})
 												: undefined
 									}
 								>
-									{row.tool} <span className="num">{formatInteger(row.holdouts)}</span>
-									{row.thin && <TriangleAlert size={11} aria-label="thin baseline" />}
+									{heldFold.rest.length > 0 && row === heldRows.at(-1)
+										? tr("insights.other_tools", "other")
+										: row.tool}{" "}
+									<span className="num">{formatInteger(row.holdouts)}</span>
+									{row.thin && (
+										<TriangleAlert size={11} aria-label={tr("insights.hero.thin_aria", "thin baseline")} />
+									)}
 								</span>
 							))}
 						</span>
@@ -160,16 +246,19 @@ export function SpotlightHero({ stats, windowLabel, stale }: SpotlightHeroProps)
 				/>
 				<Stat
 					size="sm"
-					label="Score-free cuts"
-					title="Cuts a random coin made without Spotlight (the no-score fallback rules): what Spotlight's scores add is the difference"
+					label={tr("insights.hero.score_free", "Score-free cuts")}
+					title={tr(
+						"insights.hero.score_free_tip",
+						"Cuts a random coin made without Spotlight (the no-score fallback rules): what Spotlight's scores add is the difference",
+					)}
 					value={formatInteger(stats.scoreFree)}
-					hint="cut without Spotlight, for comparison"
+					hint={tr("insights.hero.score_free_hint", "cut without Spotlight, for comparison")}
 				/>
 				<Stat
 					size="sm"
-					label="Sessions"
+					label={tr("insights.hero.sessions", "Sessions")}
 					value={formatInteger(stats.sessions)}
-					hint="experiment sessions, all shaped"
+					hint={tr("insights.hero.sessions_hint", "experiment sessions, all shaped")}
 				/>
 			</div>
 		</section>

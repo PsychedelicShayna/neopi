@@ -7,6 +7,7 @@
  * result preview; we mirror that as rows plus the raw snapshot text.
  */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import type { Tone } from "../parts";
 import { Badge, Badges, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -158,6 +159,7 @@ function JobRow({ job }: { job: JobSnapshotLike }): ReactNode {
 }
 
 function Summary({ args }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const poll = pollIds(args);
 	const cancel = cancelIds(args);
 	const items: ReactNode[] = [];
@@ -182,11 +184,13 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 			</Badge>,
 		);
 	}
-	if (items.length === 0) return <span className="tv-muted">all running jobs</span>;
+	if (items.length === 0)
+		return <span className="tv-muted">{t("guesttools.job.all_running", "all running jobs")}</span>;
 	return <Badges items={items} />;
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const poll = pollIds(args);
 	const cancel = cancelIds(args);
 	const details = detailsRecord(result);
@@ -214,7 +218,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		<>
 			{(args.list === true || poll.length > 0 || cancel.length > 0) && (
 				<div className="tv-list">
-					{args.list === true && <Row k="list">all jobs</Row>}
+					{args.list === true && <Row k="list">{t("guesttools.job.all", "all jobs")}</Row>}
 					{poll.length > 0 && <Row k="poll">{poll.join(", ")}</Row>}
 					{cancel.length > 0 && <Row k="cancel">{cancel.join(", ")}</Row>}
 				</div>
@@ -226,23 +230,32 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 							running > 0 && (
 								<Badge key="running" tone="accent">
 									{running === jobs.length
-										? `waiting on ${running}`
-										: `waiting on ${running} of ${jobs.length}`}
+										? t("guesttools.job.waiting", "waiting on {count}", { count: running })
+										: t("guesttools.job.waiting_some", "waiting on {count} of {total}", {
+												count: running,
+												total: jobs.length,
+											})}
 								</Badge>
 							),
 							completed > 0 && (
 								<Badge key="done" tone="ok">
-									{completed} done
+									{completed === 1
+										? t("guesttools.job.done.one", "{count} done", { count: completed })
+										: t("guesttools.job.done.many", "{count} done", { count: completed })}
 								</Badge>
 							),
 							failed > 0 && (
 								<Badge key="failed" tone="err">
-									{failed} failed
+									{failed === 1
+										? t("guesttools.job.failed.one", "{count} failed", { count: failed })
+										: t("guesttools.job.failed.many", "{count} failed", { count: failed })}
 								</Badge>
 							),
 							cancelledCount > 0 && (
 								<Badge key="cancelled" tone="warn">
-									{cancelledCount} cancelled
+									{cancelledCount === 1
+										? t("guesttools.job.cancelled.one", "{count} cancelled", { count: cancelledCount })
+										: t("guesttools.job.cancelled.many", "{count} cancelled", { count: cancelledCount })}
 								</Badge>
 							),
 						]}
@@ -257,7 +270,11 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			{badOutcomes.length > 0 && (
 				<Note tone="warn">{badOutcomes.map(o => `${o.id}: ${o.status.replace(/_/g, " ")}`).join(" · ")}</Note>
 			)}
-			<ResultText result={result} maxLines={10} title={jobs.length > 0 ? "snapshot" : undefined} />
+			<ResultText
+				result={result}
+				maxLines={10}
+				title={jobs.length > 0 ? t("guesttools.job.snapshot", "snapshot") : undefined}
+			/>
 		</>
 	);
 }

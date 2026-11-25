@@ -4,6 +4,7 @@
  */
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "../lib/i18n";
 import type { ToolRenderHost, ToolResultImage, ToolResultLike } from "./types";
 import { getHljs, replaceTabs, resultImagesOf, resultTextOf, shortenPath, stripAnsi } from "./util";
 
@@ -104,6 +105,7 @@ export interface OutputProps {
  * search results. Tabs are widened, ANSI escapes stripped.
  */
 export function Output({ text, maxLines = 10, lang, error, variant = "plain", title, bare }: OutputProps): ReactNode {
+	const t = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const clean = useMemo(() => replaceTabs(stripAnsi(text)).replace(/\n+$/, ""), [text]);
 	const lines = useMemo(() => clean.split("\n"), [clean]);
@@ -124,7 +126,9 @@ export function Output({ text, maxLines = 10, lang, error, variant = "plain", ti
 			)}
 			{collapsible && (
 				<button type="button" className="tv-expand" onClick={() => setExpanded(v => !v)}>
-					{expanded ? "collapse" : `⋯ ${lines.length - maxLines} more lines`}
+					{expanded
+						? t("guesttools.output.collapse", "collapse")
+						: t("guesttools.output.more_lines", "⋯ {count} more lines", { count: lines.length - maxLines })}
 				</button>
 			)}
 		</div>
@@ -193,6 +197,7 @@ function openImage(img: ToolResultImage): void {
 
 /** Thumbnails for every image block in a result; click opens full size. */
 export function ResultImages({ result }: { result: ToolResultLike | undefined }): ReactNode {
+	const t = useTranslation();
 	const images = resultImagesOf(result);
 	if (images.length === 0) return null;
 	return (
@@ -203,9 +208,13 @@ export function ResultImages({ result }: { result: ToolResultLike | undefined })
 					type="button"
 					style={{ all: "unset", display: "inline-flex" }}
 					onClick={() => openImage(img)}
-					aria-label={`Open tool result image ${i + 1}`}
+					aria-label={t("guesttools.image.open", "Open tool result image {index}", { index: i + 1 })}
 				>
-					<img className="tv-img" src={`data:${img.mimeType};base64,${img.data}`} alt={`tool result ${i + 1}`} />
+					<img
+						className="tv-img"
+						src={`data:${img.mimeType};base64,${img.data}`}
+						alt={t("guesttools.image.alt", "tool result {index}", { index: i + 1 })}
+					/>
 				</button>
 			))}
 		</div>
@@ -230,7 +239,14 @@ export function Row({ k, children }: { k?: ReactNode; children: ReactNode }): Re
 
 /** Marker for arguments that arrived with the wrong JSON type. */
 export function InvalidArg({ what }: { what?: string }): ReactNode {
-	return <span className="tv-err-text">[invalid {what ?? "arg"}]</span>;
+	const t = useTranslation();
+	return (
+		<span className="tv-err-text">
+			{what == null
+				? t("guesttools.output.invalid_arg", "[invalid arg]")
+				: t("guesttools.output.invalid_named_arg", "[invalid {what}]", { what })}
+		</span>
+	);
 }
 
 /**
@@ -238,6 +254,7 @@ export function InvalidArg({ what }: { what?: string }): ReactNode {
  * faint, blank rows render as `…` gaps (non-contiguous regions).
  */
 export function DiffBlock({ diff, maxLines = 80 }: { diff: string; maxLines?: number }): ReactNode {
+	const t = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const lines = useMemo(() => replaceTabs(stripAnsi(diff)).replace(/\n+$/, "").split("\n"), [diff]);
 	const collapsible = lines.length > maxLines + 1;
@@ -260,7 +277,9 @@ export function DiffBlock({ diff, maxLines = 80 }: { diff: string; maxLines?: nu
 			</div>
 			{collapsible && (
 				<button type="button" className="tv-expand" onClick={() => setExpanded(v => !v)}>
-					{expanded ? "collapse" : `⋯ ${lines.length - maxLines} more lines`}
+					{expanded
+						? t("guesttools.output.collapse", "collapse")
+						: t("guesttools.output.more_lines", "⋯ {count} more lines", { count: lines.length - maxLines })}
 				</button>
 			)}
 		</div>

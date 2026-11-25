@@ -2,6 +2,7 @@
  * Drive a running npi session over its control socket (issue #171).
  */
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ctlFail, ctlList, ctlRpc, ctlSend, ctlState } from "../cli/ctl-cli";
 import { ctlHelp } from "../cli/command-help";
 import { ctlPipe } from "../cli/ctl-pipe";
@@ -82,7 +83,7 @@ export default class Ctl extends Command {
 			if (op === "rpc") {
 				const type = rest[0];
 				if (!type) {
-					process.stderr.write("usage: npi ctl <target> rpc <type> [json-params]\n");
+					process.stderr.write(t("cli.commands.ctl.rpcUsage"));
 					process.exitCode = 2;
 					return;
 				}

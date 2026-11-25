@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { structuredPatchHunks } from "@oh-my-pi/pi-natives";
 import { getAgentDir, getProjectDir, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import { t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import { inspectPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { promptAssets } from "../prompts/catalog";
 import { getPromptAssetKeys, getPromptLexicon } from "../prompts/lexicon";
@@ -63,7 +64,37 @@ interface Manifest {
 }
 const MANIFEST = "OMP_PROMPT_MANIFEST.json";
 const PLAIN_SLOTS = new Set(["SYSTEM.md", "APPEND_SYSTEM.md", "TITLE_SYSTEM.md", "PERSONALITY.md"]);
-class PromptUsageError extends Error {}
+class PromptUsageError extends Error {
+	readonly #messageKey: string;
+	readonly #values: TranslationValues | undefined;
+	readonly #detail: unknown;
+
+	constructor(messageKey: string, values?: TranslationValues, detail?: unknown) {
+		super(t("en", messageKey, usageValues(values, detail, false)));
+		this.#messageKey = messageKey;
+		this.#values = values;
+		this.#detail = detail;
+	}
+
+	localizedMessage(): string {
+		return t(this.#messageKey, usageValues(this.#values, this.#detail, true));
+	}
+}
+
+function usageValues(
+	values: TranslationValues | undefined,
+	detail: unknown,
+	localize: boolean,
+): TranslationValues | undefined {
+	if (detail === undefined) return values;
+	const error =
+		localize && detail instanceof PromptUsageError
+			? detail.localizedMessage()
+			: detail instanceof Error
+				? detail.message
+				: String(detail);
+	return { ...values, error };
+}
 
 function flattenKeys(keys: readonly PromptContextKey[], prefix = ""): PromptContextKey[] {
 	return keys.flatMap(key => {
@@ -88,7 +119,7 @@ function select(assets: readonly PromptAsset[], selectors: readonly string[]): P
 	const selected = new Set<PromptAsset>();
 	for (const selector of selectors) {
 		const found = assets.filter(asset => matches(asset, selector));
-		if (!found.length) throw new PromptUsageError(`Unknown prompt id or glob: ${selector}`);
+		if (!found.length) throw new PromptUsageError("cli.commands.prompts.unknownAsset", { selector });
 		for (const asset of found) selected.add(asset);
 	}
 	return [...selected];
@@ -97,7 +128,7 @@ function assetPath(root: string, asset: PromptAsset): string {
 	const target = path.resolve(root, asset.relPath);
 	const relative = path.relative(root, target);
 	if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-		throw new PromptUsageError(`Unsafe prompt asset path: ${asset.relPath}`);
+		throw new PromptUsageError("cli.commands.prompts.unsafePath", { path: asset.relPath });
 	}
 	return target;
 }
@@ -109,7 +140,7 @@ async function assertSafePath(target: string): Promise<void> {
 		current = path.join(current, part);
 		try {
 			if ((await fs.promises.lstat(current)).isSymbolicLink()) {
-				throw new PromptUsageError(`Refusing to modify a symlink path: ${current}`);
+				throw new PromptUsageError("cli.commands.prompts.symlinkPath", { path: current });
 			}
 		} catch (error) {
 			if (isEnoent(error)) return;
@@ -145,19 +176,17 @@ async function readManifest(root: string): Promise<Manifest | undefined> {
 	try {
 		const value: unknown = await Bun.file(path.join(root, MANIFEST)).json();
 		if (!value || typeof value !== "object" || !("assets" in value) || !Array.isArray(value.assets)) {
-			throw new Error("Expected assets array");
+			throw new PromptUsageError("cli.commands.prompts.manifestAssets");
 		}
 		const manifest = value as Manifest;
 		if (
 			!manifest.assets.every(asset => asset && typeof asset.id === "string" && typeof asset.bundledHash === "string")
 		)
-			throw new Error("Invalid manifest asset");
+			throw new PromptUsageError("cli.commands.prompts.manifestInvalidAsset");
 		return manifest;
 	} catch (error) {
 		if (isEnoent(error)) return undefined;
-		throw new PromptUsageError(
-			`Cannot read ${path.join(root, MANIFEST)}: ${error instanceof Error ? error.message : String(error)}`,
-		);
+		throw new PromptUsageError("cli.commands.prompts.cannotRead", { path: path.join(root, MANIFEST) }, error);
 	}
 }
 function manifestAsset(asset: PromptAsset, bundledHash: string): ManifestAsset {
@@ -180,17 +209,27 @@ function formatDiagnostic(diagnostic: PromptDiagnostic, text?: string): string {
 	const lines = [
 		`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}: ${diagnostic.severity}[${diagnostic.code}]: ${diagnostic.message}`,
 	];
-	if (diagnostic.expression) lines.push(`  expression: ${diagnostic.expression}`);
+	if (diagnostic.expression)
+		lines.push(`  ${t("cli.commands.prompts.diagnosticExpression", { expression: diagnostic.expression })}`);
 	if (source !== undefined) {
 		lines.push(
 			`  ${diagnostic.line} | ${source}`,
 			`    | ${" ".repeat(Math.max(0, diagnostic.column - 1))}${"^".repeat(Math.max(1, diagnostic.endLine === diagnostic.line ? diagnostic.endColumn - diagnostic.column : 1))}`,
 		);
 	}
-	lines.push(`  scope: ${diagnostic.scope}`);
-	if (diagnostic.expectedType) lines.push(`  expected type: ${diagnostic.expectedType}`);
-	if (diagnostic.candidates.length) lines.push(`  nearest candidates: ${diagnostic.candidates.join(", ")}`);
-	if (diagnostic.hint) lines.push(`  hint: ${diagnostic.hint}`);
+	lines.push(`  ${t("cli.commands.prompts.diagnosticScope", { scope: diagnostic.scope })}`);
+	if (diagnostic.expectedType)
+		lines.push(`  ${t("cli.commands.prompts.diagnosticExpectedType", { type: diagnostic.expectedType })}`);
+	if (diagnostic.candidates.length)
+		lines.push(
+			`  ${t("cli.commands.prompts.diagnosticCandidates", { candidates: diagnostic.candidates.join(", ") })}`,
+		);
+	if (diagnostic.hint) {
+		const hintKey = "cli.commands.prompts.bundleDriftHint";
+		const hint =
+			diagnostic.code === "bundle-drift" && diagnostic.hint === t("en", hintKey) ? t(hintKey) : diagnostic.hint;
+		lines.push(`  ${t("cli.commands.prompts.diagnosticHint", { hint })}`);
+	}
 	return lines.join("\n");
 }
 function agentBody(text: string): string {
@@ -213,13 +252,12 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 		const flags = cmd.flags;
 		const targets = cmd.targets ?? [];
 		if (!PROMPT_ACTIONS.includes(cmd.action as PromptsAction))
-			throw new PromptUsageError(`Unknown prompts action: ${cmd.action}`);
+			throw new PromptUsageError("cli.commands.prompts.unknownAction", { action: cmd.action });
 		if ([Boolean(flags.user), Boolean(flags.project), flags.dir !== undefined].filter(Boolean).length > 1)
-			throw new PromptUsageError("Choose only one of --user, --project, or --dir.");
-		if (flags.dir !== undefined && !flags.dir.trim()) throw new PromptUsageError("--dir must not be empty.");
-		if (flags.used && flags.unused) throw new PromptUsageError("Choose --used or --unused, not both.");
-		if (flags.all && (flags.used || flags.unused))
-			throw new PromptUsageError("--all cannot be combined with --used or --unused.");
+			throw new PromptUsageError("cli.commands.prompts.exclusiveRoots");
+		if (flags.dir !== undefined && !flags.dir.trim()) throw new PromptUsageError("cli.commands.prompts.emptyDir");
+		if (flags.used && flags.unused) throw new PromptUsageError("cli.commands.prompts.exclusiveUsage");
+		if (flags.all && (flags.used || flags.unused)) throw new PromptUsageError("cli.commands.prompts.exclusiveAll");
 		const allowed: Record<string, readonly string[]> = {
 			unpack: ["force", "only", "include"],
 			list: [],
@@ -236,14 +274,14 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 				value !== false &&
 				!["json", "user", "project", "dir", ...allowed[cmd.action]].includes(name)
 			)
-				throw new PromptUsageError(`--${name} is not supported by prompts ${cmd.action}.`);
+				throw new PromptUsageError("cli.commands.prompts.unsupportedFlag", { name, action: cmd.action });
 		}
 		if (["show", "keys"].includes(cmd.action) && targets.length !== 1)
-			throw new PromptUsageError(`prompts ${cmd.action} requires one id or path.`);
+			throw new PromptUsageError("cli.commands.prompts.requiresTarget", { action: cmd.action });
 		if (["unpack", "lexicon"].includes(cmd.action) && targets.length)
-			throw new PromptUsageError(`prompts ${cmd.action} does not accept positional targets.`);
+			throw new PromptUsageError("cli.commands.prompts.noTargets", { action: cmd.action });
 		if (cmd.action === "reset" && ((flags.all && targets.length) || (!flags.all && !targets.length)))
-			throw new PromptUsageError("reset requires an id/glob or --all.");
+			throw new PromptUsageError("cli.commands.prompts.resetRequiresTarget");
 		const projectRoot = path.join(cwd, ".omp", "builtin-prompts");
 		const userRoot = path.join(agentDir, "builtin-prompts");
 		const root = flags.dir ? path.resolve(cwd, flags.dir) : flags.project ? projectRoot : userRoot;
@@ -273,11 +311,11 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 						? "refresh-available"
 						: "diverged"
 					: "none";
-			const hint =
+			const hintKey =
 				drift === "refresh-available"
-					? "Override is unchanged from an older bundle. Refresh with unpack --force for this asset."
+					? "cli.commands.prompts.refreshAvailable"
 					: drift === "diverged"
-						? "Override differs from an older bundle. Keep your changes and review prompts diff before refreshing."
+						? "cli.commands.prompts.diverged"
 						: undefined;
 			return {
 				id: asset.id,
@@ -287,13 +325,13 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 				...resolved,
 				manifestBundledHash: prior?.bundledHash,
 				drift,
-				hint,
+				hintKey,
 			};
 		};
 		if (cmd.action === "unpack") {
 			const include = flags.include ?? "core";
 			if (!["core", "feature", "compaction", "dialects", "all"].includes(include))
-				throw new PromptUsageError(`Invalid --include: ${include}`);
+				throw new PromptUsageError("cli.commands.prompts.invalidInclude", { include });
 			const selected = select(
 				assets.filter(asset => include === "all" || asset.group === include),
 				flags.only ? [flags.only] : [],
@@ -321,14 +359,14 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 			await writeSafe(path.join(root, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, true);
 			emit(
 				{ targetDir: root, total: selected.length, written, skipped, manifest },
-				`Wrote ${written.length} prompt templates to ${root}; skipped ${skipped.length} existing files.`,
+				t("cli.commands.prompts.unpacked", { written: written.length, path: root, skipped: skipped.length }),
 			);
 			return 0;
 		}
 		if (cmd.action === "lexicon") {
 			const fullLexicon = getPromptLexicon(assets);
 			if (flags.scope && !fullLexicon.scopes.some(scope => scope.name === flags.scope))
-				throw new PromptUsageError(`Unknown scope: ${flags.scope}`);
+				throw new PromptUsageError("cli.commands.prompts.unknownScope", { scope: flags.scope });
 			const lexicon = flags.scope
 				? getPromptLexicon(assets.filter(asset => asset.scope === flags.scope))
 				: fullLexicon;
@@ -344,31 +382,37 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 			const result = { engineNotes: lexicon.engineNotes, helpers, scopes };
 			const lines = [...result.engineNotes];
 			for (const state of ["used", "unused"] as const) {
-				const heading = state === "used" ? "Used by shipped prompts" : "Available but unused";
+				const heading = t(
+					state === "used" ? "cli.commands.prompts.lexiconUsed" : "cli.commands.prompts.lexiconUnused",
+				);
 				const found = helpers.filter(helper => helper.usage === state);
-				if (found.length) lines.push(`\nHelpers: ${heading}`, ...found.map(helper => `  ${helper.name}`));
+				if (found.length)
+					lines.push(
+						`\n${t("cli.commands.prompts.lexiconHelpers", { heading })}`,
+						...found.map(helper => `  ${helper.name}`),
+					);
 				for (const scope of scopes) {
 					const keys = scope.keys.filter(key => key.usage === state);
 					if (keys.length)
 						lines.push(
-							`\nVariables [${scope.name}]: ${heading}`,
+							`\n${t("cli.commands.prompts.lexiconVariables", { scope: scope.name, heading })}`,
 							...keys.map(
 								key =>
-									`  ${key.path}: ${key.type} (${key.required ? "required" : "optional"}, ${key.resolution ?? "static-fixture"})`,
+									`  ${key.path}: ${key.type} (${t(
+										key.required ? "cli.commands.prompts.required" : "cli.commands.prompts.optional",
+									)}, ${key.resolution ?? "static-fixture"})`,
 							),
 						);
 				}
 			}
-			lines.push(
-				"\nSYSTEM.md, APPEND_SYSTEM.md, TITLE_SYSTEM.md and PERSONALITY.md are plain text, not templates. Runtime-generated strings are not prompt assets.",
-			);
+			lines.push(`\n${t("cli.commands.prompts.plainSlots")}`);
 			emit(result, lines.join("\n"));
 			return 0;
 		}
 		if (cmd.action === "check") {
 			const lexicon = getPromptLexicon(assets);
 			if (flags.scope && !lexicon.scopes.some(scope => scope.name === flags.scope) && flags.scope !== "agent-body")
-				throw new PromptUsageError(`Unknown scope: ${flags.scope}`);
+				throw new PromptUsageError("cli.commands.prompts.unknownScope", { scope: flags.scope });
 			let fixture: Record<string, unknown> | undefined;
 			if (flags.fixture !== undefined) {
 				try {
@@ -378,29 +422,25 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 							? JSON.parse(trimmed)
 							: await Bun.file(path.resolve(cwd, flags.fixture)).json();
 					if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-						throw new Error("Expected a JSON object");
+						throw new PromptUsageError("cli.commands.prompts.fixtureObject");
 					fixture = parsed as Record<string, unknown>;
 				} catch (error) {
-					throw new PromptUsageError(
-						`Invalid --fixture JSON: ${error instanceof Error ? error.message : String(error)}`,
-					);
+					throw new PromptUsageError("cli.commands.prompts.invalidFixture", undefined, error);
 				}
 			}
 			const checks = new Map<string, { asset: PromptAsset; text: string }>();
 			const addFile = async (file: string, known?: PromptAsset): Promise<void> => {
 				if (PLAIN_SLOTS.has(path.basename(file)))
-					throw new PromptUsageError(`${file} is a plain-text content slot, not a template.`);
+					throw new PromptUsageError("cli.commands.prompts.notTemplate", { path: file });
 				let text: string;
 				try {
 					text = await Bun.file(file).text();
 				} catch (error) {
-					throw new PromptUsageError(
-						`Cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`,
-					);
+					throw new PromptUsageError("cli.commands.prompts.cannotRead", { path: file }, error);
 				}
 				const asset = known ?? assets.find(candidate => roots.some(base => assetPath(base, candidate) === file));
 				if (!asset && !flags.scope && !flags.agents && !isAgentPath(file))
-					throw new PromptUsageError(`Cannot infer scope for ${file}; use --scope.`);
+					throw new PromptUsageError("cli.commands.prompts.cannotInferScope", { path: file });
 				const scope = flags.scope ?? asset?.scope ?? "agent-body";
 				const peers = assets.filter(candidate => candidate.scope === scope);
 				const contract =
@@ -496,7 +536,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 						await addFile(file);
 						count++;
 					}
-					if (!count) throw new PromptUsageError(`No files or prompt ids match: ${target}`);
+					if (!count) throw new PromptUsageError("cli.commands.prompts.noMatchingFiles", { target });
 				} else await addFile(path.resolve(cwd, target));
 			}
 			const diagnostics: PromptDiagnostic[] = [];
@@ -525,7 +565,10 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 							message: error instanceof Error ? error.message : String(error),
 							diagnostics,
 						},
-						`${file}: internal validator failure: ${error instanceof Error ? error.message : String(error)}`,
+						t("cli.commands.prompts.validatorFailure", {
+							path: file,
+							error: error instanceof Error ? error.message : String(error),
+						}),
 					);
 					return 3;
 				}
@@ -546,9 +589,9 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 							endColumn: 1,
 							expression: "",
 							scope: asset.scope,
-							message: status.hint ?? "Bundle drift",
+							message: status.hintKey ? t("en", status.hintKey) : "Bundle drift",
 							candidates: [],
-							hint: "Review prompts diff before unpack --force.",
+							hint: t("en", "cli.commands.prompts.bundleDriftHint"),
 						});
 				}
 			const failed = diagnostics.some(
@@ -561,7 +604,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 					? diagnostics
 							.map(diagnostic => formatDiagnostic(diagnostic, checks.get(diagnostic.file)?.text))
 							.join("\n\n")
-					: `Checked ${checks.size} prompt templates; no diagnostics.`,
+					: t("cli.commands.prompts.checked", { count: checks.size }),
 			);
 			return failed ? 1 : 0;
 		}
@@ -572,9 +615,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 		);
 		const selected = select(assets, selectors);
 		if (["show", "keys"].includes(cmd.action) && selected.length !== 1)
-			throw new PromptUsageError(
-				`prompts ${cmd.action} requires exactly one asset, not a glob matching multiple assets.`,
-			);
+			throw new PromptUsageError("cli.commands.prompts.requiresSingleAsset", { action: cmd.action });
 		if (cmd.action === "reset") {
 			const removed: string[] = [];
 			for (const asset of selected) {
@@ -593,7 +634,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 				manifest.assets = manifest.assets.filter(asset => !ids.has(asset.id));
 				await writeSafe(path.join(root, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, true);
 			}
-			emit({ targetDir: root, removed }, `Removed ${removed.length} prompt overrides from ${root}.`);
+			emit({ targetDir: root, removed }, t("cli.commands.prompts.removed", { count: removed.length, path: root }));
 			return 0;
 		}
 		if (cmd.action === "keys") {
@@ -626,19 +667,23 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 				diffs
 					.filter(diff => diff.diff)
 					.map(diff => diff.diff)
-					.join("\n") || "No prompt differences.",
+					.join("\n") || t("cli.commands.prompts.noDifferences"),
 			);
 			return 0;
 		}
 		if (cmd.action === "show") {
-			const status = await metadata(selected[0]);
-			const result = { ...status, ...(flags.vars ? { contract: getPromptAssetKeys(selected[0]) } : {}) };
+			const { hintKey, ...status } = await metadata(selected[0]);
+			const result = {
+				...status,
+				hint: hintKey ? t("en", hintKey) : undefined,
+				...(flags.vars ? { contract: getPromptAssetKeys(selected[0]) } : {}),
+			};
 			emit(
 				result,
 				[
 					`# ${status.id} source=${status.source}${status.path ? ` path=${status.path}` : ""}`,
 					`# hash=${status.hash} bundledHash=${status.bundledHash} drift=${status.drift}`,
-					...(status.hint ? [`# ${status.hint}`] : []),
+					...(hintKey ? [`# ${t(hintKey)}`] : []),
 					...(flags.vars ? [JSON.stringify(result.contract, null, 2)] : []),
 					status.text,
 				].join("\n"),
@@ -647,16 +692,16 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 		}
 		const listed = await Promise.all(
 			selected.map(async asset => {
-				const { text: _text, ...status } = await metadata(asset);
-				return status;
+				const { text: _text, hintKey, ...status } = await metadata(asset);
+				return { status, hintKey };
 			}),
 		);
 		emit(
-			listed,
+			listed.map(({ status, hintKey }) => ({ ...status, hint: hintKey ? t("en", hintKey) : undefined })),
 			listed
 				.map(
-					status =>
-						`${status.id}\tsource=${status.source}\t${status.path ?? "(bundled)"}\thash=${status.hash}\tbundledHash=${status.bundledHash}\tdrift=${status.drift}${status.inspectionOnly ? "\tinspection-only" : ""}${status.hint ? `\n  ${status.hint}` : ""}`,
+					({ status, hintKey }) =>
+						`${status.id}\tsource=${status.source}\t${status.path ?? "(bundled)"}\thash=${status.hash}\tbundledHash=${status.bundledHash}\tdrift=${status.drift}${status.inspectionOnly ? "\tinspection-only" : ""}${hintKey ? `\n  ${t(hintKey)}` : ""}`,
 				)
 				.join("\n"),
 		);
@@ -667,7 +712,7 @@ export async function runPromptsCommand(cmd: PromptsCommandArgs, options: Prompt
 			out(
 				`${JSON.stringify({ error: error instanceof PromptUsageError ? "usage" : "command-failure", message })}\n`,
 			);
-		else err(`prompts: ${message}\n`);
+		else err(`prompts: ${error instanceof PromptUsageError ? error.localizedMessage() : message}\n`);
 		return error instanceof PromptUsageError ? 2 : 3;
 	}
 }

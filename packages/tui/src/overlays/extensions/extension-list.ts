@@ -5,6 +5,7 @@
  * that toggles the entire provider. All items below are dimmed when the
  * master switch is off.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspPickerGroup, TspPickerItem, TspProps, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
 import { node, span, stableKey } from "../../native/describe";
@@ -287,7 +288,7 @@ export class ExtensionList implements Component {
 		const items = this.#menu.visibleItems;
 		const view = this.#syncScroll();
 		if (items.length === 0) {
-			lines.push(theme.fg("muted", "  No extensions found for this provider."));
+			lines.push(theme.fg("muted", t("overlays.extension_list.no_extensions_indented")));
 			return lines;
 		}
 
@@ -416,12 +417,12 @@ export class ExtensionList implements Component {
 			"list",
 			{
 				selected: selected ? nativeItemId(selected) : null,
-				empty: "No extensions found for this provider.",
+				empty: t("overlays.extension_list.no_extensions"),
 				virtual: true,
 				grow: 1,
 				basis: 0,
 				actions: { click: "select", dblclick: "activate" },
-				aria: "Extensions",
+				aria: t("settings.group.extensions"),
 			},
 			rows,
 			key,
@@ -454,11 +455,13 @@ export class ExtensionList implements Component {
 		if (item.type === "user-source") {
 			const providerOff =
 				this.#callbacks.getProviders?.().find(provider => provider.id === item.providerId)?.enabled === false;
-			return providerOff ? { on: item.enabled, blocked: "Provider disabled" } : { on: item.enabled };
+			return providerOff
+				? { on: item.enabled, blocked: t("overlays.extension_list.provider_disabled") }
+				: { on: item.enabled };
 		}
 		const on = item.item.state !== "disabled";
-		if (isShadowedExtension(item.item)) return { on, blocked: "Shadowed by another source" };
-		if (this.#isMasterDisabled()) return { on, blocked: "Provider disabled" };
+		if (isShadowedExtension(item.item)) return { on, blocked: t("overlays.extension_list.shadowed_source") };
+		if (this.#isMasterDisabled()) return { on, blocked: t("overlays.extension_list.provider_disabled") };
 		return { on };
 	}
 
@@ -489,10 +492,12 @@ export class ExtensionList implements Component {
 		if (entry.type === "master") {
 			return {
 				id,
-				label: `Enable ${sanitizeDisplayLine(entry.providerName)}`,
+				label: t("overlays.extension_list.enable_provider", {
+					providerName: `${sanitizeDisplayLine(entry.providerName)}`,
+				}),
 				icon: "power",
 				dot: entry.enabled ? "success" : "muted",
-				badges: [{ text: "Master Switch", tone: "warning" }],
+				badges: [{ text: t("overlays.extension_list.master_switch"), tone: "warning" }],
 				tone: entry.enabled ? undefined : "muted",
 			};
 		}
@@ -500,12 +505,14 @@ export class ExtensionList implements Component {
 			const off = !entry.enabled || masterDisabled;
 			return {
 				id,
-				label: `Load ~/ ${sanitizeDisplayLine(entry.providerName)} config`,
+				label: t("overlays.extension_list.load_user_config", {
+					providerName: `${sanitizeDisplayLine(entry.providerName)}`,
+				}),
 				icon: "folder",
-				detail: "opt-in; project config always loads",
+				detail: t("overlays.extension_list.opt_in_detail"),
 				dot: entry.enabled ? "success" : "muted",
 				tone: off ? "muted" : undefined,
-				disabled: masterDisabled ? "Provider disabled" : undefined,
+				disabled: masterDisabled ? t("overlays.extension_list.provider_disabled") : undefined,
 			};
 		}
 		const ext = entry.item;
@@ -533,7 +540,11 @@ export class ExtensionList implements Component {
 						{
 							text: "shadowed",
 							tone: "warning",
-							title: ext.shadowedBy ? `Shadowed by ${sanitizeDisplayLine(ext.shadowedBy)}` : undefined,
+							title: ext.shadowedBy
+								? t("overlays.extension_list.shadowed_by", {
+										shadowedBy: `${sanitizeDisplayLine(ext.shadowedBy)}`,
+									})
+								: undefined,
 						},
 					]
 				: undefined,
@@ -541,7 +552,7 @@ export class ExtensionList implements Component {
 			// Only a disabled provider makes the row inert. An extension switched
 			// off by its own toggle must stay activatable, or the click/dblclick
 			// that turned it off could never turn it back on.
-			disabled: masterDisabled ? "Provider disabled" : undefined,
+			disabled: masterDisabled ? t("overlays.extension_list.provider_disabled") : undefined,
 		};
 	}
 
@@ -571,8 +582,8 @@ export class ExtensionList implements Component {
 		const checkbox = item.enabled
 			? theme.fg("success", theme.checkbox.checked)
 			: theme.fg("dim", theme.checkbox.unchecked);
-		const label = `Load ~/ ${item.providerName} config`;
-		const badge = theme.fg("muted", "(opt-in; project config always loads)");
+		const label = t("overlays.extension_list.load_user_config", { providerName: `${item.providerName}` });
+		const badge = theme.fg("muted", t("overlays.extension_list.opt_in_badge"));
 
 		let line = `${checkbox} ${theme.icon.folder} ${label}  ${badge}`;
 
@@ -591,8 +602,8 @@ export class ExtensionList implements Component {
 			? theme.fg("success", theme.checkbox.checked)
 			: theme.fg("dim", theme.checkbox.unchecked);
 		const icon = theme.icon.package;
-		const label = `Enable ${item.providerName}`;
-		const badge = theme.fg("warning", "(Master Switch)");
+		const label = t("overlays.extension_list.enable_provider", { providerName: `${item.providerName}` });
+		const badge = theme.fg("warning", t("overlays.extension_list.master_switch_badge"));
 
 		let line = `${checkbox} ${icon} ${label}  ${badge}`;
 
@@ -825,25 +836,25 @@ export class ExtensionList implements Component {
 	#getKindLabel(kind: ExtensionKind): string {
 		switch (kind) {
 			case "extension-module":
-				return "Extension Modules";
+				return t("overlays.extension_list.extension_modules");
 			case "skill":
-				return "Skills";
+				return t("settings.group.skills");
 			case "tool":
-				return "Tools";
+				return t("settings.tab.tools.label");
 			case "slash-command":
-				return "Commands";
+				return t("overlays.extension_list.commands");
 			case "rule":
-				return "Rules";
+				return t("overlays.extension_list.rules");
 			case "mcp":
-				return "MCP Servers";
+				return t("overlays.extension_list.mcp_servers");
 			case "hook":
-				return "Hooks";
+				return t("overlays.extension_list.hooks");
 			case "prompt":
-				return "Prompts";
+				return t("overlays.extension_list.prompts");
 			case "context-file":
-				return "Context";
+				return t("settings.tab.context.label");
 			case "instruction":
-				return "Instructions";
+				return t("overlays.extension_list.instructions");
 			default:
 				return kind;
 		}

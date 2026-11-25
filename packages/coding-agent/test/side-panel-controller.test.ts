@@ -211,7 +211,7 @@ describe("SidePanelController", () => {
 
 	for (const side of ["right", "left"] as const) {
 		it(`routes inline mouse by column on a ${side} dock`, async () => {
-			const h = await harness(120, { "sidebar.enabled": true, "sidebar.side": side });
+			const h = await harness(120, { "sidebar.enabled": true, "sidebar.side": side, "sidebar.view": "todo" });
 			try {
 				const routed: number[] = [];
 				h.controller.registerView("todo", {
@@ -270,7 +270,7 @@ describe("SidePanelController", () => {
 	}
 
 	it("re-renders cached section titles in a new theme after invalidate", async () => {
-		const h = await harness(120, { "sidebar.enabled": true });
+		const h = await harness(120, { "sidebar.enabled": true, "sidebar.view": "todo" });
 		const original = theme;
 		try {
 			h.controller.registerView("todo", { id: "todo", title: "TODO", content: () => ["task"] });
@@ -294,6 +294,7 @@ describe("SidePanelController", () => {
 	it("shows one view at a time and cycles views on a right-click in the panel", async () => {
 		const h = await harness(120, { "sidebar.enabled": true });
 		try {
+			cfgSidebarView.set(h.settings, "todo");
 			h.controller.registerView("todo", { id: "todo", title: "TODO", content: () => ["task one"] });
 			h.controller.registerView("agents", { id: "agents", title: "AGENTS", content: () => ["agent row"] });
 			h.controller.registerView("irc", { id: "irc", title: "IRC", content: () => ["irc line"] });

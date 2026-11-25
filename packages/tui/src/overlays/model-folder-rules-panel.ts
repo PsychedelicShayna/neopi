@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Input } from "../components/input";
 import { type SelectItem, SelectList } from "../components/select-list";
 import { matchesKey } from "../keys";
@@ -17,9 +18,15 @@ import {
 } from "./model-folder-rules";
 
 export const MODEL_FOLDER_RULES_FEATURE = "model-folder-rules";
-const TITLE = "Folder rules";
 
 type Attribute = ModelFolderCondition["attribute"];
+
+function attributeLabel(attribute: Attribute): string {
+	return attribute === "tps"
+		? MODEL_FOLDER_ATTRIBUTES.tps.label
+		: t(`overlaysModel.folderRules.attribute.${attribute}`);
+}
+
 type Operator = ModelFolderCondition["operator"];
 export type FolderRulesAction = "save" | "run" | "force";
 interface ConditionDraft {
@@ -29,11 +36,11 @@ interface ConditionDraft {
 	adding: boolean;
 }
 type View = "rules" | "condition" | "attribute" | "operator" | "value";
-const attributes = Object.entries(MODEL_FOLDER_ATTRIBUTES).map(([value, { label }]) => ({ value, label }));
 
 /** Build new conditions step by step; edit saved rows without replaying the wizard. */
 export class ModelFolderRulesPanel {
 	#list = new SelectList([], 12, getSelectListTheme(), { activateOnSpace: false });
+	#labelsLocale = getLocale();
 	#clauses: ModelFolderCondition[][];
 	#ingest: boolean;
 	#view: View = "rules";
@@ -61,8 +68,8 @@ export class ModelFolderRulesPanel {
 	}
 
 	get hint(): string {
-		if (this.#view === "value") return "Enter add to expression · Esc back · Ctrl+C cancel editor";
-		return "Enter select · Space toggle · Esc back · Ctrl+C cancel editor";
+		if (this.#view === "value") return t("overlaysModel.folderRules.hintValue");
+		return t("overlaysModel.folderRules.hint");
 	}
 
 	#enter(view: View, selected?: string): void {
@@ -75,6 +82,7 @@ export class ModelFolderRulesPanel {
 	}
 
 	#rebuild(): void {
+		this.#labelsLocale = getLocale();
 		let rows: SelectItem[];
 		const draft = this.#draft;
 		switch (this.#view) {
@@ -82,30 +90,37 @@ export class ModelFolderRulesPanel {
 				rows = this.#clauses.flatMap((clause, group) => [
 					...clause.map((condition, index) => ({
 						value: `condition:${group}:${index}`,
-						label: `${index > 0 ? "And" : group === 0 ? "If" : "Or"}  ${MODEL_FOLDER_ATTRIBUTES[condition.attribute].label}`,
-						description: `${condition.invert ? "NOT " : ""}${condition.operator} ${sanitizeDisplayWarning(condition.value)}`,
+						label: `${index > 0 ? t("overlaysModel.folderRules.and") : group === 0 ? t("overlaysModel.folderRules.if") : t("overlaysModel.folderRules.or")}  ${attributeLabel(condition.attribute)}`,
+						description: `${condition.invert ? t("overlaysModel.folderRules.not") : ""}${condition.operator} ${sanitizeDisplayWarning(condition.value)}`,
 					})),
-					{ value: `and:${group}`, label: "  + And condition" },
+					{ value: `and:${group}`, label: t("overlaysModel.folderRules.addAnd") },
 				]);
 				rows.push(
-					{ value: "or", label: this.#clauses.length ? "+ Or clause" : "+ First condition" },
+					{
+						value: "or",
+						label: this.#clauses.length
+							? t("overlaysModel.folderRules.addOr")
+							: t("overlaysModel.folderRules.addFirst"),
+					},
 					{
 						value: "ingest",
-						label: "Ingest filter",
-						description: this.#ingest ? "On · adds matches on refresh" : "Off",
+						label: t("overlaysModel.folderRules.ingest"),
+						description: this.#ingest
+							? t("overlaysModel.folderRules.ingestOn")
+							: t("overlaysModel.folderRules.off"),
 					},
-					{ value: "save", label: "Save rules" },
+					{ value: "save", label: t("overlaysModel.folderRules.save") },
 					{
 						value: "run",
-						label: "Run once",
-						description: "Save and add matching models now",
+						label: t("overlaysModel.folderRules.run"),
+						description: t("overlaysModel.folderRules.runDescription"),
 						disabled: this.#clauses.length === 0,
 					},
 					{
 						value: "force",
-						label: "Force apply",
-						description: "Save and replace membership with matches",
-						confirmation: "Enter again to remove non-matching models",
+						label: t("overlaysModel.folderRules.force"),
+						description: t("overlaysModel.folderRules.forceDescription"),
+						confirmation: t("overlaysModel.folderRules.forceConfirmation"),
 						disabled: this.#clauses.length === 0,
 					},
 				);
@@ -116,28 +131,48 @@ export class ModelFolderRulesPanel {
 				rows = [
 					{
 						value: "attribute",
-						label: "Attribute ▾",
-						description: MODEL_FOLDER_ATTRIBUTES[condition.attribute].label,
+						label: t("overlaysModel.folderRules.attribute"),
+						description: attributeLabel(condition.attribute),
 					},
-					{ value: "operator", label: "Operator ▾", description: condition.operator },
-					{ value: "value", label: "Value", description: sanitizeDisplayWarning(condition.value) || "Required" },
-					{ value: "invert", label: "Invert", description: condition.invert ? "On" : "Off" },
-					{ value: "done", label: "Apply condition" },
+					{ value: "operator", label: t("overlaysModel.folderRules.operator"), description: condition.operator },
+					{
+						value: "value",
+						label: t("overlaysModel.folderRules.value"),
+						description: sanitizeDisplayWarning(condition.value) || t("overlaysModel.folderRules.required"),
+					},
+					{
+						value: "invert",
+						label: t("overlaysModel.folderRules.invert"),
+						description: condition.invert
+							? t("overlaysModel.folderRules.on")
+							: t("overlaysModel.folderRules.off"),
+					},
+					{ value: "done", label: t("overlaysModel.folderRules.applyCondition") },
 				];
-				if (this.#clauses[draft.clause]?.[draft.index]) rows.push({ value: "remove", label: "Remove condition" });
+				if (this.#clauses[draft.clause]?.[draft.index])
+					rows.push({ value: "remove", label: t("overlaysModel.folderRules.removeCondition") });
 				break;
 			}
 			case "attribute":
-				rows = attributes;
+				rows = (Object.keys(MODEL_FOLDER_ATTRIBUTES) as Attribute[]).map(value => ({
+					value,
+					label: attributeLabel(value),
+				}));
 				break;
 			case "operator":
 				if (!draft) return;
 				rows = modelFolderOperators(draft.condition.attribute);
 				if (draft.adding)
-					rows.unshift({ value: "invert", label: "Invert", description: draft.condition.invert ? "On" : "Off" });
+					rows.unshift({
+						value: "invert",
+						label: t("overlaysModel.folderRules.invert"),
+						description: draft.condition.invert
+							? t("overlaysModel.folderRules.on")
+							: t("overlaysModel.folderRules.off"),
+					});
 				break;
 			case "value":
-				rows = [{ value: "applyValue", label: "Apply value" }];
+				rows = [{ value: "applyValue", label: t("overlaysModel.folderRules.applyValue") }];
 				break;
 		}
 		this.#list.setItems(rows);
@@ -288,28 +323,35 @@ export class ModelFolderRulesPanel {
 	#heading(): string {
 		switch (this.#view) {
 			case "rules":
-				return `${sanitizeDisplayWarning(this.name)} · Match every condition in any clause. Save to keep changes.`;
+				return t("overlaysModel.folderRules.panelDescription", { name: sanitizeDisplayWarning(this.name) });
 			case "condition":
-				return "Edit condition";
+				return t("overlaysModel.folderRules.editCondition");
 			case "attribute":
-				return "Choose model attribute";
+				return t("overlaysModel.folderRules.chooseAttribute");
 			case "operator":
-				return "Choose comparison operator";
+				return t("overlaysModel.folderRules.chooseOperator");
 			case "value": {
 				const condition = this.#draft?.condition;
-				if (!condition) return "Enter comparison value";
-				const { label, kind } = MODEL_FOLDER_ATTRIBUTES[condition.attribute];
-				if (condition.operator === "~=") return `${label} · case-insensitive regex`;
+				if (!condition) return t("overlaysModel.folderRules.enterValue");
+				const label = attributeLabel(condition.attribute);
+				const { kind } = MODEL_FOLDER_ATTRIBUTES[condition.attribute];
+				if (condition.operator === "~=") return t("overlaysModel.folderRules.regexHint", { label });
 				if (condition.operator === "in")
-					return `${label} · ${kind === "text" ? "substring or " : ""}comma-separated values`;
-				if (condition.operator === "*=") return `${label} · glob pattern`;
-				return `${label} · ${kind === "boolean" ? "true or false" : kind}`;
+					return t("overlaysModel.folderRules.listHint", {
+						label,
+						prefix: kind === "text" ? t("overlaysModel.folderRules.listHintText") : "",
+					});
+				if (condition.operator === "*=") return t("overlaysModel.folderRules.globHint", { label });
+				return `${label} · ${kind === "boolean" ? "true or false" : t(`overlaysModel.folderRules.kind.${kind}`)}`;
 			}
 		}
 	}
 
 	render(width: number, rows: number): string[] {
-		const title = theme.bold(TITLE) + uiProvenanceSuffix("features", MODEL_FOLDER_RULES_FEATURE, true);
+		if (this.#labelsLocale !== getLocale()) this.#rebuild();
+		const title =
+			theme.bold(t("overlaysModel.folderRules.title")) +
+			uiProvenanceSuffix("features", MODEL_FOLDER_RULES_FEATURE, true);
 		const lines = [title, this.#heading()];
 		if (this.#error) lines.push(theme.fg("error", this.#error));
 		else if (this.#notice) lines.push(theme.fg("success", this.#notice));
@@ -320,12 +362,13 @@ export class ModelFolderRulesPanel {
 	}
 
 	describe(): NativeNode {
+		if (this.#labelsLocale !== getLocale()) this.#rebuild();
 		return node(
 			"col",
 			{ gap: "sm", grow: 1 },
 			[
 				text([
-					span(TITLE),
+					span(t("overlaysModel.folderRules.title")),
 					span(
 						uiProvenanceSuffix("features", MODEL_FOLDER_RULES_FEATURE),
 						provenanceColor(uiProvenance("features", MODEL_FOLDER_RULES_FEATURE)),

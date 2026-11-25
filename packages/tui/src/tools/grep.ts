@@ -1,3 +1,5 @@
+import { formatCount } from "./localized-count";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
@@ -19,7 +21,6 @@ import { fileHyperlink, renderStatusLine, renderTreeList } from "../render";
 import {
 	createCachedComponent,
 	fitHeaderedRows,
-	formatCount,
 	formatEmptyMessage,
 	formatErrorDetail,
 	PREVIEW_LIMITS,
@@ -170,7 +171,8 @@ export const grepToolRenderer = {
 		const description = grepSubject(pattern, args, uiTheme, details, searchPath);
 
 		if (result.isError || details?.error) {
-			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || "Unknown error";
+			const errorText =
+				details?.error || result.content?.find(c => c.type === "text")?.text || t("tools.common.unknown_error");
 			const header = renderStatusLine(
 				{ icon: "error", title: "Grep", titleColor: "toolTitle", description },
 				uiTheme,
@@ -183,7 +185,7 @@ export const grepToolRenderer = {
 		if (!hasDetailedData) {
 			const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text;
 			if (!textContent || textContent === "No matches found") {
-				return new Text(formatEmptyMessage("No matches found", uiTheme), 0, 0);
+				return new Text(formatEmptyMessage(t("tools.common.no_matches"), uiTheme), 0, 0);
 			}
 			const lines = textContent.split("\n").filter(line => line.trim() !== "");
 			const header = renderStatusLine(
@@ -224,10 +226,13 @@ export const grepToolRenderer = {
 		const missingPathsList = details?.missingPaths ?? [];
 		const missingNote =
 			missingPathsList.length > 0
-				? uiTheme.fg("warning", `skipped missing: ${missingPathsList.join(", ")}`)
+				? uiTheme.fg("warning", t("tools.common.missing", { paths: missingPathsList.join(", ") }))
 				: undefined;
 		const binaryNote = details?.binaryMatches?.length
-			? uiTheme.fg("warning", `binary matches: ${formatCount("file", details.binaryMatches.length)}`)
+			? uiTheme.fg(
+					"warning",
+					t("tools.grep.binary_matches", { files: formatCount("file", details.binaryMatches.length) }),
+				)
 			: undefined;
 		const extraLines = compact([missingNote, binaryNote]);
 
@@ -238,7 +243,7 @@ export const grepToolRenderer = {
 					title: "Grep",
 					titleColor: "toolTitle",
 					description,
-					meta: [uiTheme.fg("warning", "0 matches")],
+					meta: [uiTheme.fg("warning", t("tools.common.no_matches_count"))],
 				},
 				uiTheme,
 			);
@@ -255,7 +260,7 @@ export const grepToolRenderer = {
 		const singleFileScope = hasScope && fileCount === 1 && !allLines.some(isGroupedHeader);
 		const meta = [formatCount("match", matchCount)];
 		if (!singleFileScope) meta.push(formatCount("file", fileCount));
-		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
+		if (truncated) meta.push(uiTheme.fg("warning", t("tools.common.truncated")));
 		const header = renderStatusLine(
 			{
 				...(truncated ? { icon: "warning" as const } : { iconOverride: grepStatusIcon(uiTheme) }),
@@ -316,15 +321,18 @@ export const grepToolRenderer = {
 	): NativeToolView {
 		const details = result.details;
 		if (result.isError || details?.error) {
-			return inlineErrorView(grepNativeHead(args), details?.error || resultText(result) || "Unknown error");
+			return inlineErrorView(
+				grepNativeHead(args),
+				details?.error || resultText(result) || t("tools.common.unknown_error"),
+			);
 		}
 		const textContent = details?.displayContent ?? resultText(result);
 		const missing = details?.missingPaths ?? [];
-		const missingNote = missing.length > 0 ? `skipped missing: ${missing.join(", ")}` : undefined;
+		const missingNote = missing.length > 0 ? t("tools.common.missing", { paths: missing.join(", ") }) : undefined;
 		const binaryNote = details?.binaryMatches?.length
-			? `binary matches: ${formatCount("file", details.binaryMatches.length)}`
+			? t("tools.grep.binary_matches", { files: formatCount("file", details.binaryMatches.length) })
 			: undefined;
-		const scope = details?.scopePath ? `in ${details.scopePath}` : undefined;
+		const scope = details?.scopePath ? t("tools.common.scope", { path: details.scopePath }) : undefined;
 		const hasDetailedData = details?.matchCount !== undefined || details?.fileCount !== undefined;
 		const matchCount = details?.matchCount ?? 0;
 		if (
@@ -333,7 +341,7 @@ export const grepToolRenderer = {
 		) {
 			const foot = footnoteText(compact([missingNote, binaryNote]));
 			return {
-				tool: grepNativeHead(args, compact([scope, "0 matches"])),
+				tool: grepNativeHead(args, compact([scope, t("tools.common.no_matches_count")])),
 				tone: "warning",
 				inline: true,
 				body: foot ? [foot] : undefined,
@@ -357,7 +365,7 @@ export const grepToolRenderer = {
 			details?.meta,
 		);
 		return {
-			tool: truncated ? { ...head, badges: [{ text: "truncated", tone: "warning" }] } : head,
+			tool: truncated ? { ...head, badges: [{ text: t("tools.common.truncated"), tone: "warning" }] } : head,
 			inline: true,
 			body: compact<NativeChild>([
 				...describeGroupedOutput(lines, {
@@ -377,7 +385,7 @@ function grepNativeHead(args: GrepRenderArgs | undefined, meta?: readonly string
 	const parts = meta ? [...meta] : [];
 	if (!meta && args) {
 		const paths = toPathList(args.path ?? args.paths);
-		if (paths.length) parts.push(`in ${paths.join(", ")}`);
+		if (paths.length) parts.push(t("tools.common.scope", { path: paths.join(", ") }));
 		parts.push(...grepFlagMeta(args));
 	}
 	ensureThemeSync();

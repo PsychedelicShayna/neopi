@@ -5,6 +5,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "@oh-my-pi/pi-utils";
 import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
+import { t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import { ControlClient, ControlClientError } from "../control/client";
 import type { ControlCallerIdentity } from "../control/host";
 import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
@@ -37,6 +38,17 @@ export function ctlExit(code: number): never {
 	return undefined as never;
 }
 
+class CtlTargetError extends ControlClientError {
+	constructor(
+		code: "ambiguous" | "not_found",
+		readonly key: string,
+		readonly values: TranslationValues,
+	) {
+		// Keep the error message stable for structured consumers such as ctl pipe.
+		super(code, t("en", key, values));
+	}
+}
+
 /** Resolve a target selector to one registry entry. */
 export async function resolveCtlTarget(selector: string, options?: ControlRegistryOptions): Promise<ControlMetadata> {
 	const entries = await readControlEntries(options);
@@ -55,13 +67,13 @@ export async function resolveCtlTarget(selector: string, options?: ControlRegist
 		const matches = entries.filter(entry => tier(entry.meta));
 		if (matches.length === 1) return matches[0]!.meta;
 		if (matches.length > 1) {
-			throw new ControlClientError(
-				"ambiguous",
-				`${wanted} matches ${matches.map(entry => entry.meta.instanceId).join(", ")}`,
-			);
+			throw new CtlTargetError("ambiguous", "cli.commands.ctl.targetAmbiguous", {
+				target: wanted,
+				matches: matches.map(entry => entry.meta.instanceId).join(", "),
+			});
 		}
 	}
-	throw new ControlClientError("not_found", `no control session matches ${wanted}`);
+	throw new CtlTargetError("not_found", "cli.commands.ctl.targetNotFound", { target: wanted });
 }
 
 const callerBinding = new AsyncLocalStorage<ControlCallerIdentity | null>();
@@ -120,7 +132,7 @@ export async function ctlList(json: boolean, signal?: AbortSignal): Promise<numb
 	if (json) {
 		io.stdout(`${JSON.stringify({ version: 1, sessions: rows }, null, 2)}\n`);
 	} else if (rows.length === 0) {
-		io.stdout("no control sessions\n");
+		io.stdout(t("cli.commands.ctl.noSessions"));
 	} else {
 		for (const row of rows) {
 			const meta = row.meta;
@@ -228,17 +240,18 @@ function formatSnapshot(snapshot: ControlSnapshot): string {
 		`model=${model ? `${model.provider}/${model.id}` : "-"}  effort=${session?.thinkingLevel ?? "-"}  fast=${fast}`,
 		`sessionName=${session?.sessionName ? JSON.stringify(session.sessionName) : "-"}`,
 		`sessionFile=${session?.sessionFile ?? "-"}`,
-		`build ${snapshot.build.gitSha ?? "unknown"}`,
+		t("cli.commands.ctl.build", { revision: snapshot.build.gitSha ?? t("cli.commands.ctl.unknownRevision") }),
 		"",
 	].join("\n");
 }
 
 function fail(error?: string, code?: string): number {
-	io.stderr(`${code ?? "error"}: ${error ?? "failed"}\n`);
+	io.stderr(`${code ?? "error"}: ${error ?? t("cli.commands.ctl.failed")}\n`);
 	return code === "not_found" || code === "ambiguous" ? 3 : code === "unauthorized" ? 4 : code === "conflict" ? 5 : 1;
 }
 
 export function ctlFail(error: unknown): number {
+	if (error instanceof CtlTargetError) return fail(t(error.key, error.values), error.code);
 	if (error instanceof ControlClientError) return fail(error.message, error.code);
 	io.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
 	return 1;

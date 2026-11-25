@@ -6246,11 +6246,18 @@ class WireClient:
         self._command("set_subagent_thinking_level", params)
 
     def set_subagent_fast(self, subagent_id: str, *, enabled: bool) -> FastModeResult:
-        """Enable or disable fast mode only for a running subagent, from its next request."""
+        """Enable or disable fast mode for a running subagent from its next request. For explicit fast, ultra, or off selection, use set_subagent_priority_tier."""
         params: dict[str, object] = {}
         params["subagentId"] = subagent_id
         params["enabled"] = enabled
         return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
+
+    def set_subagent_priority_tier(self, subagent_id: str, tier: Literal["fast", "ultra", "off"]) -> None:
+        """Set a running subagent's priority tier from its next request, using the same model support as /fast. Returns an error if the requested tier is unavailable."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        params["tier"] = tier
+        self._command("set_subagent_priority_tier", params)
 
     def get_command_completions(self, command: str, prefix: str) -> tuple[CommandCompletion, ...]:
         """Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none."""

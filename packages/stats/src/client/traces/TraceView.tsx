@@ -4,12 +4,13 @@
  * Owns the shared viewport/selection state so all pieces stay in sync.
  */
 
+import { LocalizedText, useTranslation } from "../i18n";
 import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSessionTrace } from "../api";
 import { useQuery } from "../data/query";
 import type { SessionTrace, TraceSpan, TraceSpanKind, TraceTrack } from "../types";
-import { Card, ChartSkeleton, PageHeader, QueryView, SearchInput, Segmented } from "../ui";
+import { Card, ChartSkeleton, PageHeader, QueryView, SearchInput, Segmented, type SegmentedOption } from "../ui";
 import { AggregatesPanel } from "./AggregatesPanel";
 import { Minimap } from "./Minimap";
 import { SpanDrawer, type TraceEntryLoader } from "./SpanDrawer";
@@ -25,10 +26,25 @@ export interface TraceViewProps {
 	onBack: () => void;
 }
 
-const MODE_OPTIONS: Array<{ value: AxisMode; label: string; title?: string }> = [
-	{ value: "time", label: "Duration", title: "Real wall-clock time" },
-	{ value: "turns", label: "Turns", title: "Equal width per user turn" },
-	{ value: "calls", label: "Calls", title: "Equal width per model/tool call boundary" },
+const MODE_OPTIONS: readonly SegmentedOption<AxisMode>[] = [
+	{
+		value: "time",
+		label: <LocalizedText messageKey="pages.traceview.duration" english={"Duration"} />,
+		title: "Real wall-clock time",
+		titleKey: "pages.traceview.real_wall_clock_time",
+	},
+	{
+		value: "turns",
+		label: <LocalizedText messageKey="pages.traceview.turns" english={"Turns"} />,
+		title: "Equal width per user turn",
+		titleKey: "pages.traceview.equal_width_per_user_turn",
+	},
+	{
+		value: "calls",
+		label: <LocalizedText messageKey="pages.traceview.calls" english={"Calls"} />,
+		title: "Equal width per model/tool call boundary",
+		titleKey: "pages.traceview.equal_width_per_model_tool_call_boundary",
+	},
 ];
 
 const LEGEND: Array<{ kind: TraceSpanKind; label: string }> = [
@@ -40,6 +56,7 @@ const LEGEND: Array<{ kind: TraceSpanKind; label: string }> = [
 ];
 
 export function TraceView({ file, active, onBack }: TraceViewProps) {
+	const tr = useTranslation();
 	const query = useQuery<SessionTrace>(
 		["trace", file],
 		({ signal }, previous) => getSessionTrace(file, signal, previous),
@@ -53,7 +70,7 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 			<div>
 				<button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={onBack}>
 					<ArrowLeft size={14} aria-hidden="true" />
-					Sessions
+					{tr("pages.traceview.sessions", "Sessions")}
 				</button>
 			</div>
 			<PageHeader
@@ -66,8 +83,8 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 						data-variant="ghost"
 						data-icon="true"
 						onClick={query.refetch}
-						aria-label="Refresh trace"
-						title="Refresh trace"
+						aria-label={tr("pages.traceview.refresh_trace", "Refresh trace")}
+						title={tr("pages.traceview.refresh_trace", "Refresh trace")}
 					>
 						<RefreshCw size={14} className={query.refreshing ? "traces-spin" : undefined} />
 					</button>
@@ -98,6 +115,7 @@ export function SessionTraceView({
 	embedded = false,
 	onNavigate,
 }: SessionTraceViewProps) {
+	const tr = useTranslation();
 	const [mode, setMode] = useState<AxisMode>("time");
 	const [compressIdle, setCompressIdle] = useState(true);
 	const [selection, setSelection] = useState<string | null>(null);
@@ -274,12 +292,19 @@ export function SessionTraceView({
 	return (
 		<div className="stack traces-view" data-view={view}>
 			{view === "full" && <SummaryStrip summary={trace.summary} />}
-			{allSpans.length === 0 && <p className="muted">No spans recorded in this session.</p>}
+			{allSpans.length === 0 && (
+				<p className="muted">
+					{tr("pages.traceview.no_spans_recorded_in_this_session", "No spans recorded in this session.")}
+				</p>
+			)}
 
 			<Card
 				index={1}
-				title="Timeline"
-				description="W/S zoom · A/D pan · drag pan · wheel zoom · 0 fit · F focus selection · dbl-click focus · Esc deselect"
+				title={tr("pages.traceview.timeline", "Timeline")}
+				description={tr(
+					"pages.traceview.w_s_zoom_a_d_pan_drag",
+					"W/S zoom · A/D pan · drag pan · wheel zoom · 0 fit · F focus selection · dbl-click focus · Esc deselect",
+				)}
 				actions={
 					<>
 						<button
@@ -289,7 +314,7 @@ export function SessionTraceView({
 							data-size="sm"
 							onClick={() => collapseAll(false)}
 						>
-							Expand all
+							{tr("pages.traceview.expand_all", "Expand all")}
 						</button>
 						<button
 							type="button"
@@ -298,14 +323,20 @@ export function SessionTraceView({
 							data-size="sm"
 							onClick={() => collapseAll(true)}
 						>
-							Collapse all
+							{tr("pages.traceview.collapse_all", "Collapse all")}
 						</button>
 					</>
 				}
 			>
 				<div className="stack">
 					<div className="traces-toolbar">
-						<Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} size="sm" aria-label="Axis mode" />
+						<Segmented
+							options={MODE_OPTIONS}
+							value={mode}
+							onChange={setMode}
+							size="sm"
+							aria-label={tr("pages.traceview.axis_mode", "Axis mode")}
+						/>
 						{mode === "time" && (
 							<label className="traces-check">
 								<input
@@ -313,7 +344,7 @@ export function SessionTraceView({
 									checked={compressIdle}
 									onChange={event => setCompressIdle(event.target.checked)}
 								/>
-								Compress idle
+								{tr("pages.traceview.compress_idle", "Compress idle")}
 							</label>
 						)}
 						<div className="traces-search">
@@ -323,8 +354,8 @@ export function SessionTraceView({
 									setSearch(value);
 									setMatchIndex(0);
 								}}
-								label="Search spans"
-								placeholder="Search spans…"
+								label={tr("pages.traceview.search_spans", "Search spans")}
+								placeholder={tr("pages.traceview.search_spans_2", "Search spans…")}
 								width={200}
 							/>
 							{search.trim() && (
@@ -341,7 +372,7 @@ export function SessionTraceView({
 										data-size="sm"
 										data-icon="true"
 										onClick={() => cycleMatch(-1)}
-										aria-label="Previous match"
+										aria-label={tr("pages.traceview.previous_match", "Previous match")}
 										disabled={matches.length === 0}
 									>
 										<ChevronLeft size={14} />
@@ -353,7 +384,7 @@ export function SessionTraceView({
 										data-size="sm"
 										data-icon="true"
 										onClick={() => cycleMatch(1)}
-										aria-label="Next match"
+										aria-label={tr("pages.traceview.next_match", "Next match")}
 										disabled={matches.length === 0}
 									>
 										<ChevronRight size={14} />
@@ -365,7 +396,7 @@ export function SessionTraceView({
 							{LEGEND.map(item => (
 								<span key={item.kind} className="traces-legend-item">
 									<span className="swatch" style={{ background: `var(${CATEGORY_VARS[item.kind]})` }} />
-									{item.label}
+									{tr(`pages.trace_legend.${item.kind}`, item.label)}
 								</span>
 							))}
 						</div>
@@ -398,7 +429,15 @@ export function SessionTraceView({
 			/>
 
 			{view === "full" && (
-				<Card index={2} title="Transcript" description="Every span and marker in order; click to inspect" flush>
+				<Card
+					index={2}
+					title={tr("pages.traceview.transcript", "Transcript")}
+					description={tr(
+						"pages.traceview.every_span_and_marker_in_order_click",
+						"Every span and marker in order; click to inspect",
+					)}
+					flush
+				>
 					<TranscriptList
 						tracks={tracks}
 						selection={selection}

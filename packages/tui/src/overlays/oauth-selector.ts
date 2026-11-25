@@ -1,6 +1,7 @@
-import type { CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
+import type { CredentialOrigin, CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Container, ScrollView, type SgrMouseEvent, Spacer, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -51,13 +52,17 @@ export interface OAuthSelectorSheet {
 const LIST_ROW_OFFSET = 1;
 
 /** Compact, human-readable tag for each credential-origin leg. */
-const ORIGIN_LABELS = {
-	runtime: "--api-key",
-	config: "config",
-	oauth: "login",
-	api_key: "api key",
-	env: "env",
-};
+function originLabel({ kind, envVar }: CredentialOrigin, showEnvVar = true): string {
+	if (kind === "runtime") return "--api-key";
+	if (kind === "env" && showEnvVar && envVar) {
+		return t("overlaysModel.oauthSelector.origin.envVar", { name: envVar });
+	}
+	return t(`overlaysModel.oauthSelector.origin.${kind}`);
+}
+
+function noProvidersMessage(mode: "login" | "logout"): string {
+	return t(`overlaysModel.oauthSelector.empty.${mode}`);
+}
 /**
  * Component that renders an OAuth provider selector.
  */
@@ -81,8 +86,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#authStorage: OAuthSelectorAuthSource;
 	#onSelectCallback: (providerId: string) => void;
 	#onCancelCallback: () => void;
-	#cancelLabel: string;
-	#statusMessage: string | undefined;
+	#cancelLabel: string | undefined;
+	#showUnavailable = false;
+	#locale = getLocale();
 	#validateAuthCallback?: (providerId: string) => Promise<boolean>;
 	#requestRenderCallback?: () => void;
 	#authState: Map<string, "checking" | "valid" | "invalid"> = new Map();
@@ -110,12 +116,12 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			sheet?: OAuthSelectorSheet;
 		},
 	) {
-		super(mode === "login" ? "Select provider to login" : "Select provider to logout", "omp.overlay.oauth");
+		super(t(`overlaysModel.oauthSelector.title.terminal.${mode}`), "omp.overlay.oauth");
 		this.#mode = mode;
 		this.#authStorage = authStorage;
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
-		this.#cancelLabel = options?.cancelLabel ?? "close";
+		this.#cancelLabel = options?.cancelLabel;
 		this.#validateAuthCallback = options?.validateAuth;
 		this.#requestRenderCallback = options?.requestRender;
 		this.#sheet = options?.sheet;
@@ -275,8 +281,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#getSourceLabel(providerId: string): string {
 		const origin = this.#authStorage.keys.source(providerId);
 		if (!origin) return "";
-		const detail = origin.kind === "env" && origin.envVar ? `env: ${origin.envVar}` : ORIGIN_LABELS[origin.kind];
-		return theme.fg("muted", ` (${detail})`);
+		return theme.fg("muted", ` (${originLabel(origin)})`);
 	}
 
 	#getStatusIndicator(providerId: string): string {
@@ -285,16 +290,18 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		if (state === "checking") {
 			const frameCount = theme.spinnerFrames.length;
 			const spinner = frameCount > 0 ? theme.spinnerFrames[this.#spinnerFrame % frameCount] : theme.status.pending;
-			return theme.fg("warning", ` ${spinner} checking`) + source;
+			return theme.fg("warning", ` ${spinner} ${t("overlaysModel.oauthSelector.state.checking")}`) + source;
 		}
 		if (state === "invalid") {
-			return theme.fg("error", ` ${theme.status.error} invalid`) + source;
+			return theme.fg("error", ` ${theme.status.error} ${t("overlaysModel.oauthSelector.state.invalid")}`) + source;
 		}
 		if (state === "valid") {
-			return theme.fg("success", ` ${theme.status.enabled} logged in`) + source;
+			return (
+				theme.fg("success", ` ${theme.status.enabled} ${t("overlaysModel.oauthSelector.state.valid")}`) + source
+			);
 		}
 		return this.#hasSelectableAuth(providerId)
-			? theme.fg("success", ` ${theme.status.enabled} logged in`) + source
+			? theme.fg("success", ` ${theme.status.enabled} ${t("overlaysModel.oauthSelector.state.valid")}`) + source
 			: "";
 	}
 
@@ -314,11 +321,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		let text = `${provider.name} ${provider.id}`;
 		const origin = this.#authStorage.keys.source(provider.id);
 		if (origin) {
-			text += ` logged in authenticated ${ORIGIN_LABELS[origin.kind]}`;
+			text += ` ${t("overlaysModel.oauthSelector.search.authenticated")} ${originLabel(origin, false)}`;
 			if (origin.envVar) text += ` ${origin.envVar}`;
 		}
 		if (!provider.available) {
-			text += " unavailable";
+			text += ` ${t("overlaysModel.oauthSelector.search.unavailable")}`;
 		}
 		return text;
 	}
@@ -327,8 +334,25 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#syncSearchQuery(): void {
 		this.#menu.setQuery(this.#search.query, false);
 		this.#viewport.reveal();
-		this.#statusMessage = undefined;
+		this.#showUnavailable = false;
 		this.#updateList();
+	}
+
+	#syncLocale(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		this.#locale = locale;
+		this.title = t(`overlaysModel.oauthSelector.title.terminal.${this.#mode}`);
+		this.#nativeItems = undefined;
+		this.#pickerItems = undefined;
+		this.#menu.setItems(this.#menu.items);
+		this.#updateList();
+	}
+
+	#emptyMessage(): string {
+		return this.#menu.items.length === 0
+			? noProvidersMessage(this.#mode)
+			: t("overlaysModel.oauthSelector.empty.matches");
 	}
 
 	#updateList(): void {
@@ -366,7 +390,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 				!this.#search.focused && !this.#search.value
 					? new MenuHints(
 							() =>
-								`${editorKeys("tui.select.up", "tui.select.down")} select · / search · Enter choose · ${editorKey("tui.select.cancel")} ${this.#cancelLabel} · ? help`,
+								t("overlaysModel.oauthSelector.footer", {
+									select: editorKeys("tui.select.up", "tui.select.down"),
+									cancel: editorKey("tui.select.cancel"),
+									cancelLabel: this.#cancelLabel ?? t("overlaysModel.oauthSelector.hint.close"),
+								}),
 							text => theme.fg("muted", text),
 							"jk gg/G C-u d e y",
 						)
@@ -375,17 +403,14 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		}
 
 		if (total === 0) {
-			const message =
-				this.#menu.items.length === 0
-					? this.#mode === "login"
-						? "No OAuth providers available"
-						: "No stored provider credentials to log out"
-					: "No matching providers";
+			const message = this.#emptyMessage();
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", message), 0, 0));
 		}
-		if (this.#statusMessage) {
+		if (this.#showUnavailable) {
 			this.#listContainer.addChild(new Spacer(1));
-			this.#listContainer.addChild(new TruncatedText(theme.fg("warning", this.#statusMessage), 0, 0));
+			this.#listContainer.addChild(
+				new TruncatedText(theme.fg("warning", t("overlaysModel.oauthSelector.unavailable.status")), 0, 0),
+			);
 		}
 	}
 
@@ -441,6 +466,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	override render(width: number): readonly string[] {
+		this.#syncLocale();
 		return this.#help.render(super.render(width), width);
 	}
 
@@ -459,7 +485,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		const action = this.#navigationKeys.read(data);
 		if (action === undefined || action === "pending") return;
 		if (applyMenuMotion(action, this.#menu, this.#viewport, { wrap: true }).handled) {
-			this.#statusMessage = undefined;
+			this.#showUnavailable = false;
 			this.#updateList();
 			return;
 		}
@@ -483,11 +509,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	#confirmSelection(): void {
 		const selectedProvider = this.#menu.selectedItem;
 		if (selectedProvider?.available) {
-			this.#statusMessage = undefined;
+			this.#showUnavailable = false;
 			this.stopValidation();
 			this.#onSelectCallback(selectedProvider.id);
 		} else if (selectedProvider) {
-			this.#statusMessage = "Provider unavailable in this environment.";
+			this.#showUnavailable = true;
 			this.#updateList();
 		}
 	}
@@ -495,19 +521,15 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	/** Credential status of a provider row: `value` (state) and `detail` (origin) spans. */
 	#describeStatus(providerId: string): { value?: readonly TspSpan[]; detail?: readonly TspSpan[] } {
 		const origin = this.#authStorage.keys.source(providerId);
-		const detail = origin
-			? [
-					span(
-						origin.kind === "env" && origin.envVar ? `env: ${origin.envVar}` : ORIGIN_LABELS[origin.kind],
-						"muted",
-					),
-				]
-			: undefined;
+		const detail = origin ? [span(originLabel(origin), "muted")] : undefined;
 		const state = this.#authState.get(providerId);
-		if (state === "checking") return { value: [span("checking", "warning", { fx: "pulse" })], detail };
-		if (state === "invalid") return { value: [span("invalid", "error")], detail };
+		if (state === "checking") {
+			return { value: [span(t("overlaysModel.oauthSelector.state.checking"), "warning", { fx: "pulse" })], detail };
+		}
+		if (state === "invalid")
+			return { value: [span(t("overlaysModel.oauthSelector.state.invalid"), "error")], detail };
 		if (state === "valid" || this.#hasSelectableAuth(providerId)) {
-			return { value: [span("logged in", "success")], detail };
+			return { value: [span(t("overlaysModel.oauthSelector.state.valid"), "success")], detail };
 		}
 		return { detail };
 	}
@@ -524,16 +546,11 @@ export class OAuthSelectorComponent extends OverlayPanel {
 					: state === "valid" || this.#hasSelectableAuth(provider.id)
 						? "success"
 						: "muted";
-		const source = origin
-			? origin.kind === "env" && origin.envVar
-				? `env: ${origin.envVar}`
-				: ORIGIN_LABELS[origin.kind]
-			: undefined;
-		const detail = !source
-			? "Not configured"
-			: origin?.kind === "oauth"
-				? `Signed in · ${source}`
-				: `API key · ${source}`;
+		const detail = origin
+			? t(`overlaysModel.oauthSelector.credential.${origin.kind === "oauth" ? "signedIn" : "apiKey"}`, {
+					source: originLabel(origin),
+				})
+			: t("overlaysModel.oauthSelector.credential.unconfigured");
 		const initials = provider.name
 			.split(/[^\p{L}\p{N}]+/u)
 			.filter(word => word.length > 0)
@@ -546,7 +563,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			detail,
 			mark: { text: initials, seed: provider.id },
 			dot,
-			...(provider.available ? {} : { disabled: "Provider unavailable in this environment" }),
+			...(provider.available ? {} : { disabled: t("overlaysModel.oauthSelector.unavailable.disabled") }),
 		};
 	}
 
@@ -563,37 +580,37 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			: CLOSE_ACTION;
 		this.#pickerRoot = dockedPicker({
 			...(sheet ? { role: sheet.role } : {}),
-			title: sheet?.title ?? (login ? "Sign in" : "Sign out"),
-			subtitle: sheet?.subtitle ?? (login ? "Pick a provider" : "Remove stored credentials"),
+			title: sheet?.title ?? t(`overlaysModel.oauthSelector.action.${this.#mode}`),
+			subtitle: sheet?.subtitle ?? t(`overlaysModel.oauthSelector.subtitle.${this.#mode}`),
 			icon: "key-round",
-			noun: "providers",
+			noun: t("overlaysModel.oauthSelector.noun"),
 			size: sheet?.size ?? "md",
 			layout: "cards",
 			preview: "none",
 			...search,
-			placeholder: "Search providers…",
+			placeholder: t("overlaysModel.oauthSelector.search.picker"),
 			items: this.#pickerItems,
 			...(query.length > 0 ? { order: this.#menu.visibleItems.map(provider => provider.id) } : {}),
 			selected: this.#menu.selectedKey ?? null,
 			total: all.length,
-			empty: login ? "No OAuth providers available" : "No stored provider credentials to log out",
-			...(this.#statusMessage ? { message: this.#statusMessage } : {}),
+			empty: noProvidersMessage(this.#mode),
+			...(this.#showUnavailable ? { message: t("overlaysModel.oauthSelector.unavailable.status") } : {}),
 			...(sheet?.status ? { strip: { label: sheet.status, items: [] } } : {}),
 			actions: [
 				pickerAction(
 					"confirm",
-					login ? "Sign in" : "Sign out",
+					t(`overlaysModel.oauthSelector.action.${this.#mode}`),
 					"enter",
 					login ? { primary: true } : { primary: true, danger: true },
 				),
 				{
 					...leave,
 					label: this.#search.focused
-						? "Back to list"
+						? t("overlaysModel.oauthSelector.action.back")
 						: sheet
 							? sheet.leave.label
-							: this.#cancelLabel === "close"
-								? "Close"
+							: this.#cancelLabel === undefined || this.#cancelLabel === "close"
+								? t("overlaysModel.oauthSelector.action.close")
 								: this.#cancelLabel,
 				},
 			],
@@ -602,6 +619,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
+		this.#syncLocale();
 		if (this.#help.open) return this.#help.describe();
 		if (cx.supports("picker")) return this.#describePicker();
 		if (this.#nativeRoot) return this.#nativeRoot;
@@ -627,18 +645,17 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			children.push(
 				node(
 					"input",
-					{ text: this.#search.value, cursor: this.#search.cursor, placeholder: "Type to search" },
+					{
+						text: this.#search.value,
+						cursor: this.#search.cursor,
+						placeholder: t("overlaysModel.oauthSelector.search.card"),
+					},
 					undefined,
 					"search",
 				),
 			);
 		}
-		const empty =
-			this.#menu.items.length === 0
-				? this.#mode === "login"
-					? "No OAuth providers available"
-					: "No stored provider credentials to log out"
-				: "No matching providers";
+		const empty = this.#emptyMessage();
 		children.push(
 			node(
 				"list",
@@ -652,7 +669,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 				"list",
 			),
 		);
-		if (this.#statusMessage) children.push(text([span(this.#statusMessage, "warning")]));
+		if (this.#showUnavailable) {
+			children.push(text([span(t("overlaysModel.oauthSelector.unavailable.status"), "warning")]));
+		}
 		this.#nativeRoot = overlayCard(this.nativeRole, this.title, children);
 		return this.#nativeRoot;
 	}
@@ -680,7 +699,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			if (index < 0 || index === this.#menu.selectedIndex) return;
 			this.#menu.setSelectedIndex(index);
 			this.#viewport.reveal();
-			this.#statusMessage = undefined;
+			this.#showUnavailable = false;
 			this.#updateList();
 			return;
 		}
@@ -691,7 +710,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		if (index !== this.#menu.selectedIndex) {
 			this.#menu.setSelectedIndex(index);
 			this.#viewport.reveal();
-			this.#statusMessage = undefined;
+			this.#showUnavailable = false;
 			this.#updateList();
 		}
 		this.#confirmSelection();
@@ -702,7 +721,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		if (this.#menu.visibleItems.length === 0) return;
 		if (!this.#menu.move(delta, false)) return;
 		this.#viewport.reveal();
-		this.#statusMessage = undefined;
+		this.#showUnavailable = false;
 		this.#updateList();
 	}
 
@@ -731,7 +750,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		if (target !== this.#menu.selectedIndex) {
 			this.#menu.setSelectedIndex(target);
 			this.#viewport.reveal();
-			this.#statusMessage = undefined;
+			this.#showUnavailable = false;
 		}
 		this.#confirmSelection();
 	}

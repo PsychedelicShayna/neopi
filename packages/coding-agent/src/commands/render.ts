@@ -4,6 +4,7 @@
 
 import { APP_NAME, postmortem } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { renderHelp as commandHelp } from "../cli/command-help";
 import { runRenderCommand } from "../cli/render-cli";
 import { CliUsageError } from "../cli/usage-error";
@@ -34,7 +35,7 @@ export default class Render extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Render);
 		if (flags.repaint !== undefined && flags.repaint <= 0) {
-			throw new CliUsageError("--repaint must be a positive integer");
+			throw new CliUsageError(t("cli.commands.render.repaint"));
 		}
 		const exitCode = await runRenderCommand({
 			session: args.session,

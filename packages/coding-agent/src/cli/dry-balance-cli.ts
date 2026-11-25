@@ -16,6 +16,7 @@ import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
@@ -201,7 +202,7 @@ type DryBalanceBenchTarget =
 function normalizePositiveInteger(name: string, value: number | undefined, fallback: number): number {
 	const resolved = value ?? fallback;
 	if (!Number.isInteger(resolved) || resolved <= 0) {
-		throw new Error(`--${name} must be a positive integer`);
+		throw new Error(t("cli.commands.dry-balance.invalidCount", { name }));
 	}
 	return resolved;
 }
@@ -258,7 +259,9 @@ function formatBenchIndex(index: number, total: number): string {
 }
 
 function formatBenchAccount(account: string | undefined): string {
-	return account ? sanitizeBenchText(account, BENCH_ACCOUNT_WIDTH) : chalk.dim("(no account)");
+	return account
+		? sanitizeBenchText(account, BENCH_ACCOUNT_WIDTH)
+		: chalk.dim(t("cli.commands.dry-balance.noAccount"));
 }
 
 function formatBenchDuration(ms: number): string {
@@ -318,11 +321,11 @@ function renderBenchStatusLine(
 	const prefix = formatBenchIndex(index, total);
 	switch (status.state) {
 		case "waiting":
-			return `${chalk.dim("○")} ${prefix} ${chalk.dim("waiting")}`;
+			return `${chalk.dim("○")} ${prefix} ${chalk.dim(t("cli.commands.dry-balance.waiting"))}`;
 		case "running": {
 			const frames = SPINNER_FRAMES.unicode.activity;
 			const spinner = frames[frame % frames.length] ?? "*";
-			return `${chalk.yellow(spinner)} ${prefix} ${formatBenchAccount(status.account)} ${chalk.dim("sending request")}`;
+			return `${chalk.yellow(spinner)} ${prefix} ${formatBenchAccount(status.account)} ${chalk.dim(t("cli.commands.dry-balance.sending"))}`;
 		}
 		case "success":
 			return renderBenchResultLine(index, total, status.result);
@@ -358,7 +361,7 @@ export function createBenchProgressSink(
 	const width = Number.isFinite(columns) && columns > 0 ? Math.trunc(columns) : 80;
 	const render = (): void => {
 		const lines = [
-			chalk.bold("bench requests"),
+			chalk.bold(t("cli.commands.dry-balance.benchRequests")),
 			...statuses.map((status, index) => renderBenchStatusLine(status, index, total, frame)),
 		];
 		// Anchor every redraw at column 0 and terminate each row with CRLF: a
@@ -556,15 +559,13 @@ async function resolveDryBalanceModel(
 			preferences,
 		});
 		if (resolved.error) throw new Error(resolved.error);
-		if (!resolved.model) throw new Error(`Model "${modelSelector}" not found`);
+		if (!resolved.model) throw new Error(t("cli.commands.dry-balance.modelNotFound", { model: modelSelector }));
 		return { model: resolved.model, warning: resolved.warning };
 	}
 
 	const allowedModels = await resolveAllowedModels(modelRegistry, settings, preferences);
 	if (allowedModels.length === 0) {
-		throw new Error(
-			"No models available. Use --model to select a model or configure enabledModels/default model settings.",
-		);
+		throw new Error(t("cli.commands.dry-balance.noModels"));
 	}
 
 	const defaultRoleSpec = resolveModelRoleValue(settings?.getModelRole("default"), allowedModels, {
@@ -582,8 +583,7 @@ async function resolveDryBalanceModel(
 
 	return {
 		model: allowedModels[0],
-		warning:
-			"No allowed model had usable credentials during default resolution; dry-balance will report OAuth failures for the first allowed model.",
+		warning: t("cli.commands.dry-balance.noUsableCredentials"),
 	};
 }
 
@@ -713,7 +713,7 @@ function summarizeResults(
 }
 
 function formatRows(rows: Array<{ count: number; percent: number; label: string }>): string[] {
-	if (rows.length === 0) return [`  ${chalk.dim("(none)")}`];
+	if (rows.length === 0) return [`  ${chalk.dim(t("cli.commands.dry-balance.none"))}`];
 	const maxCountWidth = Math.max(...rows.map(row => row.count.toString().length));
 	return rows.map(row => {
 		const count = row.count.toString().padStart(maxCountWidth);
@@ -733,17 +733,19 @@ export function formatDryBalanceText(summary: DryBalanceSummary): string {
 		percent: row.percent,
 		label: row.reason,
 	}));
+	const successLabel = t("cli.commands.dry-balance.success");
+	const failureLabel = t("cli.commands.dry-balance.failure");
 	const lines = [
 		chalk.bold("dry-balance"),
-		`model: ${summary.model}`,
-		`provider: ${summary.provider}`,
-		`samples: ${summary.samples}`,
-		`concurrency: ${summary.concurrency}`,
+		t("cli.commands.dry-balance.model", { value: summary.model }),
+		t("cli.commands.dry-balance.provider", { value: summary.provider }),
+		t("cli.commands.dry-balance.samples", { count: summary.samples }),
+		t("cli.commands.dry-balance.concurrency", { count: summary.concurrency }),
 		"",
-		`${chalk.green("success")} ${summary.success.total}`,
+		`${chalk.green(successLabel)} ${summary.success.total}`,
 		...formatRows(accountRows),
 		"",
-		`${summary.failure.total > 0 ? chalk.red("failure") : chalk.dim("failure")} ${summary.failure.total}`,
+		`${summary.failure.total > 0 ? chalk.red(failureLabel) : chalk.dim(failureLabel)} ${summary.failure.total}`,
 		...formatRows(failureRows),
 	];
 	if (summary.bench) {
@@ -760,13 +762,13 @@ export function formatDryBalanceText(summary: DryBalanceSummary): string {
 		}));
 		lines.push(
 			"",
-			chalk.bold("bench"),
-			`requests: ${summary.bench.total}`,
-			`${chalk.green("success")} ${summary.bench.success.total}`,
-			`avg TTFT: ${avgTtft}`,
-			`avg TPS: ${avgTps}`,
+			chalk.bold(t("cli.commands.dry-balance.bench")),
+			t("cli.commands.dry-balance.requests", { count: summary.bench.total }),
+			`${chalk.green(successLabel)} ${summary.bench.success.total}`,
+			t("cli.commands.dry-balance.avgTtft", { value: avgTtft }),
+			t("cli.commands.dry-balance.avgTps", { value: avgTps }),
 			"",
-			`${summary.bench.failure.total > 0 ? chalk.red("failure") : chalk.dim("failure")} ${summary.bench.failure.total}`,
+			`${summary.bench.failure.total > 0 ? chalk.red(failureLabel) : chalk.dim(failureLabel)} ${summary.bench.failure.total}`,
 			...formatRows(benchFailureRows),
 		);
 	}
@@ -803,14 +805,15 @@ export async function runDryBalanceCommand(
 	try {
 		const modelSelector = command.flags.model ?? command.model;
 		const { model, warning } = await resolveDryBalanceModel(modelSelector, runtime.modelRegistry, runtime.settings);
-		if (warning) writeStderr(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+		if (warning) writeStderr(`${chalk.yellow(t("cli.commands.dry-balance.warning", { warning }))}\n`);
 		let results: DryBalanceAttemptResult[];
 		let benchResults: DryBalanceBenchResult[] | undefined;
 		let summarySamples = samples;
 		let summaryConcurrency = concurrency;
 		if (isBench) {
 			const targets = await resolveBenchTargets(model, runtime.modelRegistry.authStorage);
-			if (targets.length === 0) throw new Error(`No OAuth accounts resolved for provider ${model.provider}`);
+			if (targets.length === 0)
+				throw new Error(t("cli.commands.dry-balance.noAccounts", { provider: model.provider }));
 			summarySamples = targets.length;
 			summaryConcurrency = targets.length;
 			const progressWrite = command.flags.json ? writeStderr : writeStdout;

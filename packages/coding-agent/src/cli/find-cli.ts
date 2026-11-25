@@ -5,6 +5,7 @@
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { formatBytes, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { cfgNoJudge, cfgNoSpotlight, cfgOffline } from "../config/auxiliary-model-policy";
 import { InternalUrlFilesystem, isUrlPath } from "../internal-urls/url-filesystem";
 import { openStandaloneJudge } from "../judgment/standalone";
@@ -46,19 +47,27 @@ function printReport(cmd: FindCommandArgs, rel: string, result: CascadeResult, e
 	console.log("");
 	if (coverage === "unavailable") {
 		console.log(
-			`${chalk.red("find unavailable")} ${chalk.dim(`for "${cmd.query}" in ${rel}: all ${stats.requests} judge requests failed, nothing was judged; use grep`)}`,
+			`${chalk.red(t("cli.commands.find.unavailable"))} ${chalk.dim(
+				t("cli.commands.find.unavailableDetail", { query: cmd.query, path: rel, requests: stats.requests }),
+			)}`,
 		);
 	} else if (hits.length === 0) {
 		console.log(
-			`${chalk.yellow("no hits")} ${chalk.dim(`for "${cmd.query}" in ${rel} · τ ${threshold.toFixed(2)}`)}`,
+			`${chalk.yellow(t("cli.commands.find.noHits"))} ${chalk.dim(
+				t("cli.commands.find.noHitsDetail", { query: cmd.query, path: rel, threshold: threshold.toFixed(2) }),
+			)}`,
 		);
 	} else {
 		console.log(
-			`${chalk.bold(`${hits.length} hit(s)`)} ${chalk.dim(`for "${cmd.query}" in ${rel} · τ ${threshold.toFixed(2)} · strongest first`)}`,
+			`${chalk.bold(t("cli.commands.find.hits", { count: hits.length }))} ${chalk.dim(
+				t("cli.commands.find.hitsDetail", { query: cmd.query, path: rel, threshold: threshold.toFixed(2) }),
+			)}`,
 		);
 		console.log("");
 		for (const hit of hits) {
-			const coverage = hit.truncated ? `${hit.linesSeen} lines judged, partial` : `${hit.linesSeen} lines judged`;
+			const coverage = t(hit.truncated ? "cli.commands.find.linesPartial" : "cli.commands.find.lines", {
+				count: hit.linesSeen,
+			});
 			console.log(
 				`${gauge(hit.contentScore)} ${scoreStyle(hit.contentScore)(hit.contentScore.toFixed(2))} ${chalk.cyan(hit.rel)} ${chalk.dim(coverage)}`,
 			);
@@ -71,18 +80,29 @@ function printReport(cmd: FindCommandArgs, rel: string, result: CascadeResult, e
 		}
 	}
 	if (coverage === "unavailable" && result.lexicalFallback.length > 0) {
-		console.log(chalk.dim("unranked literal keyword matches (not semantically judged):"));
+		console.log(chalk.dim(t("cli.commands.find.literalFallback")));
 		for (const match of result.lexicalFallback) {
 			console.log(`  ${chalk.cyan(`${match.rel}:${match.line}`)}  ${match.snippet}`);
 		}
 	}
 	if (coverage === "partial") {
-		console.log(chalk.yellow(`partial: ${stats.failed} of ${stats.requests} judge requests failed`));
+		console.log(chalk.yellow(t("cli.commands.find.partial", { failed: stats.failed, requests: stats.requests })));
 	}
 	console.log("");
 	console.log(
 		chalk.dim(
-			`listed ${stats.listed} · judged ${stats.judged} · read ${stats.filesRead} files (${formatBytes(stats.fileBytes)}) · ${stats.requests} requests${stats.unanswered > 0 ? ` · ${stats.unanswered} unanswered` : ""} · ${formatNumber(stats.inputTokens)} tokens · $${stats.cost.toFixed(4)} · ${formatDuration(elapsedMs)} wall / ${formatDuration(stats.apiMs)} api`,
+			t("cli.commands.find.stats", {
+				listed: stats.listed,
+				judged: stats.judged,
+				files: stats.filesRead,
+				bytes: formatBytes(stats.fileBytes),
+				requests: stats.requests,
+				unanswered: stats.unanswered > 0 ? t("cli.commands.find.unanswered", { count: stats.unanswered }) : "",
+				tokens: formatNumber(stats.inputTokens),
+				cost: stats.cost.toFixed(4),
+				elapsed: formatDuration(elapsedMs),
+				api: formatDuration(stats.apiMs),
+			}),
 		),
 	);
 	for (const failure of stats.failures) console.log(chalk.yellow(failure));
@@ -91,7 +111,7 @@ function printReport(cmd: FindCommandArgs, rel: string, result: CascadeResult, e
 /** Run one search and print it. Exits non-zero on a bad root or when every judge request failed. */
 export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 	if (!cmd.query.trim()) {
-		console.error(chalk.red("Error: query is required"));
+		console.error(chalk.red(t("cli.commands.find.missingQuery")));
 		process.exit(1);
 	}
 	const log = cmd.quiet ? () => {} : (message: string) => console.error(chalk.dim(message));
@@ -103,14 +123,14 @@ export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 		root = await resolveSearchRoot(filesystem, cmd.path, cwd);
 	} catch (error) {
 		if (!(error instanceof ToolError)) throw error;
-		console.error(chalk.red(`Error: ${error.message}`));
+		console.error(chalk.red(t("cli.commands.grep.error", { error: error.message })));
 		process.exit(1);
 	}
 
 	// Settings and extensions belong to the searched project; a file or URL
 	// scope has none of its own, so it keeps the caller's.
 	const baseCwd = root.type === "directory" && !isUrlPath(root.path) ? root.path : cwd;
-	log("resolving judge");
+	log(t("cli.commands.find.resolvingJudge"));
 	const { judge, settings, leadJudge, close } = await openStandaloneJudge(baseCwd, "find");
 	if (cmd.noJudge) cfgNoJudge.override(settings, true);
 	if (cmd.noSpotlight) cfgNoSpotlight.override(settings, true);

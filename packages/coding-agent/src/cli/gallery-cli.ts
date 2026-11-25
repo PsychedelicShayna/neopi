@@ -10,6 +10,7 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Settings } from "../config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -33,12 +34,9 @@ export const GALLERY_STATES = ["streaming", "progress", "success", "error"] as c
 export type GalleryState = (typeof GALLERY_STATES)[number];
 
 /** User-facing labels printed above each rendered lifecycle state. */
-export const GALLERY_STATE_LABELS: Record<GalleryState, string> = {
-	streaming: "streaming args",
-	progress: "in progress",
-	success: "done",
-	error: "failed",
-};
+function galleryStateLabel(state: GalleryState): string {
+	return t(`cli.commands.gallery.state.${state}`);
+}
 
 const GALLERY_STATE_ALIASES: Record<string, GalleryState> = {
 	streaming: "streaming",
@@ -51,7 +49,7 @@ const GALLERY_STATE_ALIASES: Record<string, GalleryState> = {
 	failed: "error",
 };
 
-/** Accepted `--state` tokens, including legacy lifecycle names and displayed labels. */
+/** Accepted `--state` tokens, including legacy lifecycle names and English aliases. */
 export const GALLERY_STATE_TOKENS = Object.keys(GALLERY_STATE_ALIASES);
 
 /** Gallery surfaces in stable product order. */
@@ -70,7 +68,9 @@ export function parseGallerySurfaces(surfaces: readonly string[] | undefined): G
 			continue;
 		}
 		if (!GALLERY_SURFACES.includes(token as GallerySurface)) {
-			throw new Error(`Invalid --surface '${raw}'. Valid values: ${GALLERY_SURFACE_TOKENS.join(", ")}`);
+			throw new Error(
+				t("cli.commands.gallery.invalidSurface", { value: raw, valid: GALLERY_SURFACE_TOKENS.join(", ") }),
+			);
 		}
 		requested.add(token as GallerySurface);
 	}
@@ -84,7 +84,9 @@ export function parseGalleryStates(states: readonly string[] | undefined): Galle
 	for (const raw of states) {
 		const state = GALLERY_STATE_ALIASES[raw.trim().toLowerCase()];
 		if (!state) {
-			throw new Error(`Invalid --state '${raw}'. Valid values: ${GALLERY_STATE_TOKENS.join(", ")}`);
+			throw new Error(
+				t("cli.commands.gallery.invalidState", { value: raw, valid: GALLERY_STATE_TOKENS.join(", ") }),
+			);
 		}
 		if (!parsed.includes(state)) parsed.push(state);
 	}
@@ -249,11 +251,11 @@ async function renderGallerySections(
 		const heading = fixture.label && fixture.label !== name ? `${name} — ${fixture.label}` : name;
 		const lines: string[] = ["", sectionRule(heading, width)];
 		for (const state of states) {
-			lines.push("", theme.fg("dim", `  · ${GALLERY_STATE_LABELS[state]}`));
+			lines.push("", theme.fg("dim", `  · ${galleryStateLabel(state)}`));
 			try {
 				for (const line of await renderGalleryState(name, fixture, state, width, expanded)) lines.push(line);
 			} catch (err) {
-				lines.push(theme.fg("error", `  render failed: ${String(err)}`));
+				lines.push(theme.fg("error", t("cli.commands.gallery.renderFailed", { error: String(err) })));
 			}
 		}
 		sections.push({ heading, lines });
@@ -285,7 +287,7 @@ async function renderPreviewSections(
 			try {
 				for (const line of await variant.render(width, expanded)) lines.push(line);
 			} catch (err) {
-				lines.push(theme.fg("error", `  render failed: ${String(err)}`));
+				lines.push(theme.fg("error", t("cli.commands.gallery.renderFailed", { error: String(err) })));
 			}
 		}
 		sections.push({ heading: entry.heading, lines });
@@ -343,19 +345,21 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 	if (surfaces.includes("tool") && args.tool) {
 		const knownTools = Array.from(new Set([...Object.keys(toolRenderers), ...Object.keys(galleryFixtures)])).sort();
 		if (!knownTools.includes(args.tool)) {
-			process.stdout.write(`Unknown tool '${args.tool}'. Known tools: ${knownTools.join(", ")}\n`);
+			process.stdout.write(
+				`${t("cli.commands.gallery.unknownTool", { value: args.tool, known: knownTools.join(", ") })}\n`,
+			);
 			return;
 		}
 	}
 	if (surfaces.includes("composer") && args.composer && !getComposerGalleryInventory().includes(args.composer)) {
 		process.stdout.write(
-			`Unknown composer '${args.composer}'. Known composers: ${getComposerGalleryInventory().join(", ")}\n`,
+			`${t("cli.commands.gallery.unknownComposer", { value: args.composer, known: getComposerGalleryInventory().join(", ") })}\n`,
 		);
 		return;
 	}
 	if (surfaces.includes("segment") && args.segment && !getSegmentGalleryInventory().some(id => id === args.segment)) {
 		process.stdout.write(
-			`Unknown segment '${args.segment}'. Known segments: ${getSegmentGalleryInventory().join(", ")}\n`,
+			`${t("cli.commands.gallery.unknownSegment", { value: args.segment, known: getSegmentGalleryInventory().join(", ") })}\n`,
 		);
 		return;
 	}
