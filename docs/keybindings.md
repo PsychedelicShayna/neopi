@@ -173,7 +173,7 @@ This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, 
 
 If the view was already open before `Alt+T`, its own follow-up key closes it. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). `Esc` or `Ctrl+C` closes the focused panel. Right-click cycles Todo → Agents → IRC. The selected view persists as `sidebar.view`.
 
-Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen. While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
+Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen. With `tui.mouse` on, drag the divider to resize the docked panel; the width is kept as `sidebar.width.columns`, and right-clicking the divider returns to the ratio and bounds (`sidebar.width.*`). While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
 
 The Agents view starts with running subagents only. Its bottom controls toggle running, idle, parked, advisors, ended agents, and autoscroll. Click a control (`tui.mouse` is required when docked), or use `Tab` / `Shift+Tab` and `Space`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group.
 
