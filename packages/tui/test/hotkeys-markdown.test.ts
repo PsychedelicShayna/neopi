@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
+import { KeybindingsManager as AppKeybindingsManager, setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
 import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/hotkeys-markdown";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme/theme";
@@ -48,10 +48,11 @@ describe("buildHotkeysMarkdown", () => {
 			"app.model.cycleBackward": "Shift+Ctrl+P",
 			"app.model.selectTemporary": "Ctrl+Shift+L",
 			"app.model.select": "Alt+M",
-			"app.history.search": "Ctrl+R",
+			"app.history.search": "Ctrl+H",
 			"app.thinking.toggle": "Ctrl+T",
 			"app.editor.external": "Ctrl+G",
-			"app.retry": "Alt+R",
+			"app.retry": "Ctrl+Alt+R",
+			"app.irc.quickReply": "Alt+R",
 			"app.clipboard.pasteImage": "Ctrl+V",
 			"app.stt.toggle": "Alt+H",
 			"app.live.toggle": "Ctrl+L",
@@ -72,7 +73,8 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
 		expect(markdown).toContain("| `Alt+L` | Reset terminal display |");
 		expect(markdown).toContain("| `Ctrl+L` | Start/stop live voice mode (/live) |");
-		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
+		expect(markdown).toContain("| `Ctrl+Alt+R` | Retry last failed assistant turn |");
+		expect(markdown).toContain("| `Alt+R` | Quick reply to an IRC message [neopi] |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
 		expect(markdown).toContain("| `Ctrl+Shift+O` | Toggle tool activity visibility |");
 		expect(markdown).toContain("| `Ctrl+C` | Cancel active work without clearing the draft or quitting |");
@@ -87,6 +89,14 @@ describe("buildHotkeysMarkdown", () => {
 			expect(line.startsWith(" ")).toBe(false);
 			expect(line.startsWith("\t")).toBe(false);
 		}
+	});
+
+	it("advertises both Vim redo chords and distinguishes prompt search from Backspace", () => {
+		setKeyHintPlatform("linux");
+		const markdown = buildHotkeysMarkdown({ keybindings: AppKeybindingsManager.inMemory() });
+
+		expect(markdown).toContain("| `Ctrl+R/Alt+U` | Redo (Vim normal mode)");
+		expect(markdown).toContain("| `Ctrl+H` | Search prompt history (remap if Ctrl+H sends Backspace) |");
 	});
 
 	it("renders the temporary selector row as disabled when no display string is configured", () => {

@@ -30,7 +30,7 @@ When session persistence is enabled, the owning session saves named groups, `eve
 
 ## Operator `/irc`
 
-`/irc` alone opens the existing IRC viewer. Send as the operator with `/irc Scout <message>` (or `/irc Scout,Reviewer <message>` for several DMs), `/irc #council <message>`, or `/irc all <message>`. The viewer's reply action still sends a DM.
+`/irc` alone opens the [IRC client](../agent-hub.md#irc-client). Its composer sends as the operator, as do `/irc Scout <message>` (or `/irc Scout,Reviewer <message>` for several DMs), `/irc #council <message>`, and `/irc all <message>`.
 
 - `/irc group create council Scout Reviewer`
 - `/irc group list` or `/irc group mine`

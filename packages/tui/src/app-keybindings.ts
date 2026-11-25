@@ -59,6 +59,8 @@ interface AppKeybindings {
 	"app.clipboard.copyPrompt": true;
 	"app.agents.hub": true;
 	"app.irc.viewer": true;
+	"app.irc.traffic": true;
+	"app.irc.quickReply": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -211,7 +213,6 @@ export const KEYBINDINGS = {
 		description: "Send through the active post-processing chain",
 	},
 	"app.repl.toggle": {
-		// Alt+R is app.retry; the shifted chord keeps REPL on the same letter.
 		defaultKeys: "alt+shift+r",
 		description: "Toggle REPL mode between the agent and the last kernel",
 	},
@@ -223,10 +224,7 @@ export const KEYBINDINGS = {
 		description: "Run the composer in the REPL kernel (REPL mode only)",
 	},
 	"app.retry": {
-		// F5 leads: it is delivered verbatim by every terminal, unlike modified
-		// Enter chords (Ctrl/Alt/Cmd+Enter), which various terminals swallow or
-		// fold into plain Enter. The idle "F5 to Retry" status row advertises it.
-		defaultKeys: ["f5", "alt+r"],
+		defaultKeys: "ctrl+alt+r",
 		description: "Retry last failed assistant turn",
 	},
 	"app.message.dequeue": {
@@ -277,7 +275,15 @@ export const KEYBINDINGS = {
 	},
 	"app.irc.viewer": {
 		defaultKeys: "alt+i",
-		description: "Open the IRC communications viewer",
+		description: "Open or close the IRC client",
+	},
+	"app.irc.traffic": {
+		defaultKeys: "alt+shift+i",
+		description: "Open IRC Traffic at the newest message",
+	},
+	"app.irc.quickReply": {
+		defaultKeys: "alt+r",
+		description: "Quick reply to an IRC message",
 	},
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",
@@ -324,7 +330,7 @@ export const KEYBINDINGS = {
 		description: "Toggle plan mode",
 	},
 	"app.history.search": {
-		defaultKeys: "ctrl+r",
+		defaultKeys: "ctrl+h",
 		description: "Search history",
 	},
 	"app.navigation.back": {
@@ -373,7 +379,7 @@ export const KEYBINDINGS = {
 	},
 	"app.sidebar.toggle": {
 		defaultKeys: "alt+t",
-		description: "Open and focus the side panel; then t Todo, a Agents, or i IRC",
+		description: "Open the side panel, or move focus between it and the transcript",
 	},
 	"app.sidebar.scrollUp": {
 		defaultKeys: "alt+shift+up",

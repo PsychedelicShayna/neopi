@@ -20,14 +20,29 @@ describe("CustomEditor keybindings", () => {
 		expect(onRetry).toHaveBeenCalledTimes(1);
 	});
 
+	it("retries with Ctrl+Alt+R, but not with F5 or Alt+R", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const onRetry = vi.fn();
+		editor.onRetry = onRetry;
+
+		editor.handleInput("\x1b[15~"); // F5
+		editor.handleInput("\x1br"); // Alt+R
+		expect(onRetry).not.toHaveBeenCalled();
+
+		editor.handleInput("\x1b[114;7u"); // Ctrl+Alt+R
+		expect(onRetry).toHaveBeenCalledTimes(1);
+	});
+
+	const retryChord = "\x1b[114;7u";
+
 	it("lets custom handlers keep precedence over the default retry chord", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		const onRetry = vi.fn();
 		const customHandler = vi.fn();
 
 		editor.onRetry = onRetry;
-		editor.setCustomKeyHandler("alt+r", customHandler);
-		editor.handleInput("\x1br");
+		editor.setCustomKeyHandler("ctrl+alt+r", customHandler);
+		editor.handleInput(retryChord);
 
 		expect(customHandler).toHaveBeenCalledTimes(1);
 		expect(onRetry).not.toHaveBeenCalled();
@@ -40,8 +55,8 @@ describe("CustomEditor keybindings", () => {
 
 		editor.onRetry = onRetry;
 		editor.onCopyPrompt = onCopyPrompt;
-		editor.setActionKeys("app.clipboard.copyPrompt", ["alt+r"]);
-		editor.handleInput("\x1br");
+		editor.setActionKeys("app.clipboard.copyPrompt", ["ctrl+alt+r"]);
+		editor.handleInput(retryChord);
 
 		expect(onCopyPrompt).toHaveBeenCalledTimes(1);
 		expect(onRetry).not.toHaveBeenCalled();
@@ -248,7 +263,10 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("draft");
 	});
 
-	it("redoes a Vim change with Alt+U, but not after a different edit", () => {
+	it.each([
+		["Ctrl+R", "\x12"],
+		["Alt+U", "\x1bu"],
+	])("redoes a Vim change with %s, but not after a different edit", (_name, redo) => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setVimMode(true);
 		editor.setText("abc");
@@ -257,14 +275,37 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("ab");
 		editor.handleInput("u");
 		expect(editor.getText()).toBe("abc");
-		editor.handleInput("\x1bu");
+		editor.handleInput(redo);
 		expect(editor.getText()).toBe("ab");
 		editor.handleInput("u");
 		editor.handleInput("i");
 		editor.handleInput("X");
 		editor.handleInput("\x1b");
-		editor.handleInput("\x1bu");
+		editor.handleInput(redo);
 		expect(editor.getText()).toBe("abXc");
+	});
+
+	it.each([false, true])("leaves redo chords unbound in Insert mode (Vim enabled: %s)", vimEnabled => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setVimMode(vimEnabled);
+		editor.setText("ab");
+		editor.handleInput("c");
+		editor.handleInput("\x1b[45;5u"); // Ctrl+- (undo)
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("\x12"); // Ctrl+R
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("\x1bu"); // Alt+U
+		expect(editor.getText()).toBe("ab");
+	});
+
+	it("still deletes in the composer with legacy Backspace", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setText("a");
+		editor.handleInput("\x08");
+		expect(editor.getText()).toBe("");
+		editor.setText("ab");
+		editor.handleInput("\x7f");
+		expect(editor.getText()).toBe("a");
 	});
 });
 

@@ -117,7 +117,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.model.select")], action: "Select model (set roles)" },
 				{ keys: [act("app.settings.open")], action: "Open Settings without changing the draft" },
 				{ keys: [act("app.plan.toggle")], action: "Toggle plan mode" },
-				{ keys: [act("app.history.search")], action: "Search prompt history" },
+				{ keys: [act("app.history.search")], action: "Search prompt history (remap if Ctrl+H sends Backspace)" },
 				{ keys: [act("app.navigation.back")], action: "Back to the previous menu or the conversation" },
 				{ keys: [act("app.navigation.forward")], action: "Forward in the menu history" },
 				{ keys: [act("app.tools.expand")], action: "Toggle tool output expansion" },
@@ -153,6 +153,9 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 					],
 					action: "Open the agent hub",
 				},
+				{ keys: [act("app.irc.viewer")], action: "Open or close the IRC client" },
+				{ keys: [act("app.irc.traffic")], action: "Jump to the newest IRC traffic" },
+				{ keys: [act("app.irc.quickReply")], action: "Quick reply to an IRC message" },
 				{ keys: [{ token: "#<number>" }], action: "GitHub issue/PR reference (e.g. `#3164` → `pr://`/`issue://`)" },
 				{
 					keys: [{ token: "#" }, { text: " / " }, { token: "#<text>" }],

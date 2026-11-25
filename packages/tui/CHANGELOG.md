@@ -5,6 +5,9 @@
 ### Changed
 
 - IRC transcript cards distinguish messages to you, to your attached agent, to both of you, and sent by your agent. Each card shows the full message with its route and time, and addressed messages stay in the transcript after resume.
+- Retry the last failed turn with Ctrl+Alt+R instead of F5 or Alt+R.
+- Ctrl+R redoes edits in Vim Normal mode alongside Alt+U; prompt-history search moves to Ctrl+H on terminals that distinguish it from Backspace.
+- IRC messages in the transcript show the whole message, rendered as Markdown at full width, between an opening rule (sender, group or recipient, time) and a closing rule in the sender's Agent Hub colour, with a rail of that colour down the body.
 - Advisor notes appear in an outlined bubble like Chronicler Luna's, coloured by the worst note: grey for a nit, yellow for a concern, red for a blocker.
 - Tab reopens slash argument suggestions after Esc and can continue to the next slot after a verb is selected ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - Settings rows show inherited values with a source-scope icon (Nerd Font, Unicode and ASCII forms), mark rows changed by key presence instead of comparison with the default, and unset the hovered row with Backspace ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).

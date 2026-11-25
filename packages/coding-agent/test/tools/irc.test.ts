@@ -6,8 +6,9 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
+import { IRC_TRAFFIC_ID, ircRoomId } from "@oh-my-pi/pi-coding-agent/irc/client-model";
 import { executeSend } from "@oh-my-pi/pi-coding-agent/irc/messaging";
-import { registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
+import { OperatorIrcClient, registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
 import {
 	DEFAULT_IRC_HISTORY_MAX_ENTRIES,
 	setIrcHistoryMaxEntries,
@@ -237,9 +238,11 @@ describe("IRC", () => {
 	describe("inbound transcript persistence and provider isolation", () => {
 		beforeAll(() => initTheme());
 
-		it.each([false, true])(
-			"resumes an operator delivery without adding model input (also to agent: %s)",
-			async both => {
+		it.each(["direct", "both", "quiet room"] as const)(
+			"resumes an operator delivery without adding model input (%s)",
+			async delivery => {
+				const both = delivery === "both";
+				const quiet = delivery === "quiet room";
 				using temp = TempDir.createSync("irc-inbound-");
 				const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
 				auth.keys.setRuntime("openai", "test-key");
@@ -272,9 +275,19 @@ describe("IRC", () => {
 				};
 				const manager = SessionManager.create(temp.path(), temp.path());
 				const session = makeSession(manager);
-				registry.register({ id: "Main", displayName: "Main", kind: "main", session });
+				const root = registry.register({ id: "Main", displayName: "Main", kind: "main", session });
 				registerIrcOperator(registry, "Captain", "Main");
-				const ctx = createInteractiveModeContext({ session, ircOperatorId: "Captain" });
+				const room = "council";
+				const operatorClient = quiet
+					? new OperatorIrcClient(root, session, {
+							operatorId: "Captain",
+							operatorName: "Captain",
+							agentDir: temp.path(),
+							requestRender() {},
+							reconcileOverlay() {},
+						})
+					: undefined;
+				const ctx = createInteractiveModeContext({ session, ircOperatorId: "Captain", ircClient: operatorClient });
 				const helpers = new UiHelpers(ctx);
 				ctx.addMessageToChat = (message, options) => helpers.addMessageToChat(message, options);
 				const controller = new EventController(ctx);
@@ -285,7 +298,7 @@ describe("IRC", () => {
 						return controller.handleEvent(event);
 					}
 				});
-				const body = both ? "BOTH_RECEIVED </irc>" : "OPERATOR_PRIVATE_DM";
+				const body = both ? "BOTH_RECEIVED </irc>" : quiet ? "@Captain QUIET_ROOM_MESSAGE" : "OPERATOR_PRIVATE_DM";
 				try {
 					if (both) {
 						await bus.sendFanout(
@@ -300,6 +313,25 @@ describe("IRC", () => {
 						);
 						await session.waitForIdle();
 						expect(mock.calls).toHaveLength(1);
+					} else if (operatorClient) {
+						registry.register({
+							id: "Scout",
+							displayName: "Scout",
+							kind: "sub",
+							parentId: root.id,
+							session: makeFakeSession().session,
+						});
+						await bus.group("Scout", { op: "create", group: room, members: ["Scout", "Captain"], notice: "silent" });
+						const conversationId = ircRoomId(room);
+						expect(await operatorClient.host.act({ kind: "notifications", conversationId, level: "none" })).toBeUndefined();
+						expect((await bus.group("Scout", { op: "send", group: room, message: body })).receipts).toContainEqual({
+							to: "Captain",
+							outcome: "injected",
+						});
+						expect(operatorClient.relayNotifies(observed[0]?.details)).toBe(false);
+						expect(operatorClient.model.latestNotification()).toBeUndefined();
+						expect(operatorClient.model.open()).toBe(IRC_TRAFFIC_ID);
+						expect(mock.calls).toHaveLength(0);
 					} else {
 						await bus.send({ from: "Scout", to: "Captain", body });
 						await session.waitForIdle();
@@ -313,6 +345,11 @@ describe("IRC", () => {
 							? `⇠ Both Scout ${theme.nav.selected} Main, Captain`
 							: `⇠ You Scout ${theme.nav.selected} Captain`,
 					);
+					if (quiet) {
+						const card = Bun.stripANSI(live[0]!.join("\n"));
+						expect(card).toContain("#council");
+						expect(card).toContain(body);
+					}
 					const file = manager.getSessionFile()!;
 					await manager.close();
 					const reopened = await SessionManager.open(file, undefined, undefined, { throwIfMissing: true });
@@ -356,6 +393,7 @@ describe("IRC", () => {
 						expect(JSON.stringify(wire)).not.toContain(body);
 					}
 				} finally {
+					operatorClient?.dispose();
 					unsubscribe();
 					controller.dispose();
 					for (const installed of sessions.splice(0)) await installed.dispose();
@@ -422,6 +460,7 @@ describe("IRC", () => {
 			expect(main.relayed).toHaveLength(1);
 			expect(main.relayed[0]?.details).toEqual({
 				id: expect.any(String),
+				messageId: bus.history().find(entry => entry.message.body === "sibling note")?.message.id,
 				from: "0-A",
 				to: "0-B",
 				body: "sibling note",
@@ -446,6 +485,26 @@ describe("IRC", () => {
 			]);
 			// The viewer's history has both, whatever the main screen shows.
 			expect(bus.history().map(entry => entry.message.body)).toEqual(["sibling note", "need a decision"]);
+		});
+
+		it("rejects a DM at the operator's settings boundary without blocking room deliveries", async () => {
+			const { session } = createRealSession({ "irc.operator.directMessages": false });
+			sessions.push(session);
+			registry.register({ id: "Main", displayName: "main", kind: "main", session });
+			registerIrcOperator(registry, "Captain", "Main");
+			const rootObservation = vi.spyOn(session, "emitIrcRelayObservation");
+			expect(await bus.send({ from: "Main", to: "Captain", body: "direct" })).toMatchObject({
+				outcome: "failed",
+				error: expect.stringContaining("disabled direct IRC messages"),
+			});
+			expect(rootObservation).not.toHaveBeenCalled();
+			expect(
+				await bus.send(
+					{ from: "Main", to: "Captain", group: "council", body: "room message" },
+					{ groupDelivery: true },
+				),
+			).toEqual({ to: "Captain", outcome: "injected" });
+			expect(rootObservation).toHaveBeenCalledTimes(1);
 		});
 
 		it("send to an unknown agent or a killed one without a transcript fails", async () => {
@@ -514,6 +573,159 @@ describe("IRC", () => {
 			expect(receipt.outcome).toBe("revived");
 			expect(sub.delivered.map(msg => msg.body)).toEqual(["wake up"]);
 			expect(registry.get("0-Parked")?.status).toBe("idle");
+		});
+
+		it("delivers standard, verbose, and wake-now notices using their real session disposition; silent emits nothing", async () => {
+			const { session, sessionManager } = createRealSession();
+			sessions.push(session);
+			const prompt = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			registry.register({ id: "0-Invitee", displayName: "invitee", kind: "sub", status: "idle", session });
+
+			expect(await bus.deliverInvite("Main", "0-Invitee", "council", "silent")).toBeUndefined();
+			expect(bus.history()).toEqual([]);
+			expect(sessionManager.getBranch().filter(entry => entry.type === "custom_message")).toEqual([]);
+			expect(await bus.deliverInvite("Main", "0-Invitee", "council", "next-turn")).toEqual({
+				to: "0-Invitee",
+				outcome: "injected",
+			});
+			expect(await bus.deliverInvite("Main", "0-Invitee", "review", "verbose")).toEqual({
+				to: "0-Invitee",
+				outcome: "injected",
+			});
+			expect(prompt).not.toHaveBeenCalled();
+			const notices = sessionManager.getBranch().filter(entry => entry.type === "custom_message");
+			expect(notices).toHaveLength(2);
+			expect(notices[0]?.content).toContain("You were added to IRC group council");
+			expect(notices[0]?.content).not.toContain("Muting a room");
+			for (const explanation of ["@everyone", "Muting a room", "explicit IRC broadcast", "`write` for files"]) {
+				expect(notices[1]?.content).toContain(explanation);
+			}
+
+			expect(await bus.deliverInvite("Main", "0-Invitee", "council", "wake-now")).toEqual({
+				to: "0-Invitee",
+				outcome: "woken",
+			});
+			expect(prompt).toHaveBeenCalledTimes(1);
+			expect(bus.peek("0-Invitee")).toEqual([]);
+		});
+
+		it("keeps the full quiet invite for natural revival without reviving or prompting the member", async () => {
+			const { session, sessionManager } = createRealSession();
+			sessions.push(session);
+			const prompt = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			const ref = registry.register({
+				id: "0-Parked",
+				displayName: "task",
+				kind: "sub",
+				session: null,
+				status: "parked",
+			});
+			const lifecycle = AgentLifecycleManager.global();
+			const revive = vi.fn(async () => session);
+			lifecycle.adopt(ref.id, { idleTtlMs: 0, revive });
+
+			expect(await bus.deliverInvite("Main", ref.id, "council", "verbose", "council-invite")).toEqual({
+				to: ref.id,
+				outcome: "queued",
+			});
+			expect(revive).not.toHaveBeenCalled();
+			expect(ref.status).toBe("parked");
+			expect(bus.peek(ref.id)).toEqual([]);
+			const packet = bus.history()[0]?.message;
+			expect(packet).toMatchObject({ group: "council", from: "Main", to: ref.id, noWake: true });
+
+			expect(await lifecycle.ensureLive(ref.id)).toBe(session);
+			expect(await lifecycle.ensureLive(ref.id)).toBe(session);
+			expect(registry.get(ref.id)).toBe(ref);
+			expect(revive).toHaveBeenCalledTimes(1);
+			expect(prompt).not.toHaveBeenCalled();
+			const notices = sessionManager.getBranch().filter(entry => entry.type === "custom_message");
+			expect(notices).toHaveLength(1);
+			expect(notices[0]?.details).toMatchObject({
+				id: packet?.id,
+				from: "Main",
+				message: packet?.body,
+				group: "council",
+				fanoutId: "council-invite",
+			});
+			expect(session.agent.state.messages).toHaveLength(1);
+			expect(session.agent.state.messages[0]?.timestamp).toBe(packet?.ts);
+			expect(bus.history()).toHaveLength(1);
+		});
+
+		it("claims the deferred invite once when natural revival and a wake send observe the same idle transition", async () => {
+			const { session, sessionManager } = createRealSession();
+			sessions.push(session);
+			const prompt = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			const { promise: entered, resolve: enter } = Promise.withResolvers<void>();
+			const { promise: resume, resolve: release } = Promise.withResolvers<void>();
+			const handoff = session.deliverIrcMessage.bind(session);
+			const delivery = vi.spyOn(session, "deliverIrcMessage").mockImplementation(async message => {
+				if (message.noWake) {
+					enter();
+					await resume;
+				}
+				return handoff(message);
+			});
+			const id = "0-Parked";
+			registry.register({ id, displayName: "task", kind: "sub", session: null, status: "parked" });
+			const lifecycle = AgentLifecycleManager.global();
+			lifecycle.adopt(id, { idleTtlMs: 0, revive: async () => session });
+			await bus.deliverInvite("Main", id, "council", "next-turn");
+
+			const natural = lifecycle.ensureLive(id);
+			const wake = bus.send({ from: "0-Peer", to: id, body: "Start work" });
+			await entered;
+			await natural;
+			expect(prompt).not.toHaveBeenCalled();
+			release();
+			expect((await wake).outcome).toBe("revived");
+			expect(prompt).toHaveBeenCalledTimes(1);
+			expect(delivery.mock.calls.map(([message]) => message.noWake === true)).toEqual([true, false]);
+			expect(sessionManager.getBranch().filter(entry => entry.type === "custom_message")).toHaveLength(1);
+		});
+
+		it("does not move a parked invite to a same-name replacement in another session", async () => {
+			const id = "0-Parked";
+			const oldRoot = registry.register({
+				id: "OldRoot",
+				displayName: "main",
+				kind: "main",
+				session: makeFakeSession().session,
+			});
+			const newRoot = registry.register({
+				id: "NewRoot",
+				displayName: "main",
+				kind: "main",
+				session: makeFakeSession().session,
+			});
+			const old = registry.register({
+				id,
+				displayName: "task",
+				kind: "sub",
+				parentId: "OldRoot",
+				session: null,
+				status: "parked",
+			});
+			expect(registry.rootOf(id)).toBe(oldRoot);
+			expect((await bus.deliverInvite("OldRoot", id, "private", "next-turn"))?.outcome).toBe("queued");
+			registry.unregister(id, old);
+			const replacement = makeFakeSession();
+			registry.register({
+				id,
+				displayName: "task",
+				kind: "sub",
+				parentId: "NewRoot",
+				session: null,
+				status: "parked",
+			});
+			expect(registry.rootOf(id)).toBe(newRoot);
+			const lifecycle = AgentLifecycleManager.global();
+			lifecycle.adopt(id, { idleTtlMs: 0, revive: async () => replacement.session });
+			await lifecycle.ensureLive(id);
+			expect(replacement.delivered).toEqual([]);
+			await bus.send({ from: "NewRoot", to: id, body: "New assignment" });
+			expect(replacement.delivered.map(message => message.body)).toEqual(["New assignment"]);
 		});
 
 		it("send fails cleanly when a parked recipient has no reviver", async () => {
@@ -1046,7 +1258,13 @@ describe("IRC", () => {
 				expect(main.delivered).toHaveLength(0);
 				// Addressed to her: shown even with peer relay cards turned off.
 				expect(main.relayed.map(record => record.details)).toEqual([
-					{ id: expect.any(String), from: "0-Sub", to: "Captain", body: "need a decision" },
+					{
+						id: expect.any(String),
+						messageId: bus.history()[0]?.message.id,
+						from: "0-Sub",
+						to: "Captain",
+						body: "need a decision",
+					},
 				]);
 				expect(bus.history().map(entry => [entry.message.from, entry.message.to, entry.outcome])).toEqual([
 					["0-Sub", "Captain", "injected"],
@@ -1054,7 +1272,7 @@ describe("IRC", () => {
 				expect(bus.unreadCount("Captain")).toBe(0);
 			});
 
-			it("does not echo the main model's own message to her as a second card", async () => {
+			it("records the main model's DM without echoing its tool call as a second card", async () => {
 				const { main } = setup();
 				await bus.send({ from: "Main", to: "Captain", body: "from the composer model" });
 				expect(main.relayed).toHaveLength(0);

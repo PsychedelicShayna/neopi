@@ -160,9 +160,9 @@ import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-o
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentRegistry } from "../../registry/agent-registry";
-import { operatorIrcLogSource } from "../../irc/operator";
+import type { IrcClientOpenRequest, OperatorIrcClient } from "../../irc/operator";
 import { cfgIrcViewerEnabled } from "../../irc/settings";
-import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
+import { IrcClientComponent } from "../components/irc-client";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
@@ -349,8 +349,7 @@ export class SelectorController {
 	#remountingMenu: OpenMenu | undefined;
 	/** Snapshot handed to the next matching history reopen when it claims its menu. */
 	#pendingRestore: { kind: MenuKind; location: MenuLocation; snapshot: unknown } | undefined;
-	/** Closes the open IRC viewer without touching focus; see {@link showIrcViewer}. */
-	#releaseIrcViewer: (() => void) | undefined;
+	#ircComponent: { owner: OperatorIrcClient; component: IrcClientComponent } | undefined;
 	#hubRequest = 0;
 
 	constructor(private ctx: InteractiveModeContext) {}
@@ -560,6 +559,10 @@ export class SelectorController {
 				return true;
 			}
 			for (const [kind, menu] of this.#openMenus) {
+				if (kind === "irc-viewer") {
+					this.closeIrcViewer();
+					continue;
+				}
 				this.#openMenus.delete(kind);
 				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
 				if (menu.component instanceof SettingsSelectorComponent || menu.component instanceof ModelPickerComponent) {
@@ -1636,7 +1639,7 @@ export class SelectorController {
 	showHistorySearch(): void {
 		const historyStorage = this.ctx.historyStorage;
 		if (!historyStorage) return;
-		// Ctrl+R also opens over hook/ask prompts that replace the composer in the
+		// History search also opens over hook/ask prompts that replace the composer in the
 		// editor slot; the pick belongs to that prompt, not the hidden composer.
 		const focused = this.ctx.ui.getFocused();
 		const target = focused instanceof HookEditorComponent ? focused : this.ctx.editor;
@@ -4469,58 +4472,71 @@ export class SelectorController {
 		}
 	}
 
-	/**
-	 * The operator's IRC history for this UI's root and conversation (issue #1).
-	 * Agents gain nothing from it: it reads the bus's operator-only log.
-	 */
-	showIrcViewer(): void {
-		// A control client dismisses an overlay through the handle's own hide,
-		// which skips onClose. Finish that close first, so the key opens a fresh
-		// viewer instead of focusing the vanished one.
-		const open = this.#openMenus.get("irc-viewer")?.component;
-		if (open && !this.ctx.ui.overlayStack.some(entry => entry.component === open)) this.#releaseIrcViewer?.();
-		if (this.#focusOpenMenu("irc-viewer")) return;
+	/** Finish a dismissal performed directly by the terminal/control overlay handle. */
+	reconcileIrcViewer(): void {
+		const menu = this.#openMenus.get("irc-viewer");
+		if (menu && !this.ctx.ui.overlayStack.some(entry => entry.component === menu.component)) this.closeIrcViewer();
+	}
+
+	closeIrcViewer(): void {
+		const menu = this.#openMenus.get("irc-viewer");
+		if (!menu) return;
+		const client = this.#ircComponent;
+		client?.component.close();
+		client?.owner.setActive(false);
+		this.#releaseMenu("irc-viewer", menu);
+		menu.handle?.hide();
+	}
+
+	disposeIrcViewer(): void {
+		this.closeIrcViewer();
+		this.#ircComponent?.component.dispose();
+		this.#ircComponent = undefined;
+	}
+
+	showIrcViewer(request?: IrcClientOpenRequest): void {
+		this.reconcileIrcViewer();
 		if (!cfgIrcViewerEnabled.get(this.ctx.settings)) {
 			this.ctx.showStatus(t("overlaysModel.controller.irc.viewer_disabled"));
 			return;
 		}
-		const source = operatorIrcLogSource(() => this.ctx.session);
-		let released = false;
-		const release = () => {
-			if (released) return;
-			released = true;
-			viewer.dispose();
-			this.#releaseMenu("irc-viewer", menu);
-			if (this.#releaseIrcViewer === release) this.#releaseIrcViewer = undefined;
-		};
-		const done = () => {
-			release();
-			menu.handle?.hide();
-			this.focusActiveEditorArea();
-			this.ctx.ui.requestRender();
-		};
-		const viewer = new IrcViewerComponent({
-			source: {
-				entries: source.entries,
-				// Traffic arriving after an external dismissal releases the hidden viewer.
-				subscribe: listener =>
-					source.subscribe(() => {
-						if (this.ctx.ui.overlayStack.some(entry => entry.component === viewer)) listener();
-						else release();
-					}),
-			},
-			viewerKeys: this.ctx.keybindings.getKeys("app.irc.viewer"),
-			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
-			rows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
-			onClose: done,
-			requestRender: () => this.ctx.ui.requestRender(),
-			operatorId: this.ctx.ircOperatorId,
-			reply: this.ctx.ircOperatorId
-				? (to, message, replyTo) => this.ctx.sendAsIrcOperator(to, message, replyTo)
-				: undefined,
-		});
+		const owner = this.ctx.ircClient;
+		if (!owner) {
+			this.ctx.showStatus(t("overlays.irc_client.session_unavailable"));
+			return;
+		}
+		const explicitTarget = typeof request === "object";
+		const target = explicitTarget ? owner.resolveTarget(request) : undefined;
+		if (explicitTarget && !target) {
+			this.ctx.showStatus(t("overlays.irc_client.target_unavailable"));
+			return;
+		}
+		if (this.#ircComponent?.owner !== owner) {
+			this.disposeIrcViewer();
+			this.#ircComponent = {
+				owner,
+				component: new IrcClientComponent({
+					model: owner.model,
+					host: owner.host,
+					viewerKeys: this.ctx.keybindings.getKeys("app.irc.viewer"),
+					trafficKeys: this.ctx.keybindings.getKeys("app.irc.traffic"),
+					quickReplyKeys: this.ctx.keybindings.getKeys("app.irc.quickReply"),
+					requestRender: () => this.ctx.ui.requestRender(),
+					onClose: () => this.closeIrcViewer(),
+					maxRows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
+				}),
+			};
+		}
+		const { component } = this.#ircComponent;
+		const mode = typeof request === "string" ? request : "resume";
+		if (this.#openMenus.has("irc-viewer")) {
+			if (!request && this.ctx.ui.getFocused() === component) this.closeIrcViewer();
+			else if (this.#focusOpenMenu("irc-viewer") && request) component.open(mode, target);
+			return;
+		}
 		const menu = this.#claimMenu("irc-viewer", () => this.showIrcViewer());
-		this.#releaseIrcViewer = release;
-		this.#mountMenu(menu, viewer, () => this.#showFullscreenMenu(viewer));
+		this.#mountMenu(menu, component, () => this.#showFullscreenMenu(component));
+		owner.setActive(true);
+		component.open(mode, target);
 	}
 }

@@ -22,7 +22,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { AssistantTextRenderer, AssistantTextRendering, AssistantThinkingRenderer } from "./extension-types";
 import { ensureThemeSync, getMarkdownTheme, getMarkdownThemeWithLinkTargets, getThemeEpoch, theme } from "../theme";
-import { card, col, elapsed, node, span, text } from "../native/describe";
+import { card, col, elapsed, keyNames, node, span, text } from "../native/describe";
 import { hasTranscriptActions, runTranscriptAction, runTurnAction, turnHoldEntries } from "./transcript-actions";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { isNativeRendering } from "../native/state";
@@ -51,6 +51,7 @@ import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
+import { getKeybindings } from "../keybindings";
 
 /**
  * Max wrapped rows of a turn-ending provider error rendered inline in the
@@ -1294,6 +1295,7 @@ export class AssistantMessageComponent extends Container {
 			}),
 		];
 		if (message.stopReason === "error" && hasTranscriptActions()) {
+			const retryKey = getKeybindings().getKeys("app.retry")[0];
 			const button = (act: string, label: string, keys: readonly string[], title: string): NativeNode =>
 				node(
 					"row",
@@ -1309,7 +1311,7 @@ export class AssistantMessageComponent extends Container {
 						button(
 							"retry",
 							t("overlays.assistant_message.retry"),
-							["F5"],
+							retryKey ? keyNames(retryKey) : [],
 							t("overlays.assistant_message.retry_description"),
 						),
 						button(

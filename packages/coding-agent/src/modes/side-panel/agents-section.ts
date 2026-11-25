@@ -1,5 +1,6 @@
 import type { MouseRoutable, SgrMouseEvent } from "@oh-my-pi/pi-tui";
-import type { SidePanelPointerAware } from "@oh-my-pi/pi-tui/chrome";
+import type { PanelSelectionTarget, SidePanelPointerAware } from "@oh-my-pi/pi-tui/chrome";
+import { type MenuKeyReader, MenuViewport } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { modelChip, statusGlyph } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import type { AgentRecordLike, AgentStatus } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { agentColored } from "@oh-my-pi/pi-tui/overlays/agent-identity";
@@ -7,12 +8,14 @@ import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/
 import type { ObservableSession } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { uiProvenanceSuffix } from "@oh-my-pi/pi-tui/theme/provenance";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
-import type { SidePanelViewSection } from "../controllers/side-panel-controller";
+import type { SidePanelViewAction, SidePanelViewSection } from "../controllers/side-panel-controller";
 import { cfgSidebarAgentAutoscroll, cfgSidebarAgentFilters, cfgSidebarAgentOrder } from "../settings";
+import { RowSelection, selectedRow } from "./row-selection";
 
 /** What the agents section needs from its host. */
 export interface AgentsSectionHost {
@@ -28,6 +31,13 @@ export interface AgentsSectionHost {
 	focus(id: string): void | Promise<void>;
 	/** Return the main area to the primary session. */
 	returnToPrimary(): void;
+	/** Open `id`'s transcript, as the Agent Hub's Enter does. */
+	openTranscript(id: string): void;
+	/** Open the IRC viewer to message `id`. */
+	message(id: string): void;
+	/** The Agent Hub's explicit revive and kill. */
+	revive(id: string): void;
+	kill(id: string): void;
 	requestRender(): void;
 	/** Roster lifecycle and observed progress changes; returns the unsubscribe. */
 	onChange(listener: (event?: AgentRosterChange) => void): () => void;
@@ -67,9 +77,20 @@ function elapsedClock(ms: number): string {
 	return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${tail}`;
 }
 
-/** The filter controls stay fixed below the document, even when no agent matches. */
+/** Rows of the `f` popup: every filter control, then the sort direction. */
+const POPUP_ROWS = [...FILTER_CONTROLS, "order"] as const;
+const POPUP_ROW_HEIGHTS = POPUP_ROWS.map(() => 1);
+type AgentPopupRow = (typeof POPUP_ROWS)[number];
+
+/**
+ * The filter row stays fixed below the document, even when no agent matches:
+ * it shows what is filtered and a click toggles one control. `f` opens the
+ * popup where the keyboard toggles filters, autoscroll and the sort direction.
+ */
 class AgentControls implements MouseRoutable {
 	readonly #host: AgentsSectionHost;
+	readonly #popupViewport = new MenuViewport();
+	/** Popup cursor while the `f` popup is open; undefined otherwise. */
 	#selected: number | undefined;
 	#hits: { line: number; start: number; end: number; id: AgentControlId }[] = [];
 
@@ -77,15 +98,17 @@ class AgentControls implements MouseRoutable {
 		this.#host = host;
 	}
 
+	get popupOpen(): boolean {
+		return this.#selected !== undefined;
+	}
+
 	render(width: number): readonly string[] {
-		const settings = this.#host.settings;
-		const enabled = cfgSidebarAgentFilters.get(settings);
 		const rows: string[] = [];
 		this.#hits = [];
 		let line = "";
 		let used = 0;
-		for (const [index, id] of FILTER_CONTROLS.entries()) {
-			const on = id === "auto" ? cfgSidebarAgentAutoscroll.get(settings) : enabled.includes(id);
+		for (const id of FILTER_CONTROLS) {
+			const on = this.#isOn(id);
 			const text = truncateToWidth(`${on ? "+" : "-"}${t(`overlays.side_panel.filter.${id}`)}`, width, "");
 			const size = visibleWidth(text);
 			if (used > 0 && used + size + 1 > width) {
@@ -99,8 +122,7 @@ class AgentControls implements MouseRoutable {
 			}
 			this.#hits.push({ line: rows.length, start: used, end: used + size, id });
 			used += size;
-			const styled = on ? theme.bold(theme.fg("accent", text)) : theme.fg("muted", text);
-			line += index === this.#selected ? theme.bgFill("selectedBg", styled) : styled;
+			line += on ? theme.bold(theme.fg("accent", text)) : theme.fg("muted", text);
 		}
 		rows.push(line);
 		return rows;
@@ -112,25 +134,95 @@ class AgentControls implements MouseRoutable {
 		if (hit) this.#toggle(hit.id);
 	}
 
-	move(delta: number): void {
-		const count = FILTER_CONTROLS.length;
-		this.#selected = ((this.#selected ?? (delta > 0 ? -1 : 0)) + delta + count) % count;
+	/** `f`: open the popup on its first row. */
+	openPopup(): void {
+		this.#selected = 0;
 		this.#host.requestRender();
 	}
 
-	toggleSelected(): void {
-		if (this.#selected !== undefined) this.#toggle(FILTER_CONTROLS[this.#selected]!);
+	closePopup(): void {
+		if (this.#selected === undefined) return;
+		this.#selected = undefined;
+		this.#host.requestRender();
 	}
 
-	reset(): void {
-		this.#selected = undefined;
+	renderPopup(rowBudget: number): { title: string; rows: string[]; firstRow: number } {
+		// Reveal on resize as well as on cursor motion.
+		this.#popupViewport.reveal();
+		const { startIndex, endIndex } = this.#popupViewport.layout(POPUP_ROW_HEIGHTS, this.#selected!, rowBudget);
+		const rows: string[] = [];
+		for (let index = startIndex; index < endIndex; index++) {
+			const id = POPUP_ROWS[index]!;
+			const label =
+				id === "order"
+					? t(`overlays.side_panel.order.${cfgSidebarAgentOrder.get(this.#host.settings)}`)
+					: `${this.#isOn(id) ? "[x]" : "[ ]"} ${t(`overlays.side_panel.filter_long.${id}`)}`;
+			const selected = index === this.#selected;
+			const text = `${selected ? theme.nav.selected : " "} ${label}`;
+			rows.push(selected ? theme.bold(theme.fg("accent", text)) : text);
+		}
+		return {
+			title: t("overlays.side_panel.filters_title") + uiProvenanceSuffix("features", "side-panel-filters", true),
+			rows,
+			firstRow: startIndex,
+		};
+	}
+
+	activatePopupRow(row: number): void {
+		const id = POPUP_ROWS[row];
+		if (!id || !this.popupOpen) return;
+		this.#selected = row;
+		this.#toggle(id);
+	}
+
+	/** While the popup is open it reads every key: arrows (hjkl with Vim navigation) move, Space or Enter toggles, Esc, `f` or `q` close. */
+	handlePopupInput(data: string, keys: MenuKeyReader, popupFits: boolean): boolean {
+		if (this.#selected === undefined) return false;
+		if (data === "f" || data === "q") {
+			keys.reset();
+			this.closePopup();
+			return true;
+		}
+		const action = keys.read(data);
+		if (action === "pending") return true;
+		const count = POPUP_ROWS.length;
+		switch (action?.kind) {
+			case "move":
+			case "context":
+				this.#selected = (this.#selected + action.delta + count) % count;
+				this.#host.requestRender();
+				break;
+			case "boundary":
+				this.#selected = action.edge === "first" ? 0 : count - 1;
+				this.#host.requestRender();
+				break;
+			case "toggle":
+			case "confirm":
+			case "horizontal":
+				if (popupFits) this.activatePopupRow(this.#selected);
+				break;
+			case "cancel":
+				this.closePopup();
+				break;
+		}
+		return true;
 	}
 
 	invalidate(): void {}
 
-	#toggle(id: AgentControlId): void {
+	#isOn(id: AgentControlId): boolean {
 		const settings = this.#host.settings;
-		if (id === "auto") cfgSidebarAgentAutoscroll.set(settings, !cfgSidebarAgentAutoscroll.get(settings));
+		return id === "auto"
+			? cfgSidebarAgentAutoscroll.get(settings)
+			: cfgSidebarAgentFilters.get(settings).includes(id);
+	}
+
+	#toggle(id: AgentPopupRow): void {
+		const settings = this.#host.settings;
+		if (id === "order") {
+			const top = cfgSidebarAgentOrder.get(settings) === "newest-at-top";
+			cfgSidebarAgentOrder.set(settings, top ? "newest-at-bottom" : "newest-at-top");
+		} else if (id === "auto") cfgSidebarAgentAutoscroll.set(settings, !cfgSidebarAgentAutoscroll.get(settings));
 		else {
 			const current = cfgSidebarAgentFilters.get(settings);
 			cfgSidebarAgentFilters.set(
@@ -153,9 +245,15 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	#rowIds: readonly string[] = [];
 	#hovered: string | undefined;
 	#pendingFocus: { id: string } | undefined;
+	readonly selection: RowSelection;
+
+	itemIdAtRow(row: number): string | undefined {
+		return this.#rowIds[row];
+	}
 
 	constructor(host: AgentsSectionHost) {
 		this.#host = host;
+		this.selection = new RowSelection(() => host.requestRender());
 		this.#unsubscribe = host.onChange(event => {
 			if (event?.type === "removed") this.#changes.delete(event.ref.id);
 			else if (event && isListed(event.ref) && event.type !== "metadata_changed") {
@@ -194,8 +292,10 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 		this.#target = undefined;
 		const ids: string[] = [];
 		this.#rowIds = ids;
+		this.selection.begin();
 		if (agents.length === 0) {
 			this.#hovered = undefined;
+			this.selection.finish();
 			return [theme.fg("muted", truncateToWidth(t("overlays.side_panel.no_agents_match"), width))];
 		}
 		const focused = this.#host.focusedAgentId();
@@ -209,6 +309,9 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 			live ||= running;
 			this.#appendAgent(lines, ref, change, now, width, ref.id === focused);
 			for (let row = top; row < lines.length; row++) ids.push(ref.id);
+			if (this.selection.add(ref.id, top, lines.length)) {
+				for (let row = top; row < lines.length; row++) lines[row] = selectedRow(lines[row]!, width);
+			}
 			// Follow running work first; a parking transition must not pull it out of view.
 			if (
 				follow &&
@@ -223,6 +326,7 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 			}
 		}
 		if (this.#hovered !== undefined && !ids.includes(this.#hovered)) this.#hovered = undefined;
+		this.selection.finish();
 		if (live && !this.#tick) {
 			this.#tick = setTimeout(
 				() => {
@@ -351,7 +455,11 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	}
 }
 
-/** An Agent Hub jump list with its own live task tree and fixed filter controls. */
+/**
+ * An Agent Hub jump list with its own live task tree and fixed filter row.
+ * Keyboard: Up/Down select an agent, Right/Enter opens its transcript, `i`
+ * messages it, `r`/`x` revive or kill it, `f` opens the filter popup.
+ */
 export class AgentsSection implements SidePanelViewSection {
 	readonly id = "agents";
 	get title(): string {
@@ -361,8 +469,10 @@ export class AgentsSection implements SidePanelViewSection {
 	collapsed?: boolean;
 	readonly content: AgentsContent;
 	readonly footer: AgentControls;
+	readonly #host: AgentsSectionHost;
 
 	constructor(host: AgentsSectionHost) {
+		this.#host = host;
 		this.content = new AgentsContent(host);
 		this.footer = new AgentControls(host);
 	}
@@ -371,16 +481,59 @@ export class AgentsSection implements SidePanelViewSection {
 		return this.content.followTarget();
 	}
 
-	moveControl(delta: number): void {
-		this.footer.move(delta);
+	selectionTarget(): PanelSelectionTarget | undefined {
+		return this.content.selection.target();
 	}
 
-	toggleControl(): void {
-		this.footer.toggleSelected();
+	itemIdAtRow(row: number): string | undefined {
+		return this.content.itemIdAtRow(row);
 	}
 
-	resetControl(): void {
-		this.footer.reset();
+	moveSelection(delta: number): boolean {
+		return this.content.selection.move(delta);
+	}
+
+	selectEdge(edge: "first" | "last"): boolean {
+		return this.content.selection.edge(edge);
+	}
+
+	clearSelection(): void {
+		this.content.selection.clear();
+	}
+
+	expand(): void {
+		const id = this.content.selection.id;
+		if (id !== undefined) this.#host.openTranscript(id);
+	}
+
+	actions(): readonly SidePanelViewAction[] {
+		// The open popup reads every key itself and explains them in place.
+		if (this.footer.popupOpen) return [];
+		const filters = {
+			key: "f",
+			label: t("overlays.side_panel.action.filters"),
+			run: () => this.footer.openPopup(),
+		};
+		const id = this.content.selection.id;
+		if (id === undefined) return [filters];
+		return [
+			{ key: "i", label: t("overlays.side_panel.action.dm"), run: () => this.#host.message(id) },
+			{ key: "r", label: t("overlays.native_hint.revive"), run: () => this.#host.revive(id) },
+			{ key: "x", label: t("overlays.native_hint.kill"), run: () => this.#host.kill(id) },
+			filters,
+		];
+	}
+
+	handleModeInput(data: string, keys: MenuKeyReader, popupFits: boolean): boolean {
+		return this.footer.handlePopupInput(data, keys, popupFits);
+	}
+
+	resetMode(): void {
+		this.footer.closePopup();
+	}
+
+	get popup(): AgentControls | undefined {
+		return this.footer.popupOpen ? this.footer : undefined;
 	}
 
 	clickEmpty(): void {

@@ -49,11 +49,19 @@
 			"features": []
 		},
 		"nightly": {
-			"keybindings": ["app.agent.menu", "app.chain.skipStep", "app.navigation.dismiss", "tui.editor.redo"],
+			"keybindings": ["app.agent.menu", "app.chain.skipStep", "app.irc.quickReply", "app.irc.traffic", "app.navigation.dismiss", "tui.editor.redo"],
 			"statusSegments": [],
 			"roles": [],
 			"composerShapes": [],
-			"features": ["agent-menu", "agent-definition-editor", "model-folder-rules", "model-variants", "new-models", "spawn-screen"]
+			"features": [
+				"agent-menu",
+				"agent-definition-editor",
+				"model-folder-rules",
+				"model-variants",
+				"new-models",
+				"side-panel-filters",
+				"spawn-screen"
+			]
 		}
 	},
 	"upstream": [

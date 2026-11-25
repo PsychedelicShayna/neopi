@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { setTranscriptActionHandler, type TranscriptAction } from "@oh-my-pi/pi-tui/chat/transcript-actions";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
@@ -62,29 +64,36 @@ function texts(node: TspNode | undefined): string {
 
 describe("native transcript redesign", () => {
 	it("draws a failed request as one frame: status chip, the message once, actions that run omp's commands", async () => {
-		const actions: TranscriptAction[] = [];
-		setTranscriptActionHandler(action => actions.push(action));
-		const component = new AssistantMessageComponent(
-			failed("500 upstream overloaded\nupstream overloaded (type=server_error)"),
-		);
-		harness = await TspHarness.start();
-		harness.tui.addChild(component);
-		await harness.render();
+		const previous = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory());
+		try {
+			const actions: TranscriptAction[] = [];
+			setTranscriptActionHandler(action => actions.push(action));
+			const component = new AssistantMessageComponent(
+				failed("500 upstream overloaded\nupstream overloaded (type=server_error)"),
+			);
+			harness = await TspHarness.start();
+			harness.tui.addChild(component);
+			await harness.render();
 
-		const frame = harness.find(node => node.k === "card" && node.p?.role === "omp.error");
-		expect(frame?.p).toMatchObject({ tone: "error" });
-		expect(harness.find(node => node.k === "badge" && node.p?.role === "omp.error.code")?.p).toMatchObject({
-			text: "500",
-		});
-		const message = harness.find(node => node.p?.role === "omp.error.message");
-		expect(texts(message)).toBe("upstream overloaded (type=server_error)");
+			const frame = harness.find(node => node.k === "card" && node.p?.role === "omp.error");
+			expect(frame?.p).toMatchObject({ tone: "error" });
+			expect(harness.find(node => node.k === "badge" && node.p?.role === "omp.error.code")?.p).toMatchObject({
+				text: "500",
+			});
+			const message = harness.find(node => node.p?.role === "omp.error.message");
+			expect(texts(message)).toBe("upstream overloaded (type=server_error)");
 
-		const retry = harness.find(node => node.p?.role === "omp.error.action" && texts(node).startsWith("Retry"));
-		harness.event({ ev: "action", sf: harness.terminal.surface!, id: retry!.id, act: "retry" });
-		const copy = harness.find(node => node.p?.role === "omp.error.action" && texts(node).startsWith("Copy"));
-		harness.event({ ev: "action", sf: harness.terminal.surface!, id: copy!.id, act: "copy-error" });
-		expect(actions).toEqual([{ act: "retry" }, { act: "copy", text: "upstream overloaded (type=server_error)" }]);
-		expect(harness.errors).toEqual([]);
+			const retry = harness.find(node => node.p?.role === "omp.error.action" && texts(node).startsWith("Retry"));
+			expect(retry?.c?.find(node => node.k === "kbd")?.p).toMatchObject({ keys: ["ctrl", "alt", "r"] });
+			harness.event({ ev: "action", sf: harness.terminal.surface!, id: retry!.id, act: "retry" });
+			const copy = harness.find(node => node.p?.role === "omp.error.action" && texts(node).startsWith("Copy"));
+			harness.event({ ev: "action", sf: harness.terminal.surface!, id: copy!.id, act: "copy-error" });
+			expect(actions).toEqual([{ act: "retry" }, { act: "copy", text: "upstream overloaded (type=server_error)" }]);
+			expect(harness.errors).toEqual([]);
+		} finally {
+			setKeybindings(previous);
+		}
 	});
 
 	it("streams thinking under a live head, then settles to a collapsed 'Thought' line", async () => {

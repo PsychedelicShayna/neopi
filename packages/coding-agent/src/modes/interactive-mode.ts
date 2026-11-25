@@ -165,10 +165,19 @@ import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
-import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
+import {
+	type AgentHubRegistry,
+	canReviveAgent,
+	isAgentTranscriptReadOnly,
+} from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { DEFAULT_IRC_OPERATOR_HANDLE, operatorIrcLogSource, registerIrcOperator } from "../irc/operator";
-import { cfgIrcOperatorHandle } from "../irc/settings";
+import {
+	type IrcClientOpenRequest,
+	OperatorIrcClient,
+	operatorIrcLogSource,
+	registerIrcOperator,
+} from "../irc/operator";
+import { cfgIrcOperatorHandle, DEFAULT_IRC_OPERATOR_HANDLE } from "../irc/settings";
 import { executeSend } from "../irc/messaging";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
@@ -2278,6 +2287,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	get ircOperatorId(): string | undefined {
 		return this.#ircOperatorId;
 	}
+	get ircClient(): OperatorIrcClient | undefined {
+		return this.#ircClient;
+	}
 	/**
 	 * Send an IRC message as the operator: to a peer id or `all`, optionally as a
 	 * reply. Resolves with the delivery summary the hub tool would report.
@@ -2378,6 +2390,13 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.showStatus(error instanceof Error ? error.message : String(error));
 					});
 				},
+				openTranscript: id => {
+					panel.focusTranscript();
+					void this.#focusSidePanelAgent(id);
+				},
+				message: id => this.#messageSidePanelAgent(id),
+				revive: id => this.#reviveSidePanelAgent(id),
+				kill: id => this.#killSidePanelAgent(id),
 				requestRender,
 				onChange: listener => {
 					const registry = AgentRegistry.global();
@@ -2401,10 +2420,78 @@ export class InteractiveMode implements InteractiveModeContext {
 			"irc",
 			new IrcSection({
 				source: operatorIrcLogSource(() => this.session),
-				openViewer: () => this.showIrcViewer(),
+				openViewer: messageId => this.showIrcViewer(messageId === undefined ? undefined : { messageId }),
 				requestRender,
 			}),
 		);
+	}
+
+	/**
+	 * `i` on an Agents-view row. The IRC viewer cannot yet open a DM, so this
+	 * starts one in the composer with `/irc <id> `, leaving a draft untouched.
+	 */
+	#messageSidePanelAgent(id: string): void {
+		if (this.editor.getText().trim()) {
+			this.showStatus(translate("overlays.side_panel.dm_draft_busy", { id }));
+			return;
+		}
+		this.#sidePanelController.focusTranscript();
+		this.editor.setText(`/irc ${id} `);
+		this.ui.requestRender();
+	}
+
+	/** `r` on an Agents-view row: the Agent Hub's explicit revive. */
+	#reviveSidePanelAgent(id: string): void {
+		const ref = (this.collabGuest?.agentRegistry ?? AgentRegistry.global()).get(id);
+		if (!ref) {
+			this.showStatus(translate("overlays.interactive_mode.agent_gone"));
+			return;
+		}
+		if (isAgentTranscriptReadOnly(ref)) {
+			this.showStatus(translate("overlays.agent_hub.readonly_revive", { id }));
+			return;
+		}
+		if (!canReviveAgent(ref)) {
+			this.showStatus(translate("overlays.agent_hub.revival_requires_agent", { id, status: ref.status }));
+			return;
+		}
+		const remote = this.collabGuest?.hubRemote;
+		if (remote) {
+			remote.revive(id);
+			return;
+		}
+		AgentLifecycleManager.global()
+			.ensureLive(id)
+			.catch((error: unknown) => this.showStatus(error instanceof Error ? error.message : String(error)));
+	}
+
+	/** `x` on an Agents-view row: the Agent Hub's kill (abort, then release with a tombstone). */
+	#killSidePanelAgent(id: string): void {
+		const ref = (this.collabGuest?.agentRegistry ?? AgentRegistry.global()).get(id);
+		if (!ref) {
+			this.showStatus(translate("overlays.interactive_mode.agent_gone"));
+			return;
+		}
+		if (isAgentTranscriptReadOnly(ref)) {
+			this.showStatus(translate("overlays.agent_hub.readonly_kill", { id }));
+			return;
+		}
+		const remote = this.collabGuest?.hubRemote;
+		if (remote) {
+			remote.kill(id);
+			return;
+		}
+		const live = AgentRegistry.global().get(id);
+		if (!live) return;
+		void (async () => {
+			try {
+				if (live.status === "running" && live.session) await live.session.abort({ reason: USER_INTERRUPT_LABEL });
+				await AgentLifecycleManager.global().release(id, live, { tombstone: true });
+			} catch (error) {
+				logger.warn("Side panel: kill failed", { id, error: String(error) });
+				this.showStatus(error instanceof Error ? error.message : String(error));
+			}
+		})();
 	}
 
 	/**
@@ -2421,8 +2508,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			return undefined;
 		}
 		if (ref.kind !== "sub" || ref.status === "aborted") {
-			this.showStatus(translate("overlays.interactive_mode.agent_read_only", { id: `${id}` }));
-			this.showAgentHub();
+			// Read-only transcripts open in the Agent Hub's transcript view, as its Enter does.
+			this.showAgentHub({ initialTranscript: id });
 			return undefined;
 		}
 		// A collab guest cannot focus the host's agents locally; the hub views them through the host.
@@ -2498,6 +2585,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** The operator's IRC id while she is registered as a participant (issue #31). */
 	#ircOperatorId: string | undefined;
 	#releaseIrcOperator: (() => void) | undefined;
+	#ircClient: OperatorIrcClient | undefined;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
 	#pinnedHudOverride: boolean | undefined;
 	#eventBus?: EventBus;
@@ -9031,6 +9119,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter?.();
 		this.#disposeImageBlobWriter = undefined;
 		this.#hideSessionInfo();
+		this.#selectorController.disposeIrcViewer();
 		if (this.#ownsStartedUi) {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
@@ -9064,11 +9153,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		const handle = cfgIrcOperatorHandle.get(this.settings).trim() || DEFAULT_IRC_OPERATOR_HANDLE;
 		this.#releaseIrcOperator = registerIrcOperator(registry, handle, root.id);
 		this.#ircOperatorId = this.#releaseIrcOperator ? handle : undefined;
+		// The visible transcript can belong to a focused child. IRC actions and
+		// the operator's state remain bound to the owning primary conversation.
+		const session = this.session;
+		const resetClient = () => {
+			this.#selectorController.disposeIrcViewer();
+			this.#ircClient?.dispose();
+			this.#ircClient = new OperatorIrcClient(root, session, {
+				operatorName: handle,
+				operatorId: this.#ircOperatorId,
+				requestRender: () => this.ui.requestRender(),
+				reconcileOverlay: () => this.#selectorController.reconcileIrcViewer(),
+			});
+		};
 		IrcBus.restoreGroupsForRoot(root);
 		const releaseOperator = this.#releaseIrcOperator;
-		const unsubscribe = this.session.registerSessionChangeCallback(() => IrcBus.restoreGroupsForRoot(root));
+		resetClient();
+		const unsubscribe = session.registerSessionChangeCallback(() => {
+			IrcBus.restoreGroupsForRoot(root);
+			resetClient();
+		});
+		// Focus follows a child's transcript subscription, but an operator
+		// notice still belongs to the person at this UI.
+		const unsubscribeRelay = session.subscribe(event => {
+			if (
+				this.focusedAgentId &&
+				event.type === "irc_message" &&
+				event.message.customType === "irc:relay" &&
+				event.message.display
+			) {
+				return this.#eventController.dispatchSessionEvent(event);
+			}
+		});
 		this.#releaseIrcOperator = () => {
 			unsubscribe();
+			unsubscribeRelay();
+			this.#selectorController.disposeIrcViewer();
+			this.#ircClient?.dispose();
+			this.#ircClient = undefined;
 			releaseOperator?.();
 		};
 	}
@@ -10114,7 +10236,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.releaseStaleYieldCompaction();
 	}
 	/**
-	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:
+	 * Reconcile the idle retry status row with the transcript tail:
 	 * mount it when the last turn died on a tool call (Esc mid-execution,
 	 * stream failure) and the status row is free, remove it when stale. Runs at
 	 * turn end and after every transcript replay (startup resume, `/tree`,
@@ -10131,7 +10253,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		// Never contend with a live loader (working/auto-retry/compaction).
 		if (!show || this.statusContainer.children.length > 0) return;
-		const retryKey = this.keybindings.getKeys("app.retry")[0] ?? "f5";
+		const retryKey = this.keybindings.getKeys("app.retry")[0];
+		if (!retryKey) return;
 		// Laid out as the working row it replaces: a blank row above, then the
 		// key in the column where the working row's interrupt key stood.
 		const hint = new Container();
@@ -10687,8 +10810,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		)?.trim();
 	}
 
-	showIrcViewer(): void {
-		this.#selectorController.showIrcViewer();
+	showIrcViewer(request?: IrcClientOpenRequest): void {
+		this.#selectorController.showIrcViewer(request);
 	}
 
 	resetObserverRegistry(): void {

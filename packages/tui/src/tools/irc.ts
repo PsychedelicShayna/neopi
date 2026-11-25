@@ -27,6 +27,8 @@ export interface IrcMessage {
 	 * the broadcaster, mostly to say the message was not for it.
 	 */
 	broadcast?: boolean;
+	/** Passive local delivery: neither interrupt nor start a model turn. */
+	noWake?: true;
 	/**
 	 * Interim acknowledgement or progress on something the recipient asked
 	 * (`agent://<id>?progress`): it neither answers that request nor asks one,

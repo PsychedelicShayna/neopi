@@ -15,9 +15,14 @@
 
 ### Added
 
+- Alt+I opens the IRC client for rooms, DMs and pinned conversations; Alt+Shift+I jumps to Traffic. Persisted sessions resume their recent IRC history in the same NeoPi profile ([#926](https://github.com/PsychedelicShayna/neopi/issues/926)).
+- Choose which IRC room messages and DMs draw Alt+I there or become the Alt+R quick-reply target, without hiding delivered messages from the transcript or losing unread counts. You can also turn off incoming DMs in Settings ([#930](https://github.com/PsychedelicShayna/neopi/issues/930)).
+- Alt+R opens the IRC reply composer for the latest message that notified you or the selected IRC message; retrying the last failed turn now uses Ctrl+Alt+R.
+- Open the exact IRC message in the client by clicking its row in the Alt+T side panel or pressing Enter on it.
 - Parents can set a running subagent's priority tier to fast, ultra, or off over ctl/RPC ([#915](https://github.com/PsychedelicShayna/neopi/issues/915)).
 - `/moa web` now edits every mixture NeoPi reads for the workspace. A sidebar that opens when you hover the left edge lists them by user and project file, and lets you rename them or move and copy them between scopes. Saving checks each file for edits made since it was loaded and reports a conflict instead of continuing. A move writes the receiving file before removing the original, so an interrupted save can leave a duplicate rather than lose the mixture at the points the tests interrupt it.
 - Alt+T opens the side panel immediately; its Agents view shows live assignments and wait timers, remembers your filters, and follows the newest agent state changes.
+- Press `f` in the Agents side panel to change filters and sort order, or `?` in any side-panel view for navigation help. In short terminals, use PageDown or End to read the rest of the help and Esc to return to the panel.
 - Open `/moa web` to edit your workspace's Mixture of Agents graph in a local browser and refresh the running session's roster when you save. Like Deck, it warns and asks for confirmation before saving a rewrite that drops source fields ([#849](https://github.com/PsychedelicShayna/neopi/issues/849)).
 - `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
 - `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available or its refresh temporarily fails; `live.endpoint` still overrides automatic routing.
@@ -358,6 +363,9 @@
 
 ### Changed
 
+- The Alt+T side panel is usable from the keyboard: `Alt+T` opens it with focus and then switches focus between it and the transcript, arrows select agents or IRC messages, `→` opens the selection, `←`/`Esc` return to the transcript, `Tab` switches views, and `q` closes it. The `Alt+T` `t`/`a`/`i` chords are gone.
+- In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` opens a filter popup that also holds the sort direction; `?` shows help, and navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
+- In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` edits the filter row; navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
 - Drag the docked side panel's divider (with `tui.mouse` on) to resize it; the width is remembered, and right-clicking the divider returns to the automatic width.
 - The IRC transcript keeps full messages to you or your attached agent across `/resume`, shows a shared delivery once with both names even when focused on a child agent, and presents your agent's sent DMs and group posts as outgoing cards.
 - Messages between two other agents no longer show in the main transcript; read them in the IRC viewer. **IRC Cards in Transcript** is now **Announce Agent-to-Agent IRC** and only decides whether live voice, event sounds and connected clients hear that traffic.

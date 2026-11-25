@@ -2605,7 +2605,7 @@ export class EventController {
 		this.ctx.flushPendingCommandOutput();
 		this.#lastAssistantComponent = undefined;
 		// When the interrupted/failed turn died on a tool call, this replaces the
-		// torn-down "Working…" row with the "F5 to Retry" affordance.
+		// torn-down "Working…" row with the retry affordance.
 		this.ctx.syncRetryHintRow();
 		this.ctx.ui.requestRender();
 		// The run yielded: a `/compact` queued behind it runs now. A run the user stopped (Esc, including

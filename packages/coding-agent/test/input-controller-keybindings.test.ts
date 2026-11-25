@@ -82,12 +82,12 @@ async function createContext() {
 		"app.display.reset": ["alt+l"],
 		"app.stt.pushToTalk": ["space"],
 		"app.thinking.toggle": ["ctrl+t"],
-		"app.history.search": ["ctrl+r"],
+		"app.history.search": ["ctrl+h"],
 		"app.editor.external": ["ctrl+g"],
 		"app.local.open": ["alt+g"],
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["alt+m"],
-		"app.retry": ["alt+r"],
+		"app.retry": ["ctrl+alt+r"],
 		"app.clipboard.pasteImage": ["ctrl+v"],
 		"app.tools.toggleVisibility": ["ctrl+shift+o"],
 		"app.tools.expand": ["ctrl+o"],
@@ -455,7 +455,7 @@ describe("InputController keybinding setup", () => {
 
 		controller.setupKeyHandlers();
 
-		expect(spies.setActionKeys).toHaveBeenCalledWith("app.retry", ["alt+r"]);
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.retry", ["ctrl+alt+r"]);
 		expect(editor.onRetry).toBeDefined();
 
 		editor.setText("draft that should survive retry");
@@ -1550,7 +1550,7 @@ describe("InputController image paste into an image-accepting prompt", () => {
 
 describe("InputController global editor actions", () => {
 	const CTRL_T = "\x14";
-	const CTRL_R = "\x12";
+	const CTRL_H = "\x1b[104;5u";
 	const CTRL_G = "\x07";
 	const CTRL_SHIFT_O = "\x1b[111;6u";
 	const ALT_L = "\x1bl";
@@ -1575,7 +1575,7 @@ describe("InputController global editor actions", () => {
 
 		expect(dispatchInput(listeners, CTRL_T)).toEqual({ consume: true });
 		expect(context.ctx.toggleThinkingBlockVisibility).toHaveBeenCalledTimes(1);
-		expect(dispatchInput(listeners, CTRL_R)).toEqual({ consume: true });
+		expect(dispatchInput(listeners, CTRL_H)).toEqual({ consume: true });
 		expect(context.ctx.showHistorySearch).toHaveBeenCalledTimes(1);
 		expect(dispatchInput(listeners, CTRL_G)).toEqual({ consume: true });
 		expect(openExternalEditor).toHaveBeenCalledTimes(1);
@@ -1583,6 +1583,23 @@ describe("InputController global editor actions", () => {
 		expect(context.ctx.hideToolActivity).toBe(true);
 		expect(dispatchInput(listeners, ALT_L)).toEqual({ consume: true });
 		expect(context.spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("routes enhanced Ctrl+H, but not Ctrl+R or legacy Backspace, to prompt history", async () => {
+		const context = await createContext();
+		context.ctx.keybindings = KeybindingsManager.inMemory();
+		context.setFocused(context.editor);
+		new context.InputController(context.ctx).setupKeyHandlers();
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, "\x12")).toBeUndefined(); // Ctrl+R falls through to the editor
+		expect(dispatchInput(listeners, "\x08")).toBeUndefined(); // Ambiguous legacy Ctrl+H / Backspace
+		expect(dispatchInput(listeners, "\x7f")).toBeUndefined(); // Legacy DEL-encoded Backspace
+		expect(context.ctx.showHistorySearch).not.toHaveBeenCalled();
+
+		expect(dispatchInput(listeners, CTRL_H)).toEqual({ consume: true });
+		expect(dispatchInput(listeners, "\x1b[27;5;104~")).toEqual({ consume: true }); // xterm modifyOtherKeys
+		expect(context.ctx.showHistorySearch).toHaveBeenCalledTimes(2);
 	});
 
 	it("still routes transcript actions when the main editor holds focus", async () => {
@@ -1593,6 +1610,22 @@ describe("InputController global editor actions", () => {
 
 		expect(dispatchInput(listeners, CTRL_T)).toEqual({ consume: true });
 		expect(context.ctx.toggleThinkingBlockVisibility).toHaveBeenCalledTimes(1);
+	});
+
+	it("routes Alt+R to quick reply from the main composer but leaves it to a focused overlay", async () => {
+		const context = await createContext();
+		const showIrcViewer = vi.fn();
+		Object.assign(context.ctx, { showIrcViewer });
+		context.setKeybinding("app.irc.quickReply", ["alt+r"]);
+		new context.InputController(context.ctx).setupKeyHandlers();
+		const listeners = registeredInputListeners(context.spies.addInputListener);
+
+		expect(dispatchInput(listeners, "\x1br")).toEqual({ consume: true });
+		expect(showIrcViewer).toHaveBeenCalledWith("quickReply");
+
+		context.setOverlayVisible(true);
+		expect(dispatchInput(listeners, "\x1br")).toBeUndefined();
+		expect(showIrcViewer).toHaveBeenCalledTimes(1);
 	});
 
 	it("defers while an overlay owns the active surface", async () => {
