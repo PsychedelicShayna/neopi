@@ -24,6 +24,7 @@ test("two live advisors granted irc without write join and speak in a council as
 		id: recipient,
 		kind: "sub",
 		displayName: recipient,
+		parentId: ownerId,
 		session: {
 			deliverIrcMessage: async (message: IrcMessage) => {
 				received.push(message);

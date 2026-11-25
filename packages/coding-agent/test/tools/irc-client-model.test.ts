@@ -87,6 +87,36 @@ describe("IRC conversation client model", () => {
 		}
 	});
 
+	it("counts quiet room and DM arrivals without choosing them as the Alt+I target", async () => {
+		const { bus, source } = fixture();
+		const room = ircRoomId("council");
+		const fallback = ircDmId("Shayna", "A");
+		const dm = ircDmId("Shayna", "B");
+		await bus.group("A", { op: "create", group: "council", members: ["A", "B", "Shayna"], notice: "silent" });
+		const client = new IrcClientModel(source, { operatorId: "Shayna", roomNotificationDefault: () => "all" });
+		try {
+			client.open("resume", fallback);
+			client.close();
+			client.setNotificationLevel(room, "none");
+			client.setNotificationLevel(dm, "mentions");
+			await bus.group("A", { op: "send", group: "council", message: "@everyone quiet room" });
+			await send(bus, "B", "Shayna", "hello @Shayna-other");
+			expect(client.unread(room)).toBe(1);
+			expect(client.unread(dm)).toBe(1);
+			// Making the old room activity eligible now must not make it a fresh notification.
+			client.setNotificationLevel(room, "all");
+			expect(client.open()).toBe(fallback);
+			client.close();
+			await send(bus, "B", "Shayna", "(@operator) decision");
+			expect(client.open()).toBe(dm);
+			client.close();
+			await bus.group("A", { op: "send", group: "council", message: "unmentioned activity" });
+			expect(client.open()).toBe(room);
+		} finally {
+			client.dispose();
+		}
+	});
+
 	it("counts a room fan-out once and restores room selection, pins, and read state", async () => {
 		const { bus, source } = fixture();
 		const room = ircRoomId("council");

@@ -76,8 +76,6 @@ import {
 	splitAssistantMessageToolTimeline,
 } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { isOperatorIrcNotice } from "@oh-my-pi/pi-tui/chat/irc-message";
-import { operatorRelayNotifies } from "../../irc/operator";
-import { AgentRegistry } from "../../registry/agent-registry";
 import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { ComposerPredictionController } from "./composer-prediction-controller";
 import { StreamingRevealController } from "./streaming-reveal";
@@ -1499,10 +1497,7 @@ export class EventController {
 		if (!event.message.display) return;
 		const operatorId = this.ctx.ircOperatorId;
 		const operatorCopy = operatorId !== undefined && isOperatorIrcNotice(event.message, operatorId);
-		if (operatorCopy) {
-			const rootId = AgentRegistry.global().rootForSession(this.ctx.session)?.id;
-			if (!operatorRelayNotifies(event.message.details, operatorId, rootId)) return;
-		}
+		if (operatorCopy && !this.ctx.ircClient?.relayNotifies(event.message.details)) return;
 		const details: unknown = event.message.details;
 		const messageId = isRecord(details) && typeof details.messageId === "string" ? details.messageId : undefined;
 		const signature = `${event.message.role}:${event.message.customType}:${messageId ?? event.message.timestamp}`;

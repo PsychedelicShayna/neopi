@@ -5,6 +5,9 @@ type IrcRoomId = `room:${string}`;
 type IrcDmId = `dm:${string}`;
 export type IrcConversationId = typeof IRC_TRAFFIC_ID | IrcRoomId | IrcDmId;
 
+export const IRC_NOTIFICATION_LEVELS = ["all", "mentions", "none"] as const;
+export type IrcNotificationLevel = (typeof IRC_NOTIFICATION_LEVELS)[number];
+
 export function ircRoomId(name: string): IrcRoomId {
 	return `room:${name}`;
 }
@@ -65,14 +68,14 @@ export interface IrcClientSnapshot {
 	readonly lastConversation: IrcConversationId;
 	readonly pinned: readonly IrcConversationId[];
 	readonly read: readonly string[];
+	readonly notifications?: readonly (readonly [IrcConversationId, IrcNotificationLevel])[];
 }
 
 export interface IrcClientModelOptions {
 	operatorId?: string;
 	snapshot?: IrcClientSnapshot;
 	onStateChange?: (state: IrcClientSnapshot) => void;
-	/** The same predicate that decides whether a ledger entry produces a UI notification. */
-	notifies?: (entry: IrcLogEntry) => boolean;
+	roomNotificationDefault?: () => IrcNotificationLevel;
 }
 
 const MENTION_CONTINUATION = /[\p{L}\p{N}_/-]/u;
@@ -90,22 +93,9 @@ function hasMention(text: string, handle: string): boolean {
 	return false;
 }
 
-/** Default client policy: addressed DMs, and mentions in room messages delivered to the operator. */
-export function ircEntryNotifiesOperator(
-	entry: Pick<IrcLogEntry, "outcome" | "broadcast"> & {
-		message: Partial<Pick<IrcLogEntry["message"], "from" | "to" | "group" | "groupText" | "broadcast">>;
-	},
-	operatorId?: string,
-	rootId?: string,
-): boolean {
-	const { message, outcome, broadcast } = entry;
-	if (!operatorId || message.from === operatorId || message.to !== operatorId || outcome === "failed") return false;
-	if (message.group === undefined) return (!rootId || message.from !== rootId) && !broadcast && !message.broadcast;
-	const body = message.groupText?.toLowerCase();
-	return (
-		body !== undefined && (hasMention(body, operatorId) || hasMention(body, "operator") || hasMention(body, "everyone"))
-	);
-}
+type NotificationEntry = Pick<IrcLogEntry, "outcome" | "broadcast"> & {
+	message: Partial<Pick<IrcLogEntry["message"], "from" | "to" | "body" | "group" | "groupText" | "broadcast">>;
+};
 
 interface ProjectedRow {
 	entry: IrcLogEntry;
@@ -121,7 +111,7 @@ export class IrcClientModel {
 	readonly #listeners = new Set<() => void>();
 	readonly #pendingNotifications = new Set<string>();
 	readonly #unsubscribe: () => void;
-	readonly #notifies: (entry: IrcLogEntry) => boolean;
+	readonly #notificationLevels: Map<IrcConversationId, IrcNotificationLevel>;
 	#rows = new Map<string, ProjectedRow>();
 	#observedLegs = new Set<string>();
 	#traffic: IrcLogEntry[] = [];
@@ -137,9 +127,9 @@ export class IrcClientModel {
 		const { snapshot, operatorId } = options;
 		this.#read = new Set(snapshot?.read);
 		this.#pinned = new Set(snapshot?.pinned);
+		this.#notificationLevels = new Map(snapshot?.notifications);
 		this.#lastConversation = snapshot?.lastConversation ?? IRC_TRAFFIC_ID;
 		this.#selected = this.#lastConversation;
-		this.#notifies = options.notifies ?? (entry => ircEntryNotifiesOperator(entry, operatorId));
 		// Hydrated entries are backlog, not fresh notifications.
 		this.#refresh(false);
 		this.#unsubscribe = source.subscribe(() => {
@@ -236,8 +226,39 @@ export class IrcClientModel {
 		this.#emit();
 	}
 
+	notificationLevel(id: IrcConversationId): IrcNotificationLevel {
+		if (id === IRC_TRAFFIC_ID) return "none";
+		return this.#notificationLevels.get(id) ??
+			(id.startsWith("dm:") ? "all" : (this.options.roomNotificationDefault?.() ?? "mentions"));
+	}
+
+	setNotificationLevel(id: IrcConversationId, level: IrcNotificationLevel): void {
+		if (id === IRC_TRAFFIC_ID || this.#notificationLevels.get(id) === level) return;
+		this.#notificationLevels.set(id, level);
+		this.#save();
+		this.#emit();
+	}
+
+	/** The same addressed-message predicate drives live cards and the Alt+I target. */
+	notifies({ message, outcome, broadcast }: NotificationEntry): boolean {
+		const operatorId = this.options.operatorId;
+		const { from, to, group } = message;
+		if (!operatorId || !from || from === operatorId || to !== operatorId || outcome === "failed") return false;
+		if (group === undefined && (broadcast || message.broadcast)) return false;
+		const id = group === undefined ? ircDmId(from, operatorId) : ircRoomId(group);
+		const level = this.notificationLevel(id);
+		if (level !== "mentions") return level === "all";
+		const body = (group === undefined ? message.body : message.groupText ?? message.body)?.toLowerCase();
+		return body !== undefined && (hasMention(body, operatorId) || hasMention(body, "operator") || hasMention(body, "everyone"));
+	}
+
 	snapshot(): IrcClientSnapshot {
-		return { lastConversation: this.#lastConversation, pinned: [...this.#pinned], read: [...this.#read] };
+		return {
+			lastConversation: this.#lastConversation,
+			pinned: [...this.#pinned],
+			read: [...this.#read],
+			notifications: [...this.#notificationLevels],
+		};
 	}
 
 	subscribe(listener: () => void): () => void {
@@ -259,7 +280,7 @@ export class IrcClientModel {
 			const leg = entry.message.id;
 			// Remember the policy at arrival time; changing it must not promote old chatter.
 			const notified =
-				before?.notified || this.#rows.get(key)?.notified || (!this.#observedLegs.has(leg) && this.#notifies(entry));
+				before?.notified || this.#rows.get(key)?.notified || (!this.#observedLegs.has(leg) && this.notifies(entry));
 			observedLegs.add(leg);
 			if (!before) rows.set(key, { entry, notified });
 			else {

@@ -25,18 +25,18 @@ import {
 	ircDmId,
 	ircEntryConversationId,
 	ircEntryId,
-	ircEntryNotifiesOperator,
 	IrcClientModel,
 	IRC_TRAFFIC_ID,
+	IRC_NOTIFICATION_LEVELS,
 	type IrcClientSnapshot,
 	type IrcConversationId,
+	type IrcNotificationLevel,
+	ircRoomId,
 	otherIrcDmPeer,
 } from "./client-model";
-import type { IrcGroupRequest } from "./groups";
+import type { IrcGroupRequest, IrcRoomSnapshot } from "./groups";
 import { ensureIrcOperatorStateDirectory, ircOperatorStatePath } from "./operator-storage";
-
-/** The operator's IRC id unless `irc.operator.handle` names another. */
-export const DEFAULT_IRC_OPERATOR_HANDLE = "Operator";
+import { cfgIrcOperatorNotifyDefault } from "./settings";
 
 /**
  * Register `handle` as the operator under `rootId`. Returns the unregister, or
@@ -87,23 +87,14 @@ export function operatorIrcLogSource(session: () => AgentSession): IrcLogSource 
 /** Side-panel targets are real message or IRC peer ids, not row numbers or display names. */
 export type IrcClientOpenRequest = "traffic" | { messageId: string } | { dm: string };
 
-/** Used at live relay presentation, before the bus has appended the delivery to its history. */
-export function operatorRelayNotifies(details: unknown, operatorId: string, rootId?: string): boolean {
-	if (!isRecord(details)) return false;
-	const from = typeof details.from === "string" ? details.from : undefined;
-	if (from === undefined) return false;
-	const to = typeof details.to === "string" ? details.to : undefined;
-	const group = typeof details.group === "string" ? details.group : undefined;
-	const groupText = typeof details.groupText === "string" ? details.groupText : undefined;
-	return ircEntryNotifiesOperator(
-		{ message: { from, to, group, groupText }, broadcast: details.broadcast === true, outcome: "injected" },
-		operatorId,
-		rootId,
-	);
-}
-
 function isConversationId(value: unknown): value is IrcConversationId {
 	return typeof value === "string" && (value === IRC_TRAFFIC_ID || value.startsWith("room:") || value.startsWith("dm:"));
+}
+
+function isNotificationOverride(value: unknown): value is [IrcConversationId, IrcNotificationLevel] {
+	return Array.isArray(value) && value.length === 2 &&
+		isConversationId(value[0]) && value[0] !== IRC_TRAFFIC_ID &&
+		IRC_NOTIFICATION_LEVELS.some(level => level === value[1]);
 }
 
 function readSnapshot(file: string | undefined): IrcClientSnapshot | undefined {
@@ -118,7 +109,12 @@ function readSnapshot(file: string | undefined): IrcClientSnapshot | undefined {
 			Array.isArray(data.read) &&
 			data.read.every(id => typeof id === "string")
 		) {
-			return { lastConversation: data.lastConversation, pinned: data.pinned, read: data.read };
+			return {
+				lastConversation: data.lastConversation,
+				pinned: data.pinned,
+				read: data.read,
+				notifications: Array.isArray(data.notifications) ? data.notifications.filter(isNotificationOverride) : undefined,
+			};
 		}
 	} catch (error) {
 		if (!isEnoent(error)) logger.warn("Could not restore IRC client state", { error });
@@ -142,8 +138,9 @@ export class OperatorIrcClient {
 	readonly #registry = AgentRegistry.global();
 	readonly #sessionId: string;
 	readonly #unsubscribeRegistry: () => void;
+	readonly #unsubscribeRooms: () => void;
 	readonly #statusEnteredAt = new WeakMap<AgentRef, number>();
-	#rooms = new Map<string, readonly string[]>();
+	#rooms: readonly IrcRoomSnapshot[] = [];
 	#active = false;
 	#roomRefreshRunning = false;
 	#roomRefreshQueued = false;
@@ -165,14 +162,13 @@ export class OperatorIrcClient {
 				subscribe: listener => bus.onHistory(() => {
 					reconcileOverlay();
 					listener();
-					if (this.#active) void this.#refreshRooms();
 				}),
 			},
 			{
 				operatorId,
 				snapshot: readSnapshot(this.#snapshotFile()),
 				onStateChange: snapshot => this.#save(snapshot),
-				notifies: entry => ircEntryNotifiesOperator(entry, operatorId, root.id),
+				roomNotificationDefault: () => session.settings ? cfgIrcOperatorNotifyDefault.get(session.settings) : "mentions",
 			},
 		);
 		this.host = {
@@ -187,10 +183,10 @@ export class OperatorIrcClient {
 		};
 		this.#unsubscribeRegistry = this.#registry.onChange(({ type, ref }) => {
 			if (type === "status_changed") this.#statusEnteredAt.set(ref, ref.lastActivity);
-			if (this.#active) {
-				requestRender();
-				if (type === "registered" || type === "removed" || type === "status_changed") void this.#refreshRooms();
-			}
+			if (this.#active) requestRender();
+		});
+		this.#unsubscribeRooms = bus.onRooms(() => {
+			if (this.#active) void this.#refreshRooms();
 		});
 	}
 
@@ -198,6 +194,23 @@ export class OperatorIrcClient {
 		this.#active = active;
 		if (active) void this.#refreshRooms();
 		else this.#roomRefreshQueued = false;
+	}
+
+	/** Live relay presentation, before the bus has appended that delivery to the ledger. */
+	relayNotifies(details: unknown): boolean {
+		if (!this.#isCurrent() || !isRecord(details)) return false;
+		const { from, to, body, group, groupText, broadcast } = details;
+		return this.model.notifies({
+			message: {
+				from: typeof from === "string" ? from : undefined,
+				to: typeof to === "string" ? to : undefined,
+				body: typeof body === "string" ? body : undefined,
+				group: typeof group === "string" ? group : undefined,
+				groupText: typeof groupText === "string" ? groupText : undefined,
+			},
+			broadcast: broadcast === true,
+			outcome: "injected",
+		});
 	}
 
 	resolveTarget(request: Exclude<IrcClientOpenRequest, "traffic">): IrcClientTarget | undefined {
@@ -220,6 +233,7 @@ export class OperatorIrcClient {
 		this.#disposed = true;
 		this.setActive(false);
 		this.#unsubscribeRegistry();
+		this.#unsubscribeRooms();
 		this.model.dispose();
 	}
 
@@ -273,15 +287,29 @@ export class OperatorIrcClient {
 	}
 
 	#roomRows(): IrcClientRoom[] {
-		return Array.from(this.#rooms, ([name, memberIds]) => {
-			const { operatorId } = this.host;
-			const joined = operatorId !== undefined && memberIds.includes(operatorId);
+		return this.#rooms.map(room => {
+			const { name, permissions, mute } = room;
+			const joined = this.host.operatorId !== undefined && room.joined;
+			const capabilities: NonNullable<IrcClientRoom["capabilities"]>[number][] = [];
+			if (this.host.operatorId !== undefined) {
+				if (!joined) capabilities.push("join-silent", "join-announce", "join-invisible");
+				else {
+					capabilities.push("notifications", "leave");
+					if (permissions.invite) capabilities.push("invite");
+					if (permissions.admin) capabilities.push("mute", "remove", "permissions");
+				}
+			}
 			return {
 				name,
 				joined,
-				notifications: joined ? "mentions" : undefined,
-				members: memberIds.map(id => this.#member(id)),
-				capabilities: joined ? ["leave", "remove"] : [],
+				canSend: joined && permissions.send && !mute,
+				notifications: joined ? this.model.notificationLevel(ircRoomId(name)) : undefined,
+				members: room.members.map(member => ({
+					...this.#member(member.id),
+					muted: member.mute !== undefined,
+					permissions: member.permissions,
+				})),
+				capabilities,
 			};
 		});
 	}
@@ -292,20 +320,12 @@ export class OperatorIrcClient {
 		if (this.#roomRefreshRunning) return;
 		this.#roomRefreshRunning = true;
 		try {
-			// Coalesce fan-out legs and registry events rather than submitting one
-			// full roster read for each recipient in a group send.
+			// Multiple mutations can publish before a single roster read settles.
 			while (this.#roomRefreshQueued && this.#active && this.#isCurrent()) {
 				this.#roomRefreshQueued = false;
 				const actor = this.host.operatorId ?? this.root.id;
-				const { groups } = await this.#bus.group(actor, { op: "groups" });
-				if (!groups || !this.#active || !this.#isCurrent()) continue;
-				const rosters = await Promise.all(groups.map(async name => {
-					const { members } = await this.#bus.group(actor, { op: "members", group: name });
-					return { name, members };
-				}));
+				const rooms = await this.#bus.roomsForRoot(this.root, actor);
 				if (!this.#active || !this.#isCurrent()) continue;
-				const rooms = new Map<string, readonly string[]>();
-				for (const { name, members } of rosters) if (members) rooms.set(name, members);
 				this.#rooms = rooms;
 				this.options.requestRender();
 			}
@@ -340,25 +360,74 @@ export class OperatorIrcClient {
 					return receipt.outcome === "failed" ? receipt.error ?? t("overlays.irc_client.send_failed") : undefined;
 				}
 				case "create":
-					request = { op: "create", group: action.room, members: [actor] };
+					request = { op: "create", group: action.room, members: [actor], notice: "silent" };
+					break;
+				case "join":
+					request = { op: "join", group: action.room, mode: action.mode };
 					break;
 				case "leave":
 					request = { op: "leave", group: action.room };
 					break;
+				case "notifications": {
+					const { conversationId } = action;
+					if (conversationId.startsWith("room:")) {
+						const rooms = await this.#bus.roomsForRoot(this.root, actor);
+						if (!this.#isCurrent() || this.#registry.get(actor) !== operator) return t("overlays.irc_client.session_changed");
+						const room = rooms.find(candidate => candidate.name === conversationId.slice(5));
+						if (!room?.joined) return t("overlays.irc_client.read_only");
+					} else if (!otherIrcDmPeer(conversationId, actor)) {
+						return t("overlays.irc_client.read_only");
+					}
+					this.model.setNotificationLevel(conversationId, action.level);
+					return undefined;
+				}
+				case "invite": {
+					const { roomId, agentIds, noticeMode } = action.confirmation;
+					const members = [...new Set(agentIds)];
+					if (members.length === 0 || members.some(id => {
+						const ref = this.#registry.get(id);
+						return !ref || !this.#inRoster(ref) || (ref.kind !== "sub" && ref.kind !== "main") || ref.status === "aborted";
+					})) return t("overlays.irc_client.read_only");
+					request = { op: "invite", group: roomId, members, notice: noticeMode };
+					break;
+				}
+				case "mute":
+					request = { op: action.muted ? "mute" : "unmute", group: action.room, member: action.memberId };
+					break;
 				case "remove":
 					request = { op: "remove", group: action.room, members: [action.memberId] };
 					break;
-				default:
-					return t("overlays.irc_client.operation_unavailable");
+				case "permission":
+					request = {
+						op: "permit",
+						group: action.room,
+						members: [action.memberId],
+						permissions: { [action.permission]: action.enabled },
+					};
+					break;
 			}
 			if (request.op !== "create") {
-				const { members } = await this.#bus.group(actor, { op: "members", group: request.group });
-				if (!this.#isCurrent()) return t("overlays.irc_client.session_changed");
-				if (!members?.includes(actor)) return t("overlays.irc_client.read_only");
+				const { group } = request;
+				const rooms = await this.#bus.roomsForRoot(this.root, actor);
+				if (!this.#isCurrent() || this.#registry.get(actor) !== operator) return t("overlays.irc_client.session_changed");
+				const room = rooms.find(candidate => candidate.name === group);
+				if (!room || (!room.joined && request.op !== "join")) return t("overlays.irc_client.read_only");
 			}
 			const result = await this.#bus.group(actor, request);
-			void this.#refreshRooms();
-			return result.isError ? result.text : undefined;
+			if (result.isError) return result.text;
+			const failures = result.receipts?.filter(receipt => receipt.outcome === "failed");
+			if (failures?.length) {
+				const recipients = failures.map(({ to, error }) => error ? `${to}: ${error}` : to).join("; ");
+				return t("overlays.irc_client.partial_delivery", { recipients, summary: result.text });
+			}
+			if (request.op === "invite") {
+				const added = new Set(result.affected);
+				const notified = request.notice !== "silent" ? new Set(result.receipts?.map(receipt => receipt.to)) : undefined;
+				if (request.members.some(id => !added.has(id) || (notified && !notified.has(id)))) {
+					return t("overlays.irc_client.partial_invite", { summary: result.text });
+				}
+			}
+			return undefined;
 		} catch (error) {
 			return error instanceof Error ? error.message : String(error);
 		}

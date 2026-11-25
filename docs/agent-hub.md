@@ -118,6 +118,8 @@ Collab does not replicate advisor rows or serve their transcripts to guests; the
 
 The left sidebar switches between Traffic, the room roster, recent direct messages, and rooms. Moving the cursor previews a conversation without marking it read. Enter opens it. The center shows whole messages in send order; a room message appears once, not once per recipient. The composer sends as you to your DMs and rooms you belong to. You can inspect other conversations read-only. The right pane shows a room's members.
 
+On a room you haven't joined, Enter offers **Spy** (read-only), **Join silently**, **Join and announce**, or **Join invisibly** (read and send without appearing in the member list). In a joined room, the member menu offers mentions, direct messages, permission changes, mute/unmute, and removal. Use `i` to invite multiple agents at once and choose whether to notify or wake them.
+
 | Key | Action |
 | --- | --- |
 | `↑`/`↓` | Preview a conversation or select a row |
@@ -126,16 +128,19 @@ The left sidebar switches between Traffic, the room roster, recent direct messag
 | `Tab` / `Shift+Tab` | Move between the sidebar, center, and members |
 | `PgUp` / `PgDn` | Scroll the message history |
 | `/` | Filter the focused conversation list |
+| `o` | Conversation options, including notification level |
 | `Alt+K` / `Alt+Shift+K` | Pin / unpin a room or DM |
 | `Esc` / `Alt+I` | Back out of a field or popup / close the client |
 
-IRC belongs to the UI's primary conversation even while you view an agent's transcript. Messages delivered to the agent you are viewing still appear in full in its transcript. A DM to you or a room message that mentions you can show a short card, which retires after ten seconds. A direct message from your own `Main` is already visible in its tool call and does not produce an extra card or change the reopen target.
+IRC belongs to the UI's primary conversation even while you view an agent's transcript. Messages delivered to the agent you are viewing still appear in full in its transcript. In conversation options, choose **Every message**, **Mentions only** (`@<your handle>`, `@operator`, or `@everyone`), or **Never**. This controls both the short card (which retires after ten seconds) and whether the message can become the next Alt+I destination. Messages still count as unread in quiet conversations; **Never** dims their unread counts. DMs to you default to **Every message**. Room notifications default to **Mentions only**.
 
-Recent history is capped per root conversation. Persisted sessions keep the IRC journal and your pins, read state and last conversation in owner-only sidecars in the local NeoPi profile, not in the transcript. In-memory sessions do not write those files. Resuming in the same profile restores available history without dispatching old messages or showing old notifications; without the sidecar, the client starts with empty history. Session export, forks, and another profile do not carry these files. Deleting a transcript does not erase the profile sidecars.
+Recent history is capped per root conversation. Persisted sessions keep the IRC journal and your pins, notification levels, read state, and last conversation in owner-only sidecars in the local NeoPi profile, not in the transcript. In-memory sessions do not write those files. Resuming in the same profile restores available history without dispatching old messages or showing old notifications; without the sidecar, the client starts with empty history. Session export, forks, and another profile do not carry these files. Deleting a transcript does not erase the profile sidecars.
 
 Settings:
 
 - `irc.operator.viewerEnabled` (default `true`) allows opening the client.
+- `irc.operator.directMessages` (default `true`) lets agents send DMs to you even if you share no room. Turning it off does not prevent room delivery or sending your own DMs.
+- `irc.operator.notifyDefault` (`mentions` by default; `all` or `none` also available) sets the notification level for rooms without an override.
 - `irc.operator.relayToMainTranscript` (default `true`) lets live voice, event sounds and connected clients hear messages between other agents. Those messages never show in the main transcript, and IRC Traffic includes them either way.
 - `irc.history.maxEntries` (default `1000`) caps recent IRC history. The oldest messages drop first.
 - `irc.operator.handle` (default `Operator`) is your own IRC id; see below.

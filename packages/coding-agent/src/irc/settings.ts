@@ -7,8 +7,13 @@
  * no settings.
  */
 import { effect, register } from "../config/registry";
-import { DEFAULT_IRC_OPERATOR_HANDLE } from "./operator";
+import type { AgentRef } from "../registry/agent-registry";
+import { isLocalAgentSession } from "../session/agent-session-handle";
+import { IRC_NOTIFICATION_LEVELS } from "./client-model";
 import { DEFAULT_IRC_HISTORY_MAX_ENTRIES, setIrcHistoryMaxEntries, setIrcRelayToMainTranscript } from "./policy";
+
+/** The operator's IRC id unless `irc.operator.handle` names another. */
+export const DEFAULT_IRC_OPERATOR_HANDLE = "Operator";
 
 export const cfgIrcOperatorHandle = register({
 	id: "irc.operator.handle",
@@ -32,6 +37,43 @@ export const cfgIrcViewerEnabled = register({
 		group: "Messaging",
 		label: "IRC Client",
 		description: "Allow opening the IRC client for this session",
+	},
+});
+
+export const cfgIrcOperatorDirectMessages = register({
+	id: "irc.operator.directMessages",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tasks",
+		group: "Messaging",
+		label: "Receive IRC Direct Messages",
+		description: "Allow agents to send you direct IRC messages, even if you share no room",
+	},
+});
+
+export function ircOperatorDirectMessagesEnabled(root: AgentRef): boolean {
+	const session = root.session;
+	return session && isLocalAgentSession(session) && session.settings
+		? cfgIrcOperatorDirectMessages.get(session.settings)
+		: true;
+}
+
+export const cfgIrcOperatorNotifyDefault = register({
+	id: "irc.operator.notifyDefault",
+	type: "enum",
+	values: IRC_NOTIFICATION_LEVELS,
+	default: "mentions",
+	ui: {
+		tab: "tasks",
+		group: "Messaging",
+		label: "Default IRC Room Notifications",
+		description: "Choose which room messages show a card and can become the next Alt+I destination unless overridden in the room",
+		options: [
+			{ value: "all", label: "Every message" },
+			{ value: "mentions", label: "Mentions only" },
+			{ value: "none", label: "Never" },
+		],
 	},
 });
 

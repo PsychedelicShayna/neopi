@@ -27,6 +27,7 @@ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import {
+	IRC_NOTIFICATION_LEVELS,
 	IRC_TRAFFIC_ID,
 	type IrcClientConversation,
 	type IrcClientModel,
@@ -34,6 +35,7 @@ import {
 	ircDmId,
 	ircEntryConversationId,
 	ircEntryId,
+	type IrcNotificationLevel,
 	ircRoomId,
 	otherIrcDmPeer,
 } from "../../irc/client-model";
@@ -47,8 +49,6 @@ export interface IrcClientTarget {
 
 const PERMISSIONS = ["receive", "send", "invite", "admin"] as const;
 type Permission = (typeof PERMISSIONS)[number];
-const LEVELS = ["all", "mentions", "none"] as const;
-type Level = (typeof LEVELS)[number];
 const JOIN_MODES = ["silent", "announce", "invisible"] as const;
 type JoinMode = (typeof JOIN_MODES)[number];
 type Capability = "invite" | "leave" | "notifications" | "mute" | "remove" | "permissions" | `join-${JoinMode}`;
@@ -67,7 +67,7 @@ export interface IrcClientRoom {
 	joined: boolean;
 	/** Effective send right, even when the joined operator is invisible in members. */
 	canSend?: boolean;
-	notifications?: Level;
+	notifications?: IrcNotificationLevel;
 	members: readonly IrcClientMember[];
 	capabilities?: readonly Capability[];
 }
@@ -77,7 +77,7 @@ export type IrcClientAction =
 	| { kind: "create"; room: string }
 	| { kind: "join"; room: string; mode: JoinMode }
 	| { kind: "leave"; room: string }
-	| { kind: "notifications"; room: string; level: Level }
+	| { kind: "notifications"; conversationId: IrcConversationId; level: IrcNotificationLevel }
 	| { kind: "invite"; confirmation: IrcInviteConfirmation }
 	| { kind: "mute"; room: string; memberId: string; muted: boolean }
 	| { kind: "remove"; room: string; memberId: string }
@@ -470,10 +470,11 @@ export class IrcClientComponent implements Component {
 		const room = this.#room(id);
 		const pinned = this.#model.conversations().some(item => item.id === id && item.pinned);
 		const choices: Choice[] = [{ label: label(pinned ? "unpin" : "pin"), run: () => this.#model.setPinned(id, !pinned) }];
-		if (room && supports(room, "notifications")) choices.push({ label: label("notifications"), run: () => {
-			this.#choices(label("notifications"), LEVELS.map(level => ({
-				label: `${level === room.notifications ? "✓ " : ""}${label(`level.${level}`)}`,
-				run: () => { void this.#act({ kind: "notifications", room: room.name, level }); },
+		if ((room && supports(room, "notifications")) || otherIrcDmPeer(id, this.#host.operatorId)) choices.push({ label: label("notifications"), run: () => {
+			const current = this.#model.notificationLevel(id);
+			this.#choices(label("notifications"), IRC_NOTIFICATION_LEVELS.map(level => ({
+				label: `${level === current ? "✓ " : ""}${label(`level.${level}`)}`,
+				run: () => { void this.#act({ kind: "notifications", conversationId: id, level }); },
 			})));
 		} });
 		if (room && supports(room, "invite")) choices.push({ label: label("invite"), run: () => this.#inviteRoom(room) });
@@ -791,9 +792,11 @@ export class IrcClientComponent implements Component {
 			const unread = item.type === "conversation" ? item.conversation?.unread ?? (item.key === IRC_TRAFFIC_ID ? this.#model.unread() : 0) : 0;
 			const pin = item.type === "conversation" && item.conversation?.pinned ? "★ " : "";
 			const envelope = unread && item.type === "conversation" && item.conversation?.kind === "dm" ? "✉ " : "";
+			const quiet = item.type === "conversation" && item.key !== IRC_TRAFFIC_ID && this.#model.notificationLevel(item.key) === "none";
 			const count = unread ? ` ${unread} ` : "";
-			const text = `${fit(`${cursor ? "›" : active ? "▏" : " "} ${pin}${envelope}${item.text}`, Math.max(0, width - visibleWidth(count)))}${count}`;
-			lines.push(cursor ? theme.fg("accent", theme.bold(text)) : unread ? theme.fg("accent", text) : active ? text : theme.fg("muted", text));
+			const text = fit(`${cursor ? "›" : active ? "▏" : " "} ${pin}${envelope}${item.text}`, Math.max(0, width - visibleWidth(count)));
+			const title = cursor ? theme.fg("accent", theme.bold(text)) : unread && !quiet ? theme.fg("accent", text) : active ? text : theme.fg("muted", text);
+			lines.push(`${title}${quiet ? theme.fg("dim", count) : cursor || unread ? theme.fg("accent", count) : count}`);
 		}
 		if (items.length === 0) lines.push(` ${theme.fg("dim", label("no_dms"))}`);
 		return lines;
@@ -812,11 +815,12 @@ export class IrcClientComponent implements Component {
 			const room = this.#rooms.get(item.room);
 			const cursor = i === this.#roster.selectedIndex;
 			const unread = item.unread ? `  ${label("unread", { count: item.unread })}` : "";
-			const first = `${cursor ? "›" : " "} ${item.pinned ? "★ " : ""}${this.#title(item.id)}${unread}`;
+			const first = `${cursor ? "›" : " "} ${item.pinned ? "★ " : ""}${this.#title(item.id)}`;
+			const count = this.#model.notificationLevel(item.id) === "none" ? theme.fg("dim", unread) : cursor ? theme.fg("accent", unread) : unread;
 			const details = [label("member_count", { count: room?.members.length ?? 0 }), label(room?.joined ? "joined" : "not_joined")];
 			if (room?.notifications) details.push(label(`level.${room.notifications}`));
 			if (item.lastMessageAt !== undefined) details.push(clockTime(item.lastMessageAt));
-			const itemRows = [cursor ? theme.fg("accent", first) : first, `   ${theme.fg("muted", details.join(" · "))}`];
+			const itemRows = [`${cursor ? theme.fg("accent", first) : first}${count}`, `   ${theme.fg("muted", details.join(" · "))}`];
 			rows.push(...itemRows.slice(skip));
 			skip = 0;
 		}
@@ -831,6 +835,7 @@ export class IrcClientComponent implements Component {
 		if (preview) attributes.push(label("preview"));
 		if (room) attributes.push(label("member_count", { count: room.members.length }));
 		if (room?.notifications) attributes.push(label(`level.${room.notifications}`));
+		if (otherIrcDmPeer(id, this.#host.operatorId)) attributes.push(label(`level.${this.#model.notificationLevel(id)}`));
 		const heading = `${this.#heading(this.#title(id), this.#region === "center")}${attributes.length ? theme.fg("dim", `  ${attributes.join(" · ")}`) : ""}`;
 		let composer: readonly string[] = [];
 		if (canSend && height >= 5 && width >= 8) {

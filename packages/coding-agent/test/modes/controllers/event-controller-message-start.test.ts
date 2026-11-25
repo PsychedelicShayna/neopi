@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { ImageContent, UserMessage } from "@oh-my-pi/pi-ai";
+import { ircDmId, ircRoomId } from "@oh-my-pi/pi-coding-agent/irc/client-model";
+import { OperatorIrcClient } from "@oh-my-pi/pi-coding-agent/irc/operator";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -307,11 +309,26 @@ function createOperatorNotice(
 	};
 }
 
+const operatorCleanup: (() => void)[] = [];
+
 function createOperatorContext(focusedAgentId?: string) {
 	const ctx = createInteractiveModeContext({
 		ircOperatorId: "Operator",
 		focusedAgentId,
 		viewSession: focusedAgentId ? {} : undefined,
+	});
+	const registry = AgentRegistry.global();
+	const root = registry.register({ id: "irc-notification-test-root", displayName: "Main", kind: "main", session: ctx.session });
+	const ircClient = new OperatorIrcClient(root, ctx.session, {
+		operatorId: "Operator",
+		operatorName: "Operator",
+		requestRender() {},
+		reconcileOverlay() {},
+	});
+	Object.defineProperty(ctx, "ircClient", { value: ircClient });
+	operatorCleanup.push(() => {
+		ircClient.dispose();
+		registry.unregister(root.id, root);
 	});
 	const { chatContainer } = ctx;
 	// A still-running tool, as in createIrcContext: cards under it stay in the live region.
@@ -324,11 +341,12 @@ function createOperatorContext(focusedAgentId?: string) {
 	const helpers = new UiHelpers(ctx);
 	ctx.addMessageToChat = vi.fn((message, options) => helpers.addMessageToChat(message, options));
 	const rendered = () => chatContainer.children.map(child => Bun.stripANSI(child.render(80).join("\n")));
-	return { ctx, chatContainer, runningTool, rendered, requestRender: ctx.ui.requestRender };
+	return { ctx, chatContainer, runningTool, rendered, ircClient, requestRender: ctx.ui.requestRender };
 }
 
 describe("EventController IRC notifications to the operator", () => {
 	afterEach(() => {
+		for (const clean of operatorCleanup.splice(0)) clean();
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
@@ -364,12 +382,10 @@ describe("EventController IRC notifications to the operator", () => {
 		expect(chatContainer.children).toHaveLength(2);
 	});
 
-	it("notifies only for an addressed room mention when a child's transcript is focused", async () => {
-		const { ctx, rendered } = createOperatorContext("Scout");
+	it("applies room and DM policies to operator cards while viewing a child's transcript", async () => {
+		const { ctx, rendered, ircClient } = createOperatorContext("Scout");
 		const controller = new EventController(ctx);
-		const registry = AgentRegistry.global();
-		const id = "irc-notification-test-root";
-		const root = registry.register({ id, displayName: id, kind: "main", session: ctx.session });
+		const room = ircRoomId("council");
 		const text = "@Operator compare findings.";
 		const body = `Scout sent this to group council, which you are part of.\n\n${text}`;
 		try {
@@ -384,18 +400,35 @@ describe("EventController IRC notifications to the operator", () => {
 			});
 			await controller.handleEvent({
 				type: "irc_message",
-				message: createOperatorNotice(4, { from: id, body: "already shown in the main tool call" }),
+				message: createOperatorNotice(4, { body: "a direct decision" }),
 			});
 			await controller.handleEvent({
 				type: "irc_message",
 				message: createOperatorNotice(3, { body, broadcast: true, group: "council", groupText: text, fanoutId: "f3" }),
 			});
+			ircClient.model.setNotificationLevel(room, "none");
+			await controller.handleEvent({
+				type: "irc_message",
+				message: createOperatorNotice(5, { group: "council", groupText: "@Operator quiet room" }),
+			});
+			ircClient.model.setNotificationLevel(room, "all");
+			await controller.handleEvent({
+				type: "irc_message",
+				message: createOperatorNotice(6, { group: "council", groupText: "all room activity" }),
+			});
+			ircClient.model.setNotificationLevel(ircDmId("Scout", "Operator"), "none");
+			await controller.handleEvent({
+				type: "irc_message",
+				message: createOperatorNotice(7, { body: "a quiet direct decision" }),
+			});
 		} finally {
-			registry.unregister(id, root);
 			controller.dispose();
 		}
 		expect(rendered().join("\n")).not.toContain("passive room chat");
-		expect(rendered().join("\n")).not.toContain("already shown in the main tool call");
+		expect(rendered().join("\n")).toContain("a direct decision");
+		expect(rendered().join("\n")).toContain("all room activity");
+		expect(rendered().join("\n")).not.toContain("quiet room");
+		expect(rendered().join("\n")).not.toContain("a quiet direct decision");
 
 		const card = rendered().find(row => row.includes(text));
 		expect(card).toContain("#council");

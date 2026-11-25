@@ -168,13 +168,12 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
-	DEFAULT_IRC_OPERATOR_HANDLE,
 	type IrcClientOpenRequest,
 	OperatorIrcClient,
 	operatorIrcLogSource,
 	registerIrcOperator,
 } from "../irc/operator";
-import { cfgIrcOperatorHandle } from "../irc/settings";
+import { cfgIrcOperatorHandle, DEFAULT_IRC_OPERATOR_HANDLE } from "../irc/settings";
 import { executeSend } from "../irc/messaging";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";

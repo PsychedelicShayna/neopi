@@ -10,6 +10,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { IrcBridge, type IrcBridgeHost } from "@oh-my-pi/pi-coding-agent/session/irc-bridge";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 
@@ -28,6 +29,55 @@ function makeBridge() {
 	} as unknown as IrcBridgeHost;
 	return { bridge: new IrcBridge(host), woken };
 }
+
+it("folds a mid-turn quiet invite into the next context without interrupting or extending the current turn", async () => {
+	const { promise: running, resolve: finish } = Promise.withResolvers<void>();
+	const sessionManager = SessionManager.inMemory(process.cwd());
+	const state = { isStreaming: true };
+	const appended: AgentMessage[] = [];
+	const woken: AgentMessage[] = [];
+	const agent = {
+		state,
+		waitForIdle: () => running,
+		appendMessage: (record: AgentMessage) => appended.push(record),
+	} as unknown as Agent;
+	const bridge = new IrcBridge({
+		agent,
+		sessionManager,
+		isDisposed: () => false,
+		isStreaming: () => state.isStreaming,
+		planModeEnabled: () => false,
+		emitSessionEvent: async () => {},
+		wakeForIrc: records => woken.push(...records),
+	});
+	expect(
+		await bridge.deliver({
+			id: "quiet-invite",
+			from: "Main",
+			to: "Child",
+			body: "You were added to IRC group council.",
+			group: "council",
+			noWake: true,
+			broadcast: true,
+			ts: 2,
+		}),
+	).toBe("injected");
+	expect(bridge.hasInterrupts()).toBe(false);
+	expect(bridge.hasWakeable()).toBe(false);
+	expect(bridge.hasPending()).toBe(false);
+	expect(bridge.drainPending()).toEqual([]);
+	expect(appended).toEqual([]);
+
+	state.isStreaming = false;
+	finish();
+	await running;
+	expect(appended).toHaveLength(1);
+	bridge.flushPending();
+	expect(woken).toEqual([]);
+	expect(appended).toHaveLength(1);
+	expect(appended[0]).toMatchObject({ details: { id: "quiet-invite", group: "council" } });
+	expect(sessionManager.getBranch().filter(entry => entry.type === "custom_message")).toHaveLength(1);
+});
 
 describe("IrcBridge wake-relay marking", () => {
 	it("marks relay messages so the peer never relays them back", async () => {
