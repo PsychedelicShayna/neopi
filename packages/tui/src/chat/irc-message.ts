@@ -30,10 +30,10 @@ export interface IrcMessageDetails {
 
 /** One peer message as the transcript shows it. */
 export interface IrcMessageView {
-	/** `incoming`: delivered to this session. `relay`: observed between two other participants. */
-	kind: "incoming" | "relay";
+	/** `incoming`: delivered here; `outgoing`: sent from here; `relay`: observed between others. */
+	kind: "incoming" | "outgoing" | "relay";
 	from?: string;
-	/** The recipient of a `relay`. */
+	/** The recipient of an outgoing or relayed message. */
 	to?: string;
 	body?: string;
 	timestamp?: number;
@@ -169,12 +169,12 @@ export class IrcMessageBlock implements Component {
 		return markers;
 	}
 
-	/** Where the message went, when that is not simply this session: a group, or a relay's recipient. */
+	/** Where the message went, when that is not simply this session: a group or a recipient. */
 	#route(): { group: string } | { to: string; toId: string } | undefined {
 		const view = this.#view;
 		const group = lineLabel(view.group);
 		if (group && view.sentToGroup) return { group };
-		const toId = view.kind === "relay" && typeof view.to === "string" ? view.to.trim() : "";
+		const toId = view.kind !== "incoming" && typeof view.to === "string" ? view.to.trim() : "";
 		// A notice an agent's own action sent it (added to a group) is not a message to someone else.
 		if (!toId || toId === this.#fromId) return undefined;
 		return { to: lineLabel(toId), toId };
