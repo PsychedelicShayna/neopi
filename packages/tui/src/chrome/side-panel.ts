@@ -58,6 +58,8 @@ export interface SidePanelOptions {
 	hints?: () => readonly string[];
 	/** Paints floating content (a popup, the help card) over the finished panel rows. */
 	overlay?: (lines: readonly string[], width: number) => readonly string[];
+	/** Receives panel-local mouse events before the document, returning true when consumed. */
+	overlayMouse?: (event: SgrMouseEvent, line: number, col: number) => boolean;
 }
 
 /** Section content that tracks the pointer and drops its hover when the pointer leaves the panel. */
@@ -124,6 +126,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	readonly #onInput: ((data: string) => void) | undefined;
 	readonly #hints: SidePanelOptions["hints"];
 	readonly #overlay: SidePanelOptions["overlay"];
+	readonly #overlayMouse: SidePanelOptions["overlayMouse"];
 	readonly #sections = new Map<string, RegisteredSection>();
 	#nextSequence = 0;
 	#height: number | undefined;
@@ -144,6 +147,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		this.#onInput = options.onInput;
 		this.#hints = options.hints;
 		this.#overlay = options.overlay;
+		this.#overlayMouse = options.overlayMouse;
 	}
 
 	/** Register or replace a section by id (keeping its place); returns an unregister function. */
@@ -367,6 +371,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (this.#overlayMouse?.(event, line, col)) return;
 		if (event.wheel !== null) {
 			this.scrollBy(event.wheel * WHEEL_ROWS);
 			return;

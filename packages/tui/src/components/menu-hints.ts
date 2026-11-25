@@ -5,7 +5,8 @@ import type { NativeNode } from "../native/node";
 import { compositeLineAt } from "../render/composite";
 import type { Component } from "../tui";
 import { replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { getMenuSearchVimMode } from "./menu-navigation";
+import { getMenuSearchVimMode, type MenuKeyReader } from "./menu-navigation";
+import { clampScrollOffset } from "./scroll-viewport";
 
 export const MENU_VIM_HINT = "hjkl gg/G C-u d e y";
 
@@ -62,10 +63,15 @@ export class MenuHints implements Component {
 export class MenuHelp {
 	#open = false;
 	readonly #extra: string | (() => string);
+	#scroll = 0;
+	#contentsHeight = 0;
+	#visibleRows = 0;
 
 	constructor(
 		readonly vim = MENU_VIM_HINT,
 		extra: string | (() => string) = "",
+		/** When supplied, keep the card within the host's rows and let these keys scroll it. */
+		readonly keys?: MenuKeyReader,
 	) {
 		this.#extra = extra;
 	}
@@ -80,11 +86,37 @@ export class MenuHelp {
 
 	handleInput(data: string): boolean {
 		if (this.#open) {
-			if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "?") this.#open = false;
+			if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "?") {
+				this.#open = false;
+				this.keys?.reset();
+			} else {
+				const action = this.keys?.read(data);
+				if (action && action !== "pending") {
+					let scroll = this.#scroll;
+					switch (action.kind) {
+						case "move":
+						case "scroll":
+							scroll += action.delta;
+							break;
+						case "page":
+							scroll += action.delta * this.#visibleRows;
+							break;
+						case "halfPage":
+							scroll += action.delta * Math.max(1, Math.floor(this.#visibleRows / 2));
+							break;
+						case "boundary":
+							scroll = action.edge === "first" ? 0 : this.#contentsHeight;
+							break;
+					}
+					this.#scroll = clampScrollOffset(scroll, this.#contentsHeight, this.#visibleRows);
+				}
+			}
 			return true;
 		}
 		if (data !== "?") return false;
 		this.#open = true;
+		this.#scroll = 0;
+		this.keys?.reset();
 		return true;
 	}
 
@@ -131,11 +163,17 @@ export class MenuHelp {
 	}
 
 	render(lines: readonly string[], width: number): string[] {
-		if (!this.#open || width < 6) return [...lines];
+		if (!this.#open || width < 6 || (this.keys && lines.length < 3)) return [...lines];
 		const boxWidth = Math.min(width, 64);
 		const innerWidth = boxWidth - 4;
 		const explanations = this.#explanations();
-		const contents = explanations.flatMap(line => (line ? wrapTextWithAnsi(line, innerWidth) : [""]));
+		let contents = explanations.flatMap(line => (line ? wrapTextWithAnsi(line, innerWidth) : [""]));
+		if (this.keys) {
+			this.#contentsHeight = contents.length;
+			this.#visibleRows = Math.min(contents.length, lines.length - 2);
+			this.#scroll = clampScrollOffset(this.#scroll, this.#contentsHeight, this.#visibleRows);
+			contents = contents.slice(this.#scroll, this.#scroll + this.#visibleRows);
+		}
 		const box = [
 			`┌${"─".repeat(boxWidth - 2)}┐`,
 			...contents.map(line => `│ ${line}${" ".repeat(Math.max(0, innerWidth - visibleWidth(line)))} │`),

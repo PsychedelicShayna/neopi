@@ -1,6 +1,6 @@
 import type { MouseRoutable, SgrMouseEvent } from "@oh-my-pi/pi-tui";
 import type { PanelSelectionTarget, SidePanelPointerAware } from "@oh-my-pi/pi-tui/chrome";
-import type { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { type MenuKeyReader, MenuViewport } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { modelChip, statusGlyph } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import type { AgentRecordLike, AgentStatus } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { agentColored } from "@oh-my-pi/pi-tui/overlays/agent-identity";
@@ -8,6 +8,7 @@ import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/
 import type { ObservableSession } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { uiProvenanceSuffix } from "@oh-my-pi/pi-tui/theme/provenance";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { t } from "@oh-my-pi/pi-utils/i18n";
@@ -78,6 +79,7 @@ function elapsedClock(ms: number): string {
 
 /** Rows of the `f` popup: every filter control, then the sort direction. */
 const POPUP_ROWS = [...FILTER_CONTROLS, "order"] as const;
+const POPUP_ROW_HEIGHTS = POPUP_ROWS.map(() => 1);
 type AgentPopupRow = (typeof POPUP_ROWS)[number];
 
 /**
@@ -87,6 +89,7 @@ type AgentPopupRow = (typeof POPUP_ROWS)[number];
  */
 class AgentControls implements MouseRoutable {
 	readonly #host: AgentsSectionHost;
+	readonly #popupViewport = new MenuViewport();
 	/** Popup cursor while the `f` popup is open; undefined otherwise. */
 	#selected: number | undefined;
 	#hits: { line: number; start: number; end: number; id: AgentControlId }[] = [];
@@ -143,23 +146,37 @@ class AgentControls implements MouseRoutable {
 		this.#host.requestRender();
 	}
 
-	/** The open popup's rows, with the cursor row marked; undefined while closed. */
-	popup(): { title: string; rows: string[] } | undefined {
-		const selected = this.#selected;
-		if (selected === undefined) return undefined;
-		const rows = POPUP_ROWS.map((id, index) => {
+	renderPopup(rowBudget: number): { title: string; rows: string[]; firstRow: number } {
+		// Reveal on resize as well as on cursor motion.
+		this.#popupViewport.reveal();
+		const { startIndex, endIndex } = this.#popupViewport.layout(POPUP_ROW_HEIGHTS, this.#selected!, rowBudget);
+		const rows: string[] = [];
+		for (let index = startIndex; index < endIndex; index++) {
+			const id = POPUP_ROWS[index]!;
 			const label =
 				id === "order"
 					? t(`overlays.side_panel.order.${cfgSidebarAgentOrder.get(this.#host.settings)}`)
 					: `${this.#isOn(id) ? "[x]" : "[ ]"} ${t(`overlays.side_panel.filter_long.${id}`)}`;
-			const text = `${index === selected ? theme.nav.selected : " "} ${label}`;
-			return index === selected ? theme.bold(theme.fg("accent", text)) : text;
-		});
-		return { title: t("overlays.side_panel.filters_title"), rows };
+			const selected = index === this.#selected;
+			const text = `${selected ? theme.nav.selected : " "} ${label}`;
+			rows.push(selected ? theme.bold(theme.fg("accent", text)) : text);
+		}
+		return {
+			title: t("overlays.side_panel.filters_title") + uiProvenanceSuffix("features", "side-panel-filters", true),
+			rows,
+			firstRow: startIndex,
+		};
+	}
+
+	activatePopupRow(row: number): void {
+		const id = POPUP_ROWS[row];
+		if (!id || !this.popupOpen) return;
+		this.#selected = row;
+		this.#toggle(id);
 	}
 
 	/** While the popup is open it reads every key: arrows (hjkl with Vim navigation) move, Space or Enter toggles, Esc, `f` or `q` close. */
-	handlePopupInput(data: string, keys: MenuKeyReader): boolean {
+	handlePopupInput(data: string, keys: MenuKeyReader, popupFits: boolean): boolean {
 		if (this.#selected === undefined) return false;
 		if (data === "f" || data === "q") {
 			keys.reset();
@@ -182,7 +199,7 @@ class AgentControls implements MouseRoutable {
 			case "toggle":
 			case "confirm":
 			case "horizontal":
-				this.#toggle(POPUP_ROWS[this.#selected]!);
+				if (popupFits) this.activatePopupRow(this.#selected);
 				break;
 			case "cancel":
 				this.closePopup();
@@ -507,16 +524,16 @@ export class AgentsSection implements SidePanelViewSection {
 		];
 	}
 
-	handleModeInput(data: string, keys: MenuKeyReader): boolean {
-		return this.footer.handlePopupInput(data, keys);
+	handleModeInput(data: string, keys: MenuKeyReader, popupFits: boolean): boolean {
+		return this.footer.handlePopupInput(data, keys, popupFits);
 	}
 
 	resetMode(): void {
 		this.footer.closePopup();
 	}
 
-	popup(): { title: string; rows: string[] } | undefined {
-		return this.footer.popup();
+	get popup(): AgentControls | undefined {
+		return this.footer.popupOpen ? this.footer : undefined;
 	}
 
 	clickEmpty(): void {
