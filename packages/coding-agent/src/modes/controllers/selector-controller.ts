@@ -1798,7 +1798,7 @@ export class SelectorController {
 
 	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; scope?: SettingsScope }): void {
 		if (
-			this.ctx.focusedAgentId ||
+			(this.ctx.focusedAgentId && options?.scope !== "project" && options?.scope !== "global") ||
 			(options?.temporaryOnly && cfgSessionModelPicker.get(this.ctx.settings) === "small")
 		) {
 			this.#showModelPicker();
@@ -1834,9 +1834,8 @@ export class SelectorController {
 	 * runs in the before-flush hook so any prompt queued during compaction
 	 * executes on the target model, and the idempotent post-return call covers
 	 * the early "nothing to compact" return that skips the hook. A cancelled or
-	 * failed compaction keeps the current model. A focused subagent switches
-	 * directly: `/compact` drives the main session, and the agent's own context
-	 * maintenance recovers an oversized transcript on its next turn.
+	 * failed compaction keeps the current model. The focused picker switches
+	 * its agent directly; its own context maintenance recovers an oversized transcript.
 	 */
 	async #applySessionModel(
 		model: Model,
@@ -1885,6 +1884,7 @@ export class SelectorController {
 	#showModelPicker(): void {
 		const menuKind = "model-picker";
 		if (this.#focusOpenMenu(menuKind)) return;
+		const focusedAgentId = this.ctx.focusedAgentId;
 		const viewed = this.ctx.viewSession;
 		const currentContextTokens = viewed.getContextUsage()?.tokens ?? 0;
 		const current = viewed.model;
@@ -1908,7 +1908,10 @@ export class SelectorController {
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
-		const isCurrent = () => this.#openMenus.get(menuKind) === menu;
+		const isCurrent = () =>
+			this.#openMenus.get(menuKind) === menu &&
+			this.ctx.focusedAgentId === focusedAgentId &&
+			this.ctx.viewSession === viewed;
 		const picker = new ModelPickerComponent(
 			this.ctx.ui,
 			createModelBrowserSource(this.ctx.settings, model => viewed.effectiveServiceTier(model)),
@@ -1930,7 +1933,7 @@ export class SelectorController {
 				onPickRole: async entry => {
 					if (!isCurrent()) return;
 					try {
-						await this.ctx.viewSession.applyRoleModel(entry);
+						await viewed.applyRoleModel(entry);
 						this.ctx.statusLine.invalidate();
 						this.ctx.updateEditorBorderColor();
 						this.ctx.showModelCycleTrack(
@@ -1942,11 +1945,13 @@ export class SelectorController {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
-				onPickTask: (_model, selector) => {
-					if (!isCurrent()) return;
-					this.#applyTaskModel(selector);
-					done();
-				},
+				onPickTask: focusedAgentId
+					? undefined
+					: (_model, selector) => {
+							if (!isCurrent()) return;
+							this.#applyTaskModel(selector);
+							done();
+						},
 				onKeepThinking: level => {
 					if (!isCurrent() || level === viewed.configuredThinkingLevel()) return;
 					viewed.setThinkingLevel(level);
@@ -1958,7 +1963,7 @@ export class SelectorController {
 			{
 				currentContextTokens,
 				currentSelector,
-				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
+				taskModeKeys: focusedAgentId ? [] : this.ctx.keybindings.getKeys("app.model.selectTemporary"),
 				taskSelector,
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
@@ -4273,6 +4278,23 @@ export class SelectorController {
 			proseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			expandThinkingBlocks: () => this.ctx.expandThinkingBlocks,
 			focusAgent: id => this.ctx.focusAgentSession(id),
+			onSlashCommand: this.ctx.collabGuest
+				? undefined
+				: async (id, text) => {
+						const session = this.ctx.session;
+						await this.ctx.focusAgentSession(id);
+						if (closed) return;
+						if (this.ctx.session !== session || this.ctx.focusedAgentId !== id) {
+							throw new Error(t("overlays.input_controller.focused_unavailable"));
+						}
+						const editor = this.ctx.editor;
+						if (this.ctx.approvalOwnsComposer || editor.getText() || editor.pendingImages.length) {
+							throw new Error(t("overlays.input_controller.focused_composer_busy"));
+						}
+						done();
+						editor.setCollapsedText(text);
+						await editor.onSubmit?.(text);
+					},
 			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});
 

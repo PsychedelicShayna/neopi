@@ -65,6 +65,8 @@ import type { IdleMaintenanceOptions } from "../session/idle-maintenance";
 import type { CustomMessage } from "../session/messages";
 import type { ServingModel } from "../session/retry-fallback-chains";
 import type { ModelUsageRecord, SessionEntry, UsageStatistics } from "../session/session-entries";
+import type { ControlActor } from "../control/actor";
+import type { FocusedAgentCommandResult } from "../slash-commands/focused-agent-command";
 import type { AgentDefinition } from "../task/types";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RemoteObject, RpcMethod } from "./rpc";
@@ -272,6 +274,7 @@ export type SessionHostProtocol = {
 	getArtifactPath: RpcMethod<[id: string], string | null>;
 	resume: RpcMethod<[], void>;
 	retry: RpcMethod<[], boolean>;
+	runFocusedAgentCommand: RpcMethod<[text: string, actor?: ControlActor], FocusedAgentCommandResult>;
 	abortRetry: RpcMethod<[], void>;
 	abortCompaction: RpcMethod<[reason?: unknown], void>;
 	setModelTemporary: RpcMethod<
