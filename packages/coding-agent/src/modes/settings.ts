@@ -1019,6 +1019,26 @@ export const cfgSidebarWidthMax = register({
 	},
 });
 
+/** Docked width in columns from dragging the divider; 0 sizes the panel by the ratio and bounds above. */
+export const cfgSidebarWidthColumns = register({
+	id: "sidebar.width.columns",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Dragged Width (columns)",
+		description: "Set by dragging the divider; Auto uses the ratio and bounds",
+		options: [
+			{ value: "0", label: "Auto" },
+			{ value: "32", label: "32" },
+			{ value: "48", label: "48" },
+			{ value: "64", label: "64" },
+			{ value: "80", label: "80" },
+		],
+	},
+});
+
 export const cfgSidebarSplitAt = register({
 	id: "sidebar.splitAt",
 	type: "number",

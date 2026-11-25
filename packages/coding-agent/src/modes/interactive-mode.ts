@@ -483,6 +483,7 @@ import {
 	cfgSidebarSplitAt,
 	cfgSidebarView,
 	cfgSidebarWidthMax,
+	cfgSidebarWidthColumns,
 	cfgSidebarWidthMin,
 	cfgSidebarWidthRatio,
 	cfgDisplayShellVisualization,
@@ -595,6 +596,7 @@ const cfgLiveUiSettings = combine({
 	"sidebar.width.ratio": cfgSidebarWidthRatio,
 	"sidebar.width.min": cfgSidebarWidthMin,
 	"sidebar.width.max": cfgSidebarWidthMax,
+	"sidebar.width.columns": cfgSidebarWidthColumns,
 	"sidebar.splitAt": cfgSidebarSplitAt,
 	"sidebar.view": cfgSidebarView,
 	"sidebar.agents.autoscroll": cfgSidebarAgentAutoscroll,
@@ -5015,6 +5017,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"sidebar.width.ratio",
 				"sidebar.width.min",
 				"sidebar.width.max",
+				"sidebar.width.columns",
 				"sidebar.splitAt",
 				"sidebar.view",
 			)
