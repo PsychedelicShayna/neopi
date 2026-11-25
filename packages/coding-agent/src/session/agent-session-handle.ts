@@ -39,7 +39,7 @@ import type { TokenRateMeter } from "../utils/token-rate";
 import type { AgentDefinition } from "../task/types";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import { currentThreadId } from "../thread/identity";
-import type { AgentSession } from "./agent-session";
+import type { AgentSession, NavigateTreeResult } from "./agent-session";
 import type { AgentSessionEvent, AgentSessionEventListener } from "./agent-session-events";
 import type {
 	AgentSessionDisposeOptions,
@@ -50,11 +50,12 @@ import type {
 	EphemeralTurnOptions,
 	EphemeralTurnResult,
 	Prewalk,
-	PromptOptions,
 	ResolvedRoleModel,
 	RoleModelCycle,
 	RoleModelCycleResult,
+	SessionOAuthAccountList,
 	SessionStats,
+	PromptOptions,
 	SteerOptions,
 } from "./agent-session-types";
 import type { BlobPutOptions, BlobPutResult } from "./blob-store";
@@ -63,7 +64,8 @@ import type { CustomMessage } from "./messages";
 import type { ServingModel } from "./retry-fallback-chains";
 import type { AdvisorStatusOverviewEntry } from "./session-advisors";
 import type { SessionContext, TranscriptSessionContextOptions } from "./session-context";
-import type { ModelUsageRecord, SessionEntry, UsageStatistics } from "./session-entries";
+import type { ModelUsageRecord, SessionEntry, SessionTreeNode, UsageStatistics } from "./session-entries";
+import type { TreeNavigationExpected } from "./tree-navigation";
 
 /** Session-manager reads other agents' code performs on a session it does not own. */
 export interface AgentSessionManagerHandle {
@@ -195,10 +197,18 @@ export interface AgentSessionHandle {
 export interface AgentViewSessionManager extends AgentSessionManagerHandle {
 	/** Display name of the session. */
 	getSessionName(): string | undefined;
+	getAdditionalDirectories(): readonly string[];
 	/** Every entry of the session file. */
 	getEntries(): SessionEntry[];
 	/** Entries from the root to `fromId` (default: the current leaf). */
 	getBranch(fromId?: string): SessionEntry[];
+	getEntry(id: string): SessionEntry | undefined;
+	getTree(): SessionTreeNode[];
+	appendLabelChange(
+		targetId: string,
+		label: string | undefined,
+		expected: TreeNavigationExpected,
+	): string | Promise<string>;
 	/** Id of the current leaf entry. */
 	getLeafId(): string | null;
 	/** The newest entry that moves the conversation, when the active branch ends at it (`conversationTip`). */
@@ -276,6 +286,15 @@ export function isAgentViewSession(session: AgentSessionHandle): session is Agen
 	return typeof Reflect.get(session, "activeToolExecutionUpdates") === "function";
 }
 
+/** Tree options shared by the focused TUI and home thread; callbacks never cross the bridge. */
+export type AgentViewTreeOptions = Pick<
+	NonNullable<Parameters<AgentSession["navigateTree"]>[1]>,
+	"summarize" | "customInstructions" | "allowAskReopen" | "reanswerAskResult" | "expected"
+>;
+
+/** The view already has the display transcript in its watch mirror. */
+export type AgentViewTreeResult = Omit<NavigateTreeResult, "sessionContext">;
+
 /** Extra surface the TUI reads on a focused subagent (`ctx.viewSession`). */
 export interface AgentViewSession extends AgentSessionHandle {
 	/** Bounded home-owned control facts of a remote view; absent until its first watched snapshot. */
@@ -288,6 +307,12 @@ export interface AgentViewSession extends AgentSessionHandle {
 	readonly state: AgentViewState;
 	/** Session-manager surface for transcript rendering and HUD persistence. */
 	readonly sessionManager: AgentViewSessionManager;
+	navigateTree(entryId: string, options?: AgentViewTreeOptions): Promise<AgentViewTreeResult>;
+	abortBranchSummary(): void;
+	resumeAfterAskReanswer(remote?: { expected: TreeNavigationExpected; resumeToken: string }): void | Promise<void>;
+	listCurrentProviderOAuthAccounts(): Promise<SessionOAuthAccountList | undefined>;
+	pinProviderOAuthAccount(provider: string, credentialId: number): boolean | Promise<boolean>;
+	commitUserTodoEdit(phases: TodoPhase[], reminder: string): void | Promise<void>;
 	/** Settings scope of the session (link resolution, todo HUD timing). */
 	readonly settings: Settings;
 	/** Model registry the session resolves models and auth through. */
@@ -392,7 +417,11 @@ export interface AgentViewSession extends AgentSessionHandle {
 	/** Retry the last failed turn. */
 	retry(): Promise<boolean>;
 	/** Dispatch a session-scoped builtin on this session's home thread. */
-	runFocusedAgentCommand?(text: string, actor?: ControlActor): Promise<FocusedAgentCommandResult>;
+	runFocusedAgentCommand?(
+		text: string,
+		actor?: ControlActor,
+		images?: ImageContent[],
+	): Promise<FocusedAgentCommandResult>;
 	/** Cancel a pending retry. */
 	abortRetry(): void;
 	/** Cancel an in-progress compaction. */

@@ -10197,8 +10197,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleShareCommand();
 	}
 
-	handleTodoCommand(args: string): Promise<void> {
-		return this.#todoCommandController.handleTodoCommand(args);
+	handleTodoCommand(args: string, target?: AgentViewSession): Promise<void> {
+		return this.#todoCommandController.handleTodoCommand(args, target);
 	}
 
 	handleSessionCommand(): Promise<void> {
@@ -10285,14 +10285,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#commandController.handleDeleteCommand();
 	}
 
-	async handleForkCommand(placement?: "pane" | "window"): Promise<void> {
-		if (this.#vibeSessionTransitionBlocked()) return;
-		if (!placement) {
+	async handleForkCommand(placement?: "pane" | "window", target?: AgentViewSession): Promise<void> {
+		if (target && target !== this.viewSession) return;
+		if (!target && this.#vibeSessionTransitionBlocked()) return;
+		if (!target && !placement) {
 			await this.#btwController.dispose();
 			this.#omfgController.dispose();
 			this.#cleanseController.dispose();
 		}
-		await this.#commandController.handleForkCommand(placement);
+		await this.#commandController.handleForkCommand(placement, target);
 	}
 
 	async handleMoveCommand(targetPath?: string): Promise<void> {
@@ -10830,16 +10831,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#selectorController.showPluginSelector(mode);
 	}
 
-	showUserMessageSelector(startAt?: string): void {
-		this.#selectorController.showUserMessageSelector(startAt);
+	showUserMessageSelector(startAt?: string, target = this.#focusController.target): void {
+		this.#selectorController.showUserMessageSelector(startAt, target);
 	}
 
 	showCopySelector(): void {
 		this.#selectorController.showCopySelector();
 	}
 
-	showTreeSelector(): void {
-		this.#selectorController.showTreeSelector();
+	showTreeSelector(target = this.#focusController.target): void {
+		this.#selectorController.showTreeSelector(target);
 	}
 
 	showThinkingSelector(): void {
@@ -11076,8 +11077,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#omfgController.handleDismiss();
 	}
 
-	handleCleanseCommand(args: string): Promise<void> {
-		return this.#cleanseController.start(args);
+	handleCleanseCommand(args: string, cwd?: string): Promise<void> {
+		return this.#cleanseController.start(args, cwd);
 	}
 
 	hasActiveCleanse(): boolean {
@@ -11192,7 +11193,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	async reloadTodos(source: AgentViewSession = this.session): Promise<void> {
+	async reloadTodos(source: AgentViewSession = this.viewSession): Promise<void> {
 		await this.#loadTodoList(source);
 		this.ui.requestRender();
 	}

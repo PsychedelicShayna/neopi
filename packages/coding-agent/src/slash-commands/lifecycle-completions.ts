@@ -107,11 +107,14 @@ export const completeOptionalMentalModelId: ArgumentValueProvider = async (prefi
 };
 
 export function completeAddDirectory(prefix: string, runtime?: TuiSlashCommandRuntime) {
-	return buildDirectoryArgumentCompletions({ cwd: runtime?.ctx.sessionManager.getCwd() })(prefix);
+	const ctx = runtime?.ctx;
+	const manager = ctx?.focusedAgentId ? ctx.viewSession.sessionManager : ctx?.sessionManager;
+	return buildDirectoryArgumentCompletions({ cwd: manager?.getCwd() })(prefix);
 }
 
 export function completeRemoveDirectory(prefix: string, runtime?: TuiSlashCommandRuntime): AutocompleteItem[] | null {
-	const sessionManager = runtime?.ctx.sessionManager;
+	const ctx = runtime?.ctx;
+	const sessionManager = ctx?.focusedAgentId ? ctx.viewSession.sessionManager : ctx?.sessionManager;
 	if (!sessionManager) return null;
 	const cwd = sessionManager.getCwd();
 	const query = expandTilde(prefix.trimStart());

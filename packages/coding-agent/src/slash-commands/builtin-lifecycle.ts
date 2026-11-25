@@ -7,6 +7,7 @@ import { APP_NAME, logger, setProjectDir } from "@oh-my-pi/pi-utils";
 import { rescopeSessionToCwd } from "../session/cwd-rescope";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
 import { getSessionLaunchProfile } from "../neopi/launch-profile";
+import { TanCommandController } from "../modes/controllers/tan-command-controller";
 import { continuesConversation } from "../modes/utils/conversation-position";
 import type { FreshSessionResult } from "../session/agent-session";
 import { COMPACT_MODES, findCompactMode, type ParsedCompactArgs, parseCompactArgs } from "../session/compact-modes";
@@ -614,6 +615,17 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		},
 		inlineHint: "<work>",
 		allowArgs: true,
+		handleFocused: async (command, runtime) => {
+			const dispatched = await new TanCommandController({
+				session: runtime.session,
+				sessionManager: runtime.sessionManager,
+				settings: runtime.settings,
+				mcpManager: runtime.mcpManager,
+				showStatus: runtime.output,
+				showError: runtime.output,
+			}).start(command.args, runtime.focusedInput?.images);
+			return commandConsumed({ failed: !dispatched });
+		},
 		handleTui: async (command, runtime) => {
 			const work = command.text.slice(`/${command.name}`.length).trim();
 			await runWithDetachedDraft(command, runtime, () => runtime.ctx.handleTanCommand(work, runtime.input?.images), {
@@ -665,7 +677,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			if (refuseImages(command, runtime)) return;
 			const args = command.text.slice(`/${command.name}`.length).trim();
 			clearSubmittedText(runtime);
-			await runtime.ctx.handleCleanseCommand(args);
+			await runtime.ctx.handleCleanseCommand(args, runtime.focusedSession?.sessionManager.getCwd());
 		},
 	},
 	{

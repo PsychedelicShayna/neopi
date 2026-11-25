@@ -3,8 +3,9 @@ import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { clearSubmittedText, runWithDetachedDraft } from "./helpers/draft";
 import * as path from "node:path";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
+import { replaceTabs } from "@oh-my-pi/pi-tui";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
-import { isRecord, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
+import { isRecord, PRODUCT_NAME, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatModelString } from "../config/model-resolver";
 import { resolveSessionModelSelector } from "../config/session-model-selector";
 import type { Settings } from "../config/settings";
@@ -20,6 +21,7 @@ import {
 	type ModelPresetSession,
 	saveModelPreset,
 } from "../config/model-presets";
+import { focusedSessionModes } from "../modes/focused-session-modes";
 import { describeLoopCondition } from "../modes/loop-condition";
 import {
 	describeLoopLimitRuntime,
@@ -35,10 +37,18 @@ import { describePrewalkCrew, getPrewalkPatterns, resolvePrewalkCrewSelection } 
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 import { argumentValues, buildArgumentCompletions, completeCurrentArgument } from "./builtin-completions";
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
-import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { handleSecurityCommand, SECURITY_SUBCOMMANDS } from "./helpers/security";
 import { buildModelSelectorCompletions } from "./model-selector-completions";
-import type { ArgumentValueProvider, SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
+import type {
+	ArgumentValueProvider,
+	ParsedSlashCommand,
+	SlashCommandResult,
+	SlashCommandRuntime,
+	SlashCommandSpec,
+	SubcommandDef,
+	TuiSlashCommandRuntime,
+} from "./types";
 
 import {
 	cfgComputerBackgroundFallback,
@@ -60,6 +70,85 @@ import {
 	type ChatModeConfig,
 	parseChatCommandArgs,
 } from "../chat/chat-mode";
+
+async function focusedGoal(command: ParsedSlashCommand, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	const owner = focusedSessionModes(runtime.session);
+	return owner.run(async () => {
+		const { verb, rest } = parseSubcommand(command.args);
+		const { goal, state } = await owner.goal.handle({ op: "get" });
+		switch (verb) {
+			case "":
+			case "show":
+				await runtime.output(
+					goal
+						? `${goal.status}: ${goal.objective}\nTokens used: ${goal.tokensUsed}${goal.tokenBudget === undefined ? " (unlimited)" : ` / ${goal.tokenBudget}`}; elapsed: ${goal.timeUsedSeconds}s.`
+						: "No goal set. Use /goal set <objective> or /guided-goal.",
+				);
+				return;
+			case "pause":
+			case "resume":
+			case "drop": {
+				if (verb === "resume") await owner.assertGoalAvailable();
+				const result = await owner.goal.handle({ op: verb });
+				await runtime.output(result.goal ? `Goal ${result.goal.status}: ${result.goal.objective}` : "No goal set.");
+				return;
+			}
+			case "budget": {
+				const budget = rest.toLowerCase() === "off" ? undefined : Number(rest);
+				if (budget !== undefined && (!/^\d+$/.test(rest) || !Number.isSafeInteger(budget) || budget <= 0)) {
+					return usage("Usage: /goal budget <positive integer|off>", runtime);
+				}
+				await owner.goal.setBudget(budget);
+				await runtime.output(
+					budget === undefined ? "Goal budget cleared." : `Goal budget set to ${budget} tokens.`,
+				);
+				return;
+			}
+			default: {
+				const objective = verb === "set" ? rest : command.args.trim();
+				if (!objective) return usage("Usage: /goal set <objective>", runtime);
+				await owner.setGoal(objective, verb === "set" && state?.enabled === true, runtime.focusedInput?.images);
+				await runtime.output(`Goal set: ${objective}`);
+				return commandConsumed({ agentInvoked: true });
+			}
+		}
+	});
+}
+
+async function focusedPlanReview(
+	command: ParsedSlashCommand,
+	runtime: SlashCommandRuntime,
+): Promise<SlashCommandResult> {
+	const owner = focusedSessionModes(runtime.session);
+	return owner.run(async () => {
+		const { verb, rest } = parseSubcommand(command.args);
+		if (!verb) {
+			const pending = [...owner.pendingPlans()];
+			if (pending.length === 0) {
+				await runtime.output("This agent has no plan awaiting review.");
+				return;
+			}
+			for (const { id, title, planFilePath, planMarkdown } of pending) {
+				await runtime.output(
+					`${sanitizeText(title)} (${sanitizeText(planFilePath)})\n${replaceTabs(sanitizeText(planMarkdown))}\n/plan-review approve ${id} · /plan-review refine ${id} [feedback]`,
+				);
+			}
+			return;
+		}
+		if (verb === "approve" || verb === "refine") {
+			const id = rest.split(/\s+/, 1)[0];
+			const detail = rest.slice(id.length).trim();
+			if (id && (verb === "refine" || !detail)) {
+				if (!owner.answerPlan(id, verb, detail || undefined)) {
+					return usage("That plan is no longer awaiting review on this agent.", runtime);
+				}
+				await runtime.output(verb === "approve" ? "Plan approval submitted." : "Plan refinement submitted.");
+				return;
+			}
+		}
+		return usage("Usage: /plan-review [approve <id>|refine <id> [feedback]]", runtime);
+	});
+}
 
 function formatChatModeStatus(config: ChatModeConfig | undefined): string {
 	if (!config) return "off";
@@ -466,6 +555,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[prompt]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
+			if (runtime.ctx.focusedAgentId) return t("commands.modes.planDescription");
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return t("commands.modes.planDisabled");
 			if (runtime.ctx.planModeEnabled) {
 				const planFile = runtime.ctx.planModePlanFilePath;
@@ -473,6 +563,15 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			if (runtime.ctx.goalModeEnabled) return t("commands.modes.planBlocked");
 			return t("commands.modes.planOff");
+		},
+		handleFocused: (command, runtime) => {
+			const owner = focusedSessionModes(runtime.session);
+			return owner.run(async () => {
+				const enabled = !runtime.session.getPlanModeState()?.enabled;
+				await owner.setPlan(enabled);
+				await runtime.output(enabled ? "Plan mode enabled for this agent." : "Plan mode disabled for this agent.");
+				if (enabled && command.args) return { prompt: command.args };
+			});
 		},
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
@@ -486,12 +585,18 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		get description() {
 			return t("commands.modes.planReviewDescription");
 		},
+		allowArgs: true,
+		inlineHint: "[approve <id>|refine <id> [feedback]]",
+		handleFocused: focusedPlanReview,
 		getTuiAutocompleteDescription: runtime =>
-			runtime.ctx.planModeEnabled
-				? t("commands.modes.planReviewAvailable")
-				: t("commands.modes.planReviewUnavailable"),
-		handleTui: async (_command, runtime) => {
-			await runtime.ctx.openPlanReview();
+			runtime.ctx.focusedAgentId
+				? t("commands.modes.planReviewDescription")
+				: runtime.ctx.planModeEnabled
+					? t("commands.modes.planReviewAvailable")
+					: t("commands.modes.planReviewUnavailable"),
+		handleTui: async (command, runtime) => {
+			if (command.args) runtime.ctx.showWarning("Use /plan-review without arguments in the main session.");
+			else await runtime.ctx.openPlanReview();
 			clearSubmittedText(runtime);
 		},
 	},
@@ -564,7 +669,17 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		],
 		inlineHint: "[objective]",
 		allowArgs: true,
+		handleFocused: focusedGoal,
 		getTuiAutocompleteDescription: runtime => {
+			if (runtime.ctx.focusedAgentId) {
+				const state = runtime.ctx.viewSession.getGoalModeState();
+				return state
+					? t("commands.modes.goalStatus", {
+							status: state.goal.status,
+							objective: shortDetail(state.goal.objective),
+						})
+					: t("commands.modes.goalOff");
+			}
 			if (!cfgGoalEnabled.get(runtime.ctx.settings)) return t("commands.modes.goalDisabled");
 			if (runtime.ctx.planModeEnabled) return t("commands.modes.goalBlocked");
 			const state = runtime.ctx.session.getGoalModeState();
@@ -591,6 +706,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			return t("commands.modes.goalSetupHint");
 		},
 		allowArgs: true,
+		handleFocused: (command, runtime) => {
+			const owner = focusedSessionModes(runtime.session);
+			return owner.run(() => owner.startGuidedGoal(command.args.trim(), runtime.focusedInput?.images));
+		},
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handleGuidedGoalCommand(command.args || undefined, runtime.input),

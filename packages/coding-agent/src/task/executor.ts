@@ -5958,6 +5958,11 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				toolNames !== undefined && !toolNames.includes("write")
 					? enabledSubagentTools.filter(name => name !== "write")
 					: enabledSubagentTools;
+			// Unlike the synthetic write transport, goal can be an explicit grant
+			// even though it stays dormant until the operator enters goal mode.
+			if (restrictToolNames && toolNames?.includes("goal") && !persistedSubagentTools.includes("goal")) {
+				persistedSubagentTools.push("goal");
+			}
 
 			session.sessionManager.appendSessionInit({
 				// Blocks as sent; the session appends a newer session_init whenever a model call's base changes.

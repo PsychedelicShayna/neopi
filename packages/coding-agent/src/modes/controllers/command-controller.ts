@@ -66,6 +66,7 @@ import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/ho
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { buildToolsMarkdown } from "@oh-my-pi/pi-tui/prompt/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
+import type { AgentViewSession } from "../../session/agent-session-handle";
 import { buildJobTree, jobTreeGuide, jobTreeIndent } from "@oh-my-pi/pi-tui/overlays/job-tree";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import { type CompactMode, findCompactMode } from "../../session/compact-modes";
@@ -1586,11 +1587,12 @@ export class CommandController {
 		await this.#runNewSessionFlow({ drop: true }, t("commands.controller.sessionDeleted"));
 	}
 
-	async handleForkCommand(placement?: "pane" | "window"): Promise<void> {
+	async handleForkCommand(placement?: "pane" | "window", target?: AgentViewSession): Promise<void> {
 		if (placement !== undefined) {
-			await this.#handleForkTerminalCommand(placement);
+			await this.#handleForkTerminalCommand(placement, target);
 			return;
 		}
+		if (target) throw new Error("Use /fork pane or /fork window to fork a focused agent");
 
 		// A Tern pane fork leaves this session untouched, so it may run mid-turn.
 		if (await this.#forkIntoTernPane()) return;
@@ -1638,7 +1640,11 @@ export class CommandController {
 		]);
 	}
 
-	async #handleForkTerminalCommand(placement: "pane" | "window"): Promise<void> {
+	async #handleForkTerminalCommand(placement: "pane" | "window", target?: AgentViewSession): Promise<void> {
+		const source = target ?? this.ctx.session;
+		const manager = target?.sessionManager ?? this.ctx.sessionManager;
+		const sourceSettings = target?.settings ?? this.ctx.settings;
+		const initialSessionFile = manager.getSessionFile();
 		const dependencies = this.#forkTerminalDependencies;
 		const environment = dependencies.environment();
 		const multiplexer = dependencies.classifyTerminalMultiplexer(environment);
@@ -1648,7 +1654,7 @@ export class CommandController {
 			return;
 		}
 
-		if (this.ctx.session.isStreaming) {
+		if (source.isStreaming) {
 			const confirmed = await this.ctx.showHookConfirm(
 				t("commands.controller.confirmForkStreaming"),
 				t("commands.controller.forkPartialResponse"),
@@ -1656,7 +1662,6 @@ export class CommandController {
 			if (!confirmed) return;
 		}
 
-		const initialSessionFile = this.ctx.sessionManager.getSessionFile();
 		if (!initialSessionFile) {
 			this.ctx.showError(t("commands.controller.forkNotPersisted"));
 			return;
@@ -1680,18 +1685,19 @@ export class CommandController {
 		}
 
 		try {
-			await this.ctx.sessionManager.flush();
+			await manager.flush();
 		} catch (error) {
 			logger.error("Failed to flush the session before opening a terminal fork", { error });
 			this.ctx.showError(t("commands.controller.forkSaveFailed"));
 			return;
 		}
 
-		const sessionFile = this.ctx.sessionManager.getSessionFile();
+		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) {
 			this.ctx.showError(t("commands.controller.forkNoLongerPersisted"));
 			return;
 		}
+		if (target && (this.ctx.viewSession !== target || sessionFile !== initialSessionFile)) return;
 		const sourceSessionFile = path.resolve(sessionFile);
 		try {
 			await fs.access(sourceSessionFile);
@@ -1702,17 +1708,18 @@ export class CommandController {
 
 		try {
 			const activeProfile = dependencies.getActiveProfile();
-			const activeModel = this.ctx.session.model;
+			const activeModel = source.model;
 			if (activeProfile) childArgs.push("--profile", activeProfile);
 			if (activeModel) childArgs.push("--model", `${activeModel.provider}/${activeModel.id}`);
-			const activeThinkingLevel = this.ctx.session.configuredThinkingLevel();
+			const activeThinkingLevel = source.configuredThinkingLevel();
 			if (activeThinkingLevel !== undefined) childArgs.push("--thinking", activeThinkingLevel);
 			// Forcing --model/--thinking marks the fork's cache shape as changed, which would
 			// drop the inherited key. Automatic candidates travel in the source header;
 			// forwarding them as --prompt-cache-key would bypass their model gate.
 			if (
-				this.ctx.session.agent.promptCacheKey !== undefined ||
-				this.ctx.sessionManager.getHeader()?.taskPromptCacheKey === undefined
+				!target &&
+				(this.ctx.session.agent.promptCacheKey !== undefined ||
+					this.ctx.sessionManager.getHeader()?.taskPromptCacheKey === undefined)
 			) {
 				childArgs.push("--prompt-cache-key", this.ctx.session.agent.promptCacheKey ?? this.ctx.session.sessionId);
 			}
@@ -1720,12 +1727,11 @@ export class CommandController {
 			// Pin only non-secret scope variables.
 			const command = [
 				...scopeEnvCommand({
-					PI_CODING_AGENT_DIR: this.ctx.settings.getAgentDir(),
-					PI_CONFIG_DIR: getConfigDirName(),
+					PI_CODING_AGENT_DIR: sourceSettings.getAgentDir(),
 					OMP_PROFILE: activeProfile,
 					PI_PROFILE: activeProfile,
-					PI_CONFIG_FILES: this.ctx.settings.getConfigFiles().join(path.delimiter),
 					PI_CODING_AGENT_SESSION_DIR: environment.PI_CODING_AGENT_SESSION_DIR,
+					PI_CONFIG_FILES: sourceSettings.getConfigFiles().join(path.delimiter),
 					XDG_DATA_HOME: environment.XDG_DATA_HOME,
 					XDG_STATE_HOME: environment.XDG_STATE_HOME,
 					XDG_CACHE_HOME: environment.XDG_CACHE_HOME,
@@ -1737,7 +1743,7 @@ export class CommandController {
 				multiplexer,
 				placement,
 				command,
-				this.ctx.sessionManager.getCwd(),
+				manager.getCwd(),
 				shellGrammar,
 			);
 			if ("error" in launchPlan) {
@@ -1745,6 +1751,7 @@ export class CommandController {
 				return;
 			}
 
+			if (target && (this.ctx.viewSession !== target || manager.getSessionFile() !== initialSessionFile)) return;
 			const result = await dependencies.launchTerminal(launchPlan.request);
 			if (result.warning) {
 				this.ctx.showWarning(

@@ -59,7 +59,7 @@ export class CleanseCommandController {
 		this.#close(run);
 	}
 
-	async start(args: string): Promise<void> {
+	async start(args: string, cwd?: string): Promise<void> {
 		if (this.#active) {
 			this.ctx.showStatus(
 				t("overlays.cleanse_command_controller.already_active", {
@@ -86,13 +86,14 @@ export class CleanseCommandController {
 		this.ctx.cleanseContainer.clear();
 		this.ctx.cleanseContainer.addChild(run.panel);
 		this.ctx.ui.requestRender();
-		await this.#run(run, parsed);
+		await this.#run(run, parsed, cwd);
 	}
 
-	async #run(run: CleanseRun, options: ParsedCleanseArgs): Promise<void> {
+	async #run(run: CleanseRun, options: ParsedCleanseArgs, cwd?: string): Promise<void> {
 		try {
 			const result = await runCleanse(
 				{
+					cwd,
 					request: options.request,
 					all: options.all,
 					includeTests: options.includeTests,

@@ -109,10 +109,12 @@ export function rpcPlanModeState(session: Pick<AgentSession, "getPlanModeState">
 	return { mode: "plan", planMode: { planFilePath: state.planFilePath, workflow: state.workflow ?? "parallel" } };
 }
 
+type PlanModeOutput = RpcModeChangedFrame | RpcPlanProposalRequest | RpcPlanProposalCancel | RpcResponse;
+
 /** Owns plan mode for one RPC session. */
 export class RpcPlanModeController {
 	readonly #session: AgentSession;
-	readonly #output: (frame: object) => void;
+	readonly #output: (frame: PlanModeOutput) => void;
 	/** Pending proposal settlers by request id. */
 	readonly #pending = new Map<string, (decision: PlanDecision) => void>();
 	/** Proposals resolved without a host answer, by request id; a late answer to one fails. */
@@ -128,7 +130,7 @@ export class RpcPlanModeController {
 	#emitHold = 0;
 	#closed = false;
 
-	constructor(session: AgentSession, output: (frame: object) => void) {
+	constructor(session: AgentSession, output: (frame: PlanModeOutput) => void) {
 		this.#session = session;
 		this.#output = output;
 		this.#emitted = snapshotMode(session.getPlanModeState());
@@ -143,13 +145,18 @@ export class RpcPlanModeController {
 		return rpcPlanModeState(this.#session);
 	}
 
+	/** Whether this controller owns the live plan, rather than a prewalk or other host. */
+	get ownsPlan(): boolean {
+		return this.#owned !== undefined;
+	}
+
 	/**
 	 * Apply a `set_mode` command.
 	 *
 	 * @throws RpcSetModeError for invalid input, a disabled or blocked plan
 	 *   mode, or a busy session; the session state is unchanged.
 	 */
-	async setMode(mode: unknown, planFilePath: unknown): Promise<RpcSetModeResult> {
+	async setMode(mode: unknown, planFilePath: unknown, options?: { restore?: boolean }): Promise<RpcSetModeResult> {
 		if (mode !== "default" && mode !== "plan") {
 			throw new RpcSetModeError(`Unsupported mode: ${String(mode)}. Expected "default" or "plan".`);
 		}
@@ -158,7 +165,9 @@ export class RpcPlanModeController {
 		}
 		this.#emitHold++;
 		try {
-			return mode === "plan" ? await this.#enterPlan(planFilePath) : await this.#exitPlan();
+			return mode === "plan"
+				? await this.#enterPlan(planFilePath, options?.restore === true)
+				: await this.#exitPlan();
 		} finally {
 			this.#emitHold--;
 			this.#emitModeIfChanged();
@@ -219,7 +228,7 @@ export class RpcPlanModeController {
 		this.#unregisterSessionChange();
 	}
 
-	async #enterPlan(planFilePath: string | undefined): Promise<RpcSetModeResult> {
+	async #enterPlan(planFilePath: string | undefined, restoring: boolean): Promise<RpcSetModeResult> {
 		const session = this.#session;
 		if (!cfgPlanEnabled.get(session.settings)) {
 			throw new RpcSetModeError("Plan mode is disabled. Enable it in settings (plan.enabled).", "plan_disabled");
@@ -278,7 +287,7 @@ export class RpcPlanModeController {
 			hostMountableTools,
 			model: await this.#applyPlanModel(),
 		};
-		session.sessionManager.appendModeChange("plan", { planFilePath: state.planFilePath });
+		if (!restoring) session.sessionManager.appendModeChange("plan", { planFilePath: state.planFilePath });
 		return { mode: "plan", planFilePath: state.planFilePath };
 	}
 

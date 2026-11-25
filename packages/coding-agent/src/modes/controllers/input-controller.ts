@@ -200,9 +200,13 @@ function hasPasteText(value: unknown): value is PasteTarget {
 
 const FOCUSED_COMMAND_EFFECT_MESSAGES = {
 	transcript: "overlays.input_controller.focused_effect_transcript",
+	dispatch: "overlays.input_controller.focused_effect_dispatch",
 	jobs: "overlays.input_controller.focused_effect_jobs",
 	tool: "overlays.input_controller.focused_effect_tool",
 	account: "overlays.input_controller.focused_effect_account",
+	kernel: "overlays.input_controller.focused_effect_kernel",
+	mode: "overlays.input_controller.focused_effect_mode",
+	profile: "overlays.input_controller.focused_effect_profile",
 	session: "overlays.input_controller.focused_effect_session",
 	settings: "overlays.input_controller.focused_effect_settings",
 	external: "overlays.input_controller.focused_effect_external",
@@ -2255,6 +2259,7 @@ export class InputController {
 		const main = this.ctx.session;
 		let promptTarget = target;
 		let commandPrompt = false;
+		let draftDetached = false;
 		const draftText = this.ctx.editor.getText();
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		const imageLinks =
@@ -2299,7 +2304,11 @@ export class InputController {
 			if (parsed && builtin && (builtin.allowArgs || !parsed.args)) {
 				const route = focusedCommandRoute(builtin.name, parsed.args);
 				if (route.effect) {
-					const confirmed = await this.#confirmFocusedCommand(parsed.name, route.effect);
+					const confirmed = await this.#confirmFocusedCommand(
+						parsed.name,
+						route.effect,
+						route.target === "main" ? this.ctx.sessionManager.getSessionName() || "Main" : undefined,
+					);
 					if (
 						this.ctx.focusedAgentId !== focusedId ||
 						this.ctx.viewSession !== target ||
@@ -2313,9 +2322,11 @@ export class InputController {
 				}
 				try {
 					const input = images ? { images, imageLinks } : undefined;
+					draftDetached = route.target === "home";
+					if (draftDetached) this.#detachSideSubmission(draftText, images);
 					const result = await executeBuiltinSlashCommand(
 						text,
-						{ ctx: this.ctx, input, focusedSession: route.target === "view" ? target : undefined },
+						{ ctx: this.ctx, input, draftDetached, focusedSession: route.target === "view" ? target : undefined },
 						commandActor,
 						route.target === "home" ? target : undefined,
 					);
@@ -2326,6 +2337,9 @@ export class InputController {
 					commandPrompt = true;
 					if (route.target === "main") promptTarget = main;
 				} catch (error) {
+					if (draftDetached && this.ctx.viewSession === target) {
+						restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
+					}
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 					return;
 				}
@@ -2367,7 +2381,7 @@ export class InputController {
 			}
 		}
 		const isContinueShortcut = streamingBehavior === "steer" && !images && (text === "." || text === "c");
-		this.ctx.editor.clearDraft(text);
+		if (!draftDetached) this.ctx.editor.clearDraft(text);
 		try {
 			// Continue shortcuts do not request queueing: keep rejecting them while
 			// busy instead of scheduling another continuation behind the active turn.
@@ -2385,14 +2399,18 @@ export class InputController {
 				);
 			}
 		} catch (error) {
-			// Hand the message back, mirroring the main submit error path: restore
-			// pasted images so the user can retry an image-only or text+image draft.
-			if (images && images.length > 0) {
-				this.ctx.editor.pendingImages = [...images];
-				this.ctx.editor.pendingImageLinks = imageLinks ? [...imageLinks] : images.map(() => undefined);
-				this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+			if (this.ctx.viewSession === target) {
+				if (draftDetached) {
+					restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
+				} else {
+					if (images?.length) {
+						this.ctx.editor.pendingImages = [...images];
+						this.ctx.editor.pendingImageLinks = imageLinks ? [...imageLinks] : images.map(() => undefined);
+						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+					}
+					this.ctx.editor.setCollapsedText(text);
+				}
 			}
-			this.ctx.editor.setCollapsedText(text);
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
 		this.ctx.updatePendingMessagesDisplay();
@@ -2404,17 +2422,21 @@ export class InputController {
 		if (!editor.getText() && !editor.restoreSubmittedDraft()) editor.setCollapsedText(text);
 	}
 
-	async #confirmFocusedCommand(name: string, effect: FocusedCommandEffect): Promise<boolean> {
+	async #confirmFocusedCommand(name: string, effect: FocusedCommandEffect, mainSession?: string): Promise<boolean> {
 		const command = sanitizeText(name).replace(/[\r\n\t]/g, " ");
 		const description = translate(FOCUSED_COMMAND_EFFECT_MESSAGES[effect]);
+		const title = mainSession
+			? translate("overlays.input_controller.focused_confirm_main", {
+					command,
+					session: sanitizeText(mainSession).replace(/[\r\n\t]/g, " ") || "Main",
+					description,
+				})
+			: translate("overlays.input_controller.focused_confirm", { command, description });
 		return (
-			(await this.ctx.showHookSelector(
-				translate("overlays.input_controller.focused_confirm", { command, description }),
-				[
-					{ value: "cancel", label: translate("overlays.input_controller.focused_cancel") },
-					{ value: "run", label: translate("overlays.input_controller.focused_run") },
-				],
-			)) === "run"
+			(await this.ctx.showHookSelector(title, [
+				{ value: "cancel", label: translate("overlays.input_controller.focused_cancel") },
+				{ value: "run", label: translate("overlays.input_controller.focused_run") },
+			])) === "run"
 		);
 	}
 

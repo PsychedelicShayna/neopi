@@ -665,7 +665,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		params: AskParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<AskToolDetails>,
-		context?: AgentToolContext,
+		context?: AgentToolContext | Pick<AgentToolContext, "hasUI" | "ui" | "toolCall" | "abort">,
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {

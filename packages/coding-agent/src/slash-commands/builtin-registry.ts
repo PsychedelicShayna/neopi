@@ -6,8 +6,8 @@ import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import type { AgentSession } from "../session/agent-session";
-import { type AgentViewSession, isLocalAgentSession } from "../session/agent-session-handle";
-import { runFocusedAgentCommand } from "./focused-agent-command";
+import type { AgentViewSession } from "../session/agent-session-handle";
+import { dispatchFocusedAgentCommand } from "./focused-agent-command";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import { BUILTIN_COMMIT_SLASH_COMMANDS } from "./builtin-commit";
 import { CHRONICLER_SLASH_COMMAND } from "./builtin-chronicler";
@@ -184,8 +184,9 @@ export async function executeAcpBuiltinSlashCommand(
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
 	const command = lookupBuiltinSlashCommand(parsed.name);
-	if (!command?.handle) return false;
-	const result = await command.handle(parsed, runtime);
+	const handle = runtime.focusedInput ? (command?.handleFocused ?? command?.handle) : command?.handle;
+	if (!handle) return false;
+	const result = await handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;
 }
@@ -224,16 +225,23 @@ export async function executeBuiltinSlashCommand(
 		return true;
 	}
 	if (focusedTarget) {
-		if (!isLocalAgentSession(focusedTarget) && !focusedTarget.runFocusedAgentCommand) {
+		const restoreInput = () => {
+			if (runtime.draftDetached && runtime.ctx.viewSession === focusedTarget) {
+				restoreDetachedDraft(runtime.ctx.editor, text, runtime.input?.images, runtime.input?.imageLinks);
+			}
+		};
+		const execution = await dispatchFocusedAgentCommand(focusedTarget, text, commandActor, runtime.input?.images);
+		if (!execution?.result) {
+			restoreInput();
 			runtime.ctx.showError(t("overlays.input_controller.focused_unavailable"));
 			return true;
 		}
-		const dispatch = isLocalAgentSession(focusedTarget)
-			? runFocusedAgentCommand(focusedTarget, text, commandActor)
-			: focusedTarget.runFocusedAgentCommand?.(text, commandActor);
-		if (!dispatch) return true;
-		const { result, output } = await dispatch;
-		if (!result) return false;
+		const { result, output } = execution;
+		if ("consumed" in result && result.failed) {
+			restoreInput();
+			runtime.ctx.showError(output.join("\n") || t("overlays.input_controller.focused_unavailable"));
+			return true;
+		}
 		clearSubmittedText(runtime);
 		for (const line of output) runtime.ctx.showStatus(line);
 		return "prompt" in result ? result.prompt : true;

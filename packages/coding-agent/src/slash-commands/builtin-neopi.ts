@@ -11,6 +11,8 @@ import {
 	runWithoutDetachedDraft,
 } from "@oh-my-pi/pi-tui/draft-scope";
 import { formatVisionMarker } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
+import { logger } from "@oh-my-pi/pi-utils";
+import { currentControlActor } from "../control/actor";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
 import {
@@ -21,7 +23,7 @@ import {
 	parseDeferredInput,
 	pendingDeferredSubmissionIds,
 } from "../neopi/defer";
-import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
+import { type LoadoutFeature, type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import { BUILTIN_PERSONALITIES, completePersonalityNames, isBuiltinPersonality } from "../neopi/personalities";
 import {
 	currentPersonalityName,
@@ -48,6 +50,7 @@ import {
 import { describeNeoProxy, withNeoProxyLoginUrl } from "../neopi/neoproxy-connect";
 import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import noticeTemplate from "../prompts/system/operator-notice.md" with { type: "text" };
+import { dispatchFocusedAgentCommand, runFocusedAgentCommand } from "./focused-agent-command";
 import type { AgentSession } from "../session/agent-session";
 import {
 	argumentValues,
@@ -56,8 +59,10 @@ import {
 	completeArguments,
 	ghostHint,
 } from "./builtin-completions";
+import { lookupBuiltinSlashCommand } from "./builtin-registry";
+import { focusedCommandRoute } from "./focused-command-effects";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
-import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
 const deferCancelValues = argumentValues("cancel");
@@ -194,7 +199,8 @@ function personaArgumentCompletions(
 ): Promise<AutocompleteItem[] | null> {
 	const lead = /^live\s+/i.exec(prefix)?.[0] ?? "";
 	const scope = lead ? "live" : "persona";
-	const names = (): Promise<PersonaNameItem[]> => personaNameItems(scope, runtime?.ctx.sessionManager.getSessionId());
+	const names = (): Promise<PersonaNameItem[]> =>
+		personaNameItems(scope, runtime?.ctx.viewSession.sessionManager.getSessionId());
 	return subcommandThenNameCompletions(
 		prefix.slice(lead.length),
 		lead,
@@ -245,9 +251,12 @@ function loadoutHost(session: AgentSession, ctx?: InteractiveModeContext): Loado
 	};
 }
 
-async function runLoadoutCommand(args: string, host: LoadoutHost): Promise<string | undefined> {
+async function runLoadoutCommand(
+	args: string,
+	host: LoadoutHost,
+	loadouts: LoadoutFeature = loadoutFeature(),
+): Promise<string | undefined> {
 	const { verb, rest } = parseSubcommand(args);
-	const loadouts = loadoutFeature();
 	switch (verb) {
 		case "set":
 		case "use":
@@ -293,6 +302,40 @@ async function loadoutMenu(ctx: InteractiveModeContext): Promise<void> {
 		ctx.showStatus(name ? await loadouts.use(name, host) : await loadouts.off(host));
 	} catch (error) {
 		ctx.showError(errorMessage(error));
+	}
+}
+
+/** Shared catalogs are readable here, but the selected worker owns activation and prompt state. */
+async function focusedRuntimeChoice(runtime: TuiSlashCommandRuntime, command: "persona" | "loadout"): Promise<void> {
+	const { focusedSession: target, ctx } = runtime;
+	if (!target) return;
+	const items =
+		command === "persona"
+			? await personaNameItems("persona", target.sessionManager.getSessionId())
+			: (await loadoutFeature().data()).items.map(item => ({
+					name: item.name,
+					description: item.loadout.mainModel,
+					active: false, // The profile's activation does not describe the worker.
+				}));
+	const arg = await ctx.showHookSelector(
+		t(command === "persona" ? "commands.neopi.focusedPersona" : "commands.neopi.loadouts"),
+		[
+			...items.map(item => ({
+				value: `set ${item.name}`,
+				label: item.active ? `● ${item.name}` : item.name,
+				description: item.description,
+			})),
+			{ value: "off", label: t("commands.neopi.focusedRuntimeOff") },
+		],
+	);
+	if (arg === undefined || ctx.viewSession !== target) return;
+	const execution = await dispatchFocusedAgentCommand(target, `/${command} ${arg}`, currentControlActor());
+	if (!execution?.result) {
+		ctx.showError(t("overlays.input_controller.focused_unavailable"));
+	} else if ("consumed" in execution.result && execution.result.failed) {
+		ctx.showError(execution.output.join("\n"));
+	} else {
+		for (const status of execution.output) ctx.showStatus(status);
 	}
 }
 
@@ -483,7 +526,8 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				},
 				(value, current) => {
 					if (!/^cancel\s/.test(prefix.trimStart())) return null;
-					const ids = current ? pendingDeferredSubmissionIds(current.ctx.session) : [];
+					const ids =
+						current && !current.ctx.focusedAgentId ? pendingDeferredSubmissionIds(current.ctx.session) : [];
 					// Completing a prefix must not turn Enter into cancellation of a guessed ID or "all".
 					return (
 						argumentValues(
@@ -496,6 +540,54 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					);
 				},
 			),
+		handleFocused: async (command, runtime) => {
+			const schedules = deferredSubmissionsFor(runtime.session);
+			const cancellation = /^cancel\s+(\d+|all)$/.exec(command.args);
+			if (cancellation) {
+				const count = schedules.cancel(cancellation[1] === "all" ? undefined : Number(cancellation[1]));
+				await runtime.output(t("commands.neopi.deferCancelled", { count, plural: count === 1 ? "" : "s" }));
+				return commandConsumed();
+			}
+			const parsed = parseDeferredInput(command.args);
+			if (!parsed) return usage(DEFER_USAGE, runtime);
+			const text = parsed.input.trimStart();
+			const deferred = parseSlashCommand(text);
+			const builtin = deferred && lookupBuiltinSlashCommand(deferred.name);
+			const route = builtin && deferred && focusedCommandRoute(builtin.name, deferred.args);
+			if (
+				text.startsWith("!") ||
+				(text.startsWith("/") &&
+					(!deferred ||
+						!builtin ||
+						(deferred.args && !builtin.allowArgs) ||
+						!(builtin.handleFocused ?? builtin.handle) ||
+						route?.target !== "home" ||
+						route.effect))
+			) {
+				return usage(t("commands.neopi.deferFocusedCommandUnavailable"), runtime);
+			}
+			const images = runtime.focusedInput?.images;
+			const { session } = runtime;
+			const actor = currentControlActor();
+			const id = schedules.schedule(
+				parsed.delayMs,
+				async () => {
+					let prompt = parsed.input;
+					if (deferred) {
+						const { result, output } = await runFocusedAgentCommand(session, text, actor, images);
+						if (!result || ("consumed" in result && result.failed)) {
+							throw new Error(output.join("\n") || t("commands.neopi.deferFocusedCommandUnavailable"));
+						}
+						if (!("prompt" in result)) return;
+						prompt = result.prompt;
+					}
+					await session.prompt(prompt, { images, streamingBehavior: "followUp", throwOnDrop: true });
+				},
+				error => logger.error("Focused deferred submission failed", { error, agentId: session.getAgentId() }),
+			);
+			await runtime.output(t("commands.neopi.deferScheduled", { id, target: id }));
+			return commandConsumed();
+		},
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			clearSubmittedText(runtime);
@@ -637,6 +729,10 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			ctx.editor.setText("");
 			const parsed = parsePersonaCommand(command.args);
 			if (!parsed.verb) {
+				if (runtime.focusedSession) {
+					await focusedRuntimeChoice(runtime, "persona");
+					return;
+				}
 				ctx.showPersonaConfigure(parsed.scope);
 				return;
 			}
@@ -679,7 +775,11 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			try {
-				const message = await runLoadoutCommand(command.args, loadoutHost(runtime.session));
+				const message = await runLoadoutCommand(
+					command.args,
+					loadoutHost(runtime.session),
+					loadoutFeature(runtime.focusedInput ? runtime.session : undefined),
+				);
 				if (message === undefined) return usage(loadoutUsage(), runtime);
 				await runtime.output(message);
 				return commandConsumed();
@@ -691,6 +791,10 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const ctx = runtime.ctx;
 			ctx.editor.setText("");
 			if (!command.args.trim()) {
+				if (runtime.focusedSession) {
+					await focusedRuntimeChoice(runtime, "loadout");
+					return;
+				}
 				await loadoutMenu(ctx);
 				return;
 			}
