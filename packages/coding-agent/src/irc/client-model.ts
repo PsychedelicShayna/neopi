@@ -132,9 +132,9 @@ export class IrcClientModel {
 		this.#lastConversation = snapshot?.lastConversation ?? IRC_TRAFFIC_ID;
 		this.#selected = this.#lastConversation;
 		// Hydrated entries are backlog, not fresh notifications.
-		this.#refresh(false);
+		this.#refresh("hydrate");
 		this.#unsubscribe = source.subscribe(() => {
-			this.#refresh(!this.#open);
+			this.#refresh(this.#open ? "open" : "closed");
 			this.#emit();
 		});
 	}
@@ -185,6 +185,15 @@ export class IrcClientModel {
 	/** Chronological logical messages, in the bus's send order (not delivery completion order). */
 	entries(id: IrcConversationId = this.#selected): readonly IrcLogEntry[] {
 		return id === IRC_TRAFFIC_ID ? this.#traffic : (this.#conversations.get(id) ?? NO_ENTRIES);
+	}
+
+	/** The latest live notification, even if its conversation has already been read. */
+	latestNotification(): IrcLogEntry | undefined {
+		for (let i = this.#traffic.length - 1; i >= 0; i--) {
+			const entry = this.#traffic[i]!;
+			if (this.#rows.get(ircEntryId(entry))?.notified) return entry;
+		}
+		return undefined;
 	}
 
 	unread(id: IrcConversationId = IRC_TRAFFIC_ID): number {
@@ -272,7 +281,7 @@ export class IrcClientModel {
 		this.#listeners.clear();
 	}
 
-	#refresh(trackNotifications: boolean): void {
+	#refresh(mode: "hydrate" | "open" | "closed"): void {
 		const rows = new Map<string, ProjectedRow>();
 		const observedLegs = new Set<string>();
 		for (const entry of this.source.entries()) {
@@ -281,7 +290,8 @@ export class IrcClientModel {
 			const leg = entry.message.id;
 			// Remember the policy at arrival time; changing it must not promote old chatter.
 			const notified =
-				before?.notified || this.#rows.get(key)?.notified || (!this.#observedLegs.has(leg) && this.notifies(entry));
+				before?.notified || this.#rows.get(key)?.notified ||
+				(mode !== "hydrate" && !this.#observedLegs.has(leg) && this.notifies(entry));
 			observedLegs.add(leg);
 			if (!before) rows.set(key, { entry, notified });
 			else {
@@ -307,7 +317,7 @@ export class IrcClientModel {
 				if (entries) entries.push(entry);
 				else conversations.set(id, [entry]);
 			}
-			if (trackNotifications && row.notified && !this.#rows.get(key)?.notified) this.#pendingNotifications.add(key);
+			if (mode === "closed" && row.notified && !this.#rows.get(key)?.notified) this.#pendingNotifications.add(key);
 		}
 		for (const key of this.#pendingNotifications) {
 			if (!rows.has(key)) this.#pendingNotifications.delete(key);

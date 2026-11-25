@@ -20,14 +20,29 @@ describe("CustomEditor keybindings", () => {
 		expect(onRetry).toHaveBeenCalledTimes(1);
 	});
 
+	it("retries with Ctrl+Alt+R, but not with F5 or Alt+R", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const onRetry = vi.fn();
+		editor.onRetry = onRetry;
+
+		editor.handleInput("\x1b[15~"); // F5
+		editor.handleInput("\x1br"); // Alt+R
+		expect(onRetry).not.toHaveBeenCalled();
+
+		editor.handleInput("\x1b[114;7u"); // Ctrl+Alt+R
+		expect(onRetry).toHaveBeenCalledTimes(1);
+	});
+
+	const retryChord = "\x1b[114;7u";
+
 	it("lets custom handlers keep precedence over the default retry chord", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		const onRetry = vi.fn();
 		const customHandler = vi.fn();
 
 		editor.onRetry = onRetry;
-		editor.setCustomKeyHandler("alt+r", customHandler);
-		editor.handleInput("\x1br");
+		editor.setCustomKeyHandler("ctrl+alt+r", customHandler);
+		editor.handleInput(retryChord);
 
 		expect(customHandler).toHaveBeenCalledTimes(1);
 		expect(onRetry).not.toHaveBeenCalled();
@@ -40,8 +55,8 @@ describe("CustomEditor keybindings", () => {
 
 		editor.onRetry = onRetry;
 		editor.onCopyPrompt = onCopyPrompt;
-		editor.setActionKeys("app.clipboard.copyPrompt", ["alt+r"]);
-		editor.handleInput("\x1br");
+		editor.setActionKeys("app.clipboard.copyPrompt", ["ctrl+alt+r"]);
+		editor.handleInput(retryChord);
 
 		expect(onCopyPrompt).toHaveBeenCalledTimes(1);
 		expect(onRetry).not.toHaveBeenCalled();

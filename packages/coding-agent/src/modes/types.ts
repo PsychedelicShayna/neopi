@@ -543,7 +543,7 @@ export interface InteractiveModeContext {
 	maintenanceInterruptKey(): KeyId | undefined;
 	/** A click on a working row's stop control: the interrupt key's handler. */
 	interruptFromPointer(): void;
-	/** Reconcile the idle "F5 to Retry" status row with the transcript tail. */
+	/** Reconcile the idle retry status row with the transcript tail. */
 	syncRetryHintRow(): void;
 	startPendingSubmission(
 		input: {

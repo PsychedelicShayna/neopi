@@ -501,9 +501,12 @@ export class InputController {
 				const panel = this.ctx.sidePanel;
 				if (panel?.active && panel.handleChordInput(data)) return { consume: true };
 				const ircTraffic = this.ctx.keybindings.matches(data, "app.irc.traffic");
-				if (ircTraffic || this.ctx.keybindings.matches(data, "app.irc.viewer")) {
+				const ircQuickReply = this.ctx.keybindings.matches(data, "app.irc.quickReply");
+				if (ircTraffic || ircQuickReply || this.ctx.keybindings.matches(data, "app.irc.viewer")) {
 					if (this.ctx.ui.hasOverlay() || this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
-					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.ctx.showIrcViewer(ircTraffic ? "traffic" : undefined);
+					if (!isKeyRelease(data) && !isKeyRepeat(data)) {
+						this.ctx.showIrcViewer(ircTraffic ? "traffic" : ircQuickReply ? "quickReply" : undefined);
+					}
 					return { consume: true };
 				}
 				if (this.ctx.keybindings.matches(data, "app.sidebar.toggle")) {
@@ -989,6 +992,9 @@ export class InputController {
 				return true;
 			case "app.irc.traffic":
 				this.ctx.showIrcViewer("traffic");
+				return true;
+			case "app.irc.quickReply":
+				this.ctx.showIrcViewer("quickReply");
 				return true;
 			case "app.history.search":
 				void this.ctx.showHistorySearch();

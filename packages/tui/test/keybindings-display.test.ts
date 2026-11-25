@@ -13,10 +13,11 @@ describe("KeybindingsManager.getDisplayString", () => {
 	beforeEach(() => setKeyHintPlatform("linux"));
 	afterEach(() => setKeyHintPlatform(undefined));
 
-	it("defaults retry to F5 with the Alt+R fallback", () => {
+	it("defaults retry to Ctrl+Alt+R and IRC quick reply to Alt+R", () => {
 		const keybindings = KeybindingsManager.inMemory();
 
-		expect(keybindings.getDisplayString("app.retry")).toBe("F5/Alt+R");
+		expect(keybindings.getDisplayString("app.retry")).toBe("Ctrl+Alt+R");
+		expect(keybindings.getDisplayString("app.irc.quickReply")).toBe("Alt+R");
 	});
 
 	it("returns an empty string when the action has no binding", () => {

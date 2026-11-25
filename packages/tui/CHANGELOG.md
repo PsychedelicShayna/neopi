@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Retry the last failed turn with Ctrl+Alt+R instead of F5 or Alt+R.
 - IRC messages in the transcript show the whole message, rendered as Markdown at full width, between an opening rule (sender, group or recipient, time) and a closing rule in the sender's Agent Hub colour, with a rail of that colour down the body.
 - Advisor notes appear in an outlined bubble like Chronicler Luna's, coloured by the worst note: grey for a nit, yellow for a concern, red for a blocker.
 - Tab reopens slash argument suggestions after Esc and can continue to the next slot after a verb is selected ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).

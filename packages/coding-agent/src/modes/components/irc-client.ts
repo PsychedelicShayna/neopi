@@ -23,6 +23,7 @@ import { agentColored } from "@oh-my-pi/pi-tui/overlays/agent-identity";
 import { statusGlyph } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { clockTime } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
+import type { IrcLogEntry } from "@oh-my-pi/pi-tui/tools/irc";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
@@ -101,6 +102,7 @@ interface ClientOptions {
 	maxRows(): number;
 	viewerKeys?: readonly KeyId[];
 	trafficKeys?: readonly KeyId[];
+	quickReplyKeys?: readonly KeyId[];
 }
 
 type Page = "quick" | "dms" | "roster";
@@ -173,6 +175,7 @@ export class IrcClientComponent implements Component {
 	#terminalCursor = false;
 	#page: Page = "quick";
 	#region: Region = "sidebar";
+	#quickReply = false;
 	#filter = 0;
 	#sort = 0;
 	#previewEnabled = false;
@@ -203,15 +206,25 @@ export class IrcClientComponent implements Component {
 		});
 	}
 
-	open(mode: "resume" | "traffic" = "resume", target?: IrcClientTarget): void {
+	open(mode: "resume" | "traffic" | "quickReply" = "resume", target?: IrcClientTarget): void {
 		if (this.#disposed) return;
 		this.#open = true;
 		this.#opening++;
 		this.#dismissTransient();
 		this.#page = "quick";
+		if (mode === "quickReply") {
+			const entry = this.#model.latestNotification();
+			if (entry) {
+				const conversationId = this.#replyConversation(entry);
+				if (conversationId) {
+					target = { conversationId, entryId: ircEntryId(entry) };
+					this.#quickReply = true;
+				}
+			}
+		}
 		this.#region = mode === "traffic" || target ? "center" : "sidebar";
 		const previous = this.#model.selected;
-		const id = this.#model.open(mode, target?.conversationId);
+		const id = this.#model.open(mode === "traffic" ? "traffic" : "resume", target?.conversationId);
 		if (mode === "traffic" || target || previous !== id) this.#feed.reset(target?.entryId);
 		this.#refresh(id);
 		this.options.requestRender();
@@ -240,6 +253,7 @@ export class IrcClientComponent implements Component {
 	}
 
 	#dismissTransient(): void {
+		this.#quickReply = false;
 		this.#keys.reset();
 		this.#popup = undefined;
 		this.#invite.close();
@@ -274,6 +288,16 @@ export class IrcClientComponent implements Component {
 	#canSend(id: IrcConversationId): boolean {
 		const room = this.#room(id);
 		return this.#host.operatorId !== undefined && (!!otherIrcDmPeer(id, this.#host.operatorId) || (room?.joined === true && room.canSend !== false));
+	}
+
+	#replyConversation(entry: IrcLogEntry): IrcConversationId | undefined {
+		const operator = this.#host.operatorId;
+		if (!operator) return undefined;
+		const { message } = entry;
+		if (message.group !== undefined) return ircRoomId(message.group);
+		if (message.from !== operator) return ircDmId(operator, message.from);
+		// An outgoing DM is already in the right conversation; a broadcast has no single recipient.
+		return entry.broadcast || message.broadcast ? undefined : ircDmId(operator, message.to);
 	}
 
 	#refresh(preferred?: IrcConversationId): void {
@@ -614,6 +638,17 @@ export class IrcClientComponent implements Component {
 			}
 			return;
 		}
+		if (this.options.quickReplyKeys?.some(key => matchesKey(data, key))) {
+			if (!isKeyRepeat(data) && this.#region === "center" && this.#page !== "roster") {
+				const entry = this.#feed.selected(this.#model.entries());
+				const id = entry && this.#replyConversation(entry);
+				if (entry && id) {
+					this.#activate(id, false, id === ircEntryConversationId(entry) ? ircEntryId(entry) : undefined);
+					this.#quickReply = true;
+				}
+			}
+			return;
+		}
 		const editor = this.#page !== "roster" && this.#region === "center" && this.#canSend(this.#model.selected) ? this.#editor(this.#model.selected) : undefined;
 		if (action && action !== "pending" && action.kind === "page" && this.#page !== "roster") {
 			(this.#preview() ? this.#previewFeed : this.#feed).page(action.delta);
@@ -625,6 +660,7 @@ export class IrcClientComponent implements Component {
 		}
 		if (action && action !== "pending" && action.kind === "cancel") {
 			if (editor?.isAutocompleteActive() || editor?.vimConsumesEscape()) editor.handleInput(data);
+			else if (this.#quickReply && this.#region === "center") this.options.onClose();
 			else if (editor) this.#region = "sidebar";
 			else if (this.#search.value) {
 				this.#search.setValue("");
@@ -773,7 +809,11 @@ export class IrcClientComponent implements Component {
 		if (this.#region === "members") return `${label("hint.members", keys)}${room && supports(room, "invite") ? `  ${label("hint.invite")}` : ""}${room && supports(room, "mute") ? `  ${label("hint.mute")}` : ""}`;
 		if (this.#page === "roster" && this.#region === "center") return label("hint.roster", keys);
 		if (this.#region === "sidebar") return `${label("hint.sidebar", keys)}${this.#host.canCreate ? `  ${label("hint.create")}` : ""}${room && supports(room, "invite") ? `  ${label("hint.invite")}` : ""}`;
-		return label(this.#canSend(this.#model.selected) ? "hint.compose" : this.#model.selected === IRC_TRAFFIC_ID ? "hint.traffic" : "hint.read_only", keys);
+		const id = this.#model.selected;
+		if (this.#canSend(id)) return label("hint.compose", keys);
+		const hint = label(id === IRC_TRAFFIC_ID ? "hint.traffic" : "hint.read_only", keys);
+		const reply = formatKeyHints(this.options.quickReplyKeys ?? []);
+		return reply ? `${hint} · ${label("hint.quick_reply", { reply })}` : hint;
 	}
 
 	#heading(text: string, focused: boolean): string {
@@ -847,7 +887,11 @@ export class IrcClientComponent implements Component {
 			editor.viewportRowsProvider = () => height - 1;
 			composer = editor.render(width).slice(0, height - 2);
 		} else if (height >= 3 && id !== IRC_TRAFFIC_ID) {
-			composer = [theme.fg("dim", ` ${label(preview ? "preview_only" : "read_only")}`)];
+			const notice =
+				!preview && !canSend && this.#quickReply && id.startsWith("room:")
+					? label("room_send_unavailable", { room: this.#title(id) })
+					: label(preview ? "preview_only" : "read_only");
+			composer = [theme.fg("dim", ` ${notice}`)];
 		}
 		const budget = Math.max(1, height - 1 - composer.length);
 		const feed = preview ? this.#previewFeed : this.#feed;

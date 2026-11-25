@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { IrcBus } from "../../src/irc/bus";
 import {
 	IRC_TRAFFIC_ID,
@@ -9,6 +10,7 @@ import {
 	ircRoomId,
 	otherIrcDmPeer,
 } from "../../src/irc/client-model";
+import { type IrcClientAction, IrcClientComponent } from "../../src/modes/components/irc-client";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 
 function fixture() {
@@ -30,6 +32,124 @@ async function send(bus: IrcBus, from: string, to: string, body: string): Promis
 function bodies(client: IrcClientModel, id = client.selected): string[] {
 	return client.entries(id).map(({ message }) => message.groupText ?? message.body);
 }
+
+describe("IRC client quick reply", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	function mount(roomCanSend = true) {
+		const { bus, source } = fixture();
+		const model = new IrcClientModel(source, { operatorId: "Shayna" });
+		const act = vi.fn((_action: IrcClientAction) => undefined);
+		const close = vi.fn(() => client.close());
+		const client = new IrcClientComponent({
+			model,
+			host: {
+				operatorId: "Shayna",
+				operatorName: "Shayna",
+				rooms: () => [{ name: "council", joined: true, canSend: roomCanSend, members: [] }],
+				agents: () => [],
+				act,
+			},
+			quickReplyKeys: ["alt+r"],
+			onClose: close,
+			requestRender() {},
+			maxRows: () => 30,
+		});
+		const press = (key: string) => client.handleInput(key);
+		return {
+			bus, client, model, act, close, press,
+			dispose() {
+				client.dispose();
+				model.dispose();
+			},
+		};
+	}
+
+	it("opens the latest notifying DM with its composer focused and preserves its draft on Escape", async () => {
+		const view = mount();
+		try {
+			await send(view.bus, "A", "Shayna", "needs a reply");
+			await send(view.bus, "B", "A", "newer, but passive");
+			view.client.open("quickReply");
+			view.press("my draft");
+			view.press("\x1b");
+			expect(view.close).toHaveBeenCalledTimes(1);
+			view.client.open("quickReply");
+			view.press("\r");
+			expect(view.act).toHaveBeenCalledWith({ kind: "send", conversationId: ircDmId("Shayna", "A"), text: "my draft" });
+		} finally {
+			view.dispose();
+		}
+	});
+
+	it("opens the normal sidebar with no notification, even after broadcast traffic reached the operator", async () => {
+		const view = mount();
+		try {
+			await view.bus.send({ from: "A", to: "Shayna", body: "broadcast", broadcast: true, localOnly: true });
+			view.client.open("quickReply");
+			expect(view.model.selected).toBe(IRC_TRAFFIC_ID);
+			view.press("\x1b");
+			expect(view.close).toHaveBeenCalledTimes(1);
+		} finally {
+			view.dispose();
+		}
+	});
+
+	it("keeps the latest notifying room selected and explains when it is read-only", async () => {
+		const view = mount(false);
+		try {
+			await send(view.bus, "B", "Shayna", "older DM");
+			await view.bus.send({
+				from: "A",
+				to: "Shayna",
+				body: "@Shayna room update",
+				group: "council",
+				broadcast: true,
+				localOnly: true,
+			});
+			view.client.open("quickReply");
+			expect(view.model.selected).toBe(ircRoomId("council"));
+			expect(view.client.render(120).join("\n")).toContain("You can't send in #council");
+			view.press("not sent");
+			view.press("\r");
+			expect(view.act).not.toHaveBeenCalled();
+		} finally {
+			view.dispose();
+		}
+	});
+
+	it("opens the selected group's composer rather than the newest Traffic message", async () => {
+		const view = mount();
+		try {
+			await view.bus.send({ from: "A", to: "Shayna", body: "@Shayna question", group: "council", broadcast: true, localOnly: true });
+			await send(view.bus, "B", "Shayna", "more recent DM");
+			view.client.open("traffic");
+			view.press("\x1b[A");
+			view.press("\x1br");
+			view.press("room reply");
+			view.press("\r");
+			expect(view.act).toHaveBeenCalledWith({ kind: "send", conversationId: ircRoomId("council"), text: "room reply" });
+		} finally {
+			view.dispose();
+		}
+	});
+
+	it("replies privately to a group-less broadcast in Traffic", async () => {
+		const view = mount();
+		try {
+			await view.bus.send({ from: "A", to: "Shayna", body: "broadcast", broadcast: true, localOnly: true });
+			view.client.open("traffic");
+			view.press("\x1br");
+			view.press("private reply");
+			view.press("\r");
+			expect(view.act).toHaveBeenCalledWith({ kind: "send", conversationId: ircDmId("Shayna", "A"), text: "private reply" });
+		} finally {
+			view.dispose();
+		}
+	});
+});
 
 describe("IRC conversation client model", () => {
 	it("projects both directions of a DM in send order and previews without clearing unread", async () => {

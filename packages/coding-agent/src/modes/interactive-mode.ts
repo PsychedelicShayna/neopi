@@ -10154,7 +10154,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.releaseStaleYieldCompaction();
 	}
 	/**
-	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:
+	 * Reconcile the idle retry status row with the transcript tail:
 	 * mount it when the last turn died on a tool call (Esc mid-execution,
 	 * stream failure) and the status row is free, remove it when stale. Runs at
 	 * turn end and after every transcript replay (startup resume, `/tree`,
@@ -10171,7 +10171,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		// Never contend with a live loader (working/auto-retry/compaction).
 		if (!show || this.statusContainer.children.length > 0) return;
-		const retryKey = this.keybindings.getKeys("app.retry")[0] ?? "f5";
+		const retryKey = this.keybindings.getKeys("app.retry")[0];
+		if (!retryKey) return;
 		// Laid out as the working row it replaces: a blank row above, then the
 		// key in the column where the working row's interrupt key stood.
 		const hint = new Container();

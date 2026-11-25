@@ -4367,8 +4367,9 @@ export class SelectorController {
 			this.ctx.showStatus(t("overlays.irc_client.session_unavailable"));
 			return;
 		}
-		const target = request && request !== "traffic" ? owner.resolveTarget(request) : undefined;
-		if (request && request !== "traffic" && !target) {
+		const explicitTarget = typeof request === "object";
+		const target = explicitTarget ? owner.resolveTarget(request) : undefined;
+		if (explicitTarget && !target) {
 			this.ctx.showStatus(t("overlays.irc_client.target_unavailable"));
 			return;
 		}
@@ -4381,6 +4382,7 @@ export class SelectorController {
 					host: owner.host,
 					viewerKeys: this.ctx.keybindings.getKeys("app.irc.viewer"),
 					trafficKeys: this.ctx.keybindings.getKeys("app.irc.traffic"),
+					quickReplyKeys: this.ctx.keybindings.getKeys("app.irc.quickReply"),
 					requestRender: () => this.ctx.ui.requestRender(),
 					onClose: () => this.closeIrcViewer(),
 					maxRows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
@@ -4388,7 +4390,7 @@ export class SelectorController {
 			};
 		}
 		const { component } = this.#ircComponent;
-		const mode = request === "traffic" ? "traffic" : "resume";
+		const mode = typeof request === "string" ? request : "resume";
 		if (this.#openMenus.has("irc-viewer")) {
 			if (!request && this.ctx.ui.getFocused() === component) this.closeIrcViewer();
 			else if (this.#focusOpenMenu("irc-viewer") && request) component.open(mode, target);

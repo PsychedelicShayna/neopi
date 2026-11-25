@@ -85,7 +85,7 @@ export function operatorIrcLogSource(session: () => AgentSession): IrcLogSource 
 }
 
 /** Side-panel targets are real message or IRC peer ids, not row numbers or display names. */
-export type IrcClientOpenRequest = "traffic" | { messageId: string } | { dm: string };
+export type IrcClientOpenRequest = "traffic" | "quickReply" | { messageId: string } | { dm: string };
 
 function isConversationId(value: unknown): value is IrcConversationId {
 	return typeof value === "string" && (value === IRC_TRAFFIC_ID || value.startsWith("room:") || value.startsWith("dm:"));
@@ -214,7 +214,7 @@ export class OperatorIrcClient {
 		});
 	}
 
-	resolveTarget(request: Exclude<IrcClientOpenRequest, "traffic">): IrcClientTarget | undefined {
+	resolveTarget(request: Exclude<IrcClientOpenRequest, string>): IrcClientTarget | undefined {
 		if ("dm" in request) {
 			const operatorId = this.host.operatorId;
 			if (!operatorId || operatorId === request.dm) return undefined;
