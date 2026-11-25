@@ -356,6 +356,7 @@
 
 ### Changed
 
+- Read `model://astra` or another partial model name to list matching available models and variants while still seeing the best match in `selected`. Exact IDs still return one result ([#923](https://github.com/PsychedelicShayna/neopi/issues/923)).
 - Launch directly from an agent type and inline spec, enter only an assignment, or edit all launch settings on one screen. The resulting `/hub <id>` link opens the agent transcript directly ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler settings moved from **Memory** to their own **Chronicler** tab next to **Memory**.
 - The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.

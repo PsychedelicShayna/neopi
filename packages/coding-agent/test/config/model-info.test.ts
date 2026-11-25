@@ -147,6 +147,10 @@ describe("live model information", () => {
 		expect(result.models).toHaveLength(result.limit);
 		expect(result.models[0]?.id).toBe("model-00");
 		expect(result.models.at(-1)?.id).toBe("model-24");
+		const partial = await lookupModelInfo("model-", session);
+		expect(partial.matchCount).toBe(30);
+		expect(partial.truncated).toBe(true);
+		expect(partial.models.map(entry => entry.id)).toEqual(result.models.map(entry => entry.id));
 		const regex = await lookupModelInfo("re:^lookup/model-0[12]$", session);
 		expect(regex.models.map(entry => entry.id)).toEqual(["model-01", "model-02"]);
 	});
@@ -154,6 +158,34 @@ describe("live model information", () => {
 	it("expands bare and brace globs through the shared selector rules", async () => {
 		expect((await lookupModelInfo("*", session)).models.map(entry => entry.id)).toEqual(["alpha", "beta"]);
 		expect((await lookupModelInfo("lookup/{alpha,beta}", session)).matchCount).toBe(2);
+	});
+
+	it("lists base models and variants for a bare partial slug while keeping the best match", async () => {
+		const base = model("gpt-6.2-astra");
+		const variant = {
+			...model("gpt-6.2-astra-ultra-900k"),
+			variant: { baseModelId: base.id, settings: {}, request: {} },
+		};
+		rows = [base, model("gpt-6.2-astra-fast"), variant, model("gpt-6.2-sol")];
+		available = rows;
+
+		const result = await lookupModelInfo("AsTrA", session);
+
+		expect(result.selected).toBe("lookup/gpt-6.2-astra");
+		expect(result.matchCount).toBe(3);
+		expect(result.models.map(entry => entry.id)).toEqual([
+			"gpt-6.2-astra",
+			"gpt-6.2-astra-fast",
+			"gpt-6.2-astra-ultra-900k",
+		]);
+
+		const exact = await lookupModelInfo("gpt-6.2-astra", session);
+		expect(exact.selected).toBe("lookup/gpt-6.2-astra");
+		expect(exact.matchCount).toBe(1);
+		expect(exact.models.map(entry => entry.id)).toEqual(["gpt-6.2-astra"]);
+
+		const exactVariant = await lookupModelInfo("lookup/gpt-6.2-astra-ultra-900k", session);
+		expect(exactVariant.models.map(entry => entry.id)).toEqual(["gpt-6.2-astra-ultra-900k"]);
 	});
 
 	it("uses the registry's resolved fact values and marks unverified effort metadata", async () => {
