@@ -9,7 +9,11 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { SidePanel, SidePanelFullscreenComponent, type SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
 import { isLayoutComponent, type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
+import { MenuHelp } from "@oh-my-pi/pi-tui/components/menu-hints";
 import { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { compositeLineAt } from "@oh-my-pi/pi-tui/render/composite";
+import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -80,6 +84,8 @@ export interface SidePanelViewSection extends SidePanelSection {
 	handleModeInput?(data: string, keys: MenuKeyReader): boolean;
 	/** Leave any view-owned mode. */
 	resetMode?(): void;
+	/** A floating popup the view shows over the panel, such as the Agents filter popup. */
+	popup?(): { title: string; rows: readonly string[] } | undefined;
 }
 
 /** What the controller needs from its interactive host. */
@@ -114,6 +120,7 @@ export class SidePanelController {
 	#previousFocus: Component | null = null;
 	readonly #keys: MenuKeyReader;
 	readonly #percentChord = new PercentChord();
+	readonly #help = new MenuHelp(undefined, () => this.#helpExtra());
 
 	constructor(host: SidePanelHost) {
 		this.#host = host;
@@ -124,6 +131,7 @@ export class SidePanelController {
 			onEmptyClick: () => this.#mounted?.clickEmpty?.(),
 			onInput: data => this.#handlePanelInput(data),
 			hints: () => this.#hints(),
+			overlay: (lines, width) => this.#paintOverlay(lines, width),
 		});
 	}
 
@@ -248,6 +256,7 @@ export class SidePanelController {
 
 	#resetNavigation(): void {
 		this.#keys.reset();
+		if (this.#help.open) this.#help.handleInput("\x1b");
 		this.#percentChord.clear();
 		this.#mounted?.resetMode?.();
 		this.#mounted?.clearSelection?.();
@@ -256,6 +265,11 @@ export class SidePanelController {
 	#handlePanelInput(data: string): void {
 		if (data.startsWith("\x1b[<") || isKeyRelease(data)) return;
 		const view = this.#mounted;
+		if (this.#help.handleInput(data)) {
+			this.#keys.reset();
+			this.#host.ui.requestRender();
+			return;
+		}
 		if (view?.handleModeInput?.(data, this.#keys)) return;
 		const first = this.#percentChord.take();
 		const digit = DIGIT_KEYS.findIndex(key => matchesKey(data, key));
@@ -313,15 +327,47 @@ export class SidePanelController {
 		}
 	}
 
-	/** The panel's own keys only; navigation is the harness-wide menu keymap. */
+	/** The panel's own keys only; navigation is the harness-wide menu keymap, behind `?`. */
 	#hints(): readonly string[] {
 		if (!this.active) return [];
 		const actions = this.#mounted?.actions?.() ?? [];
-		if (actions.length === 0) return [];
-		const line = actions
-			.map(action => `${theme.fg("accent", action.key)} ${theme.fg("dim", action.label)}`)
-			.join(theme.fg("dim", " · "));
-		return [line];
+		const parts = actions.map(action => `${theme.fg("accent", action.key)} ${theme.fg("dim", action.label)}`);
+		parts.push(`${theme.fg("accent", "?")} ${theme.fg("dim", t("overlays.side_panel.action.help"))}`);
+		return [parts.join(theme.fg("dim", " · "))];
+	}
+
+	/** The panel keys the `?` card lists after the shared navigation keys. */
+	#helpExtra(): string {
+		return t("overlays.side_panel.help");
+	}
+
+	/** The help card or the mounted view's popup, painted over the finished panel rows. */
+	#paintOverlay(lines: readonly string[], width: number): readonly string[] {
+		if (this.#help.open) return this.#help.render(lines, width);
+		const popup = this.#mounted?.popup?.();
+		if (!popup || width < 8) return lines;
+		const inner = Math.min(
+			width - 4,
+			Math.max(visibleWidth(popup.title) + 2, ...popup.rows.map(row => visibleWidth(row))),
+		);
+		const boxWidth = inner + 4;
+		const border = (text: string) => theme.fg("border", text);
+		const title = truncateToWidth(` ${popup.title} `, inner);
+		const box = [
+			border(`┌${title}${"─".repeat(Math.max(0, boxWidth - 2 - visibleWidth(title)))}┐`),
+			...popup.rows.map(row => {
+				const fitted = truncateToWidth(row, inner);
+				return `${border("│")} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${border("│")}`;
+			}),
+			border(`└${"─".repeat(boxWidth - 2)}┘`),
+		];
+		const result = [...lines];
+		const top = Math.max(0, result.length - box.length - 2);
+		const left = Math.max(0, Math.floor((width - boxWidth) / 2));
+		for (let i = 0; i < box.length && top + i < result.length; i++) {
+			result[top + i] = compositeLineAt(result[top + i]!, box[i]!, left, boxWidth, width);
+		}
+		return result;
 	}
 
 	/**

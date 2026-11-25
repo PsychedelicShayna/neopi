@@ -176,13 +176,14 @@ While the panel has focus:
 | `q` | Close the panel |
 | `i` | Agents: message the selected agent (fills `/irc <agent> ` in the composer) |
 | `r` / `x` | Agents: revive / kill the selected agent, as in the Agent Hub |
-| `f` | Agents: edit the filter row; arrows move, `Space` toggles, `Esc` finishes |
+| `f` | Agents: filter popup; arrows move, `Space` toggles a filter, autoscroll or the sort direction live, `Esc` closes |
+| `?` | Help: navigation keys and the panel's own keys |
 
-With Vim navigation (`tui.vimMode`), `j`/`k`, `h`/`l`, `gg`/`G`, `Ctrl+U`/`Ctrl+D` and `Ctrl+E`/`Ctrl+Y` work as they do in menus. Two digits jump by percentage (`3` `0` jumps to 30%). The bottom of the focused panel lists only the current view's own keys.
+With Vim navigation (`tui.vimMode`), `j`/`k`, `h`/`l`, `gg`/`G`, `Ctrl+U`/`Ctrl+D` and `Ctrl+E`/`Ctrl+Y` work as they do in menus. Two digits jump by percentage (`3` `0` jumps to 30%). The bottom of the focused panel lists only the current view's own keys and `?`.
 
 Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen, where returning focus to the transcript closes it. While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
 
-The Agents view starts with running subagents and advisors. Its bottom filter row shows and toggles running, idle, parked, advisors, ended agents, and autoscroll; click a control (`tui.mouse` is required when docked) or press `f`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group. Autoscroll pauses while an agent is selected.
+The Agents view starts with running subagents and advisors. Its bottom filter row shows and toggles running, idle, parked, advisors, ended agents, and autoscroll; click a control (`tui.mouse` is required when docked) or press `f`, whose popup also holds the sort direction. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group. Autoscroll pauses while an agent is selected.
 
 Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking an IRC message opens the full IRC viewer.
 

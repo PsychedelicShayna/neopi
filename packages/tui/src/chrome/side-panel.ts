@@ -54,6 +54,8 @@ export interface SidePanelOptions {
 	onInput?: (data: string) => void;
 	/** Fixed text above the section controls, outside the scrollable document. */
 	hints?: () => readonly string[];
+	/** Paints floating content (a popup, the help card) over the finished panel rows. */
+	overlay?: (lines: readonly string[], width: number) => readonly string[];
 }
 
 /** Section content that tracks the pointer and drops its hover when the pointer leaves the panel. */
@@ -119,6 +121,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	readonly #onEmptyClick: (() => void) | undefined;
 	readonly #onInput: ((data: string) => void) | undefined;
 	readonly #hints: SidePanelOptions["hints"];
+	readonly #overlay: SidePanelOptions["overlay"];
 	readonly #sections = new Map<string, RegisteredSection>();
 	#nextSequence = 0;
 	#height: number | undefined;
@@ -138,6 +141,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		this.#onEmptyClick = options.onEmptyClick;
 		this.#onInput = options.onInput;
 		this.#hints = options.hints;
+		this.#overlay = options.overlay;
 	}
 
 	/** Register or replace a section by id (keeping its place); returns an unregister function. */
@@ -336,7 +340,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		for (let row = footerStart; row < footer.length; row++) {
 			lines.push(fitLayoutLine(footer[row]!, contentWidth) + TRACK);
 		}
-		return lines;
+		return this.#overlay ? this.#overlay(lines, safeWidth) : lines;
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

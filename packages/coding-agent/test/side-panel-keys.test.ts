@@ -2,7 +2,13 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
-import { cfgSidebarEnabled, cfgSidebarView } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { AgentsSection } from "@oh-my-pi/pi-coding-agent/modes/side-panel/agents-section";
+import {
+	cfgSidebarAgentFilters,
+	cfgSidebarAgentOrder,
+	cfgSidebarEnabled,
+	cfgSidebarView,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -235,6 +241,64 @@ describe("alt+t focus and the panel keymap", () => {
 			}
 		});
 	}
+});
+
+describe("side-panel popups", () => {
+	it("opens help on ? and the Agents filter popup on f, which toggles live and closes on Esc", async () => {
+		const h = await harness(120);
+		try {
+			h.sidePanel.registerView(
+				"agents",
+				new AgentsSection({
+					settings: h.settings,
+					observed: () => undefined,
+					visible: () => true,
+					agents: () => [],
+					focusedAgentId: () => undefined,
+					focus: () => {},
+					returnToPrimary: () => {},
+					openTranscript: () => {},
+					message: () => {},
+					revive: () => {},
+					kill: () => {},
+					requestRender: () => h.composer.ui.requestRender(),
+					onChange: () => () => {},
+				}),
+			);
+			const screen = () => h.term.getViewport().join("\n");
+			const send = async (...keys: string[]) => {
+				for (const key of keys) h.term.sendInput(key);
+				await h.settle();
+			};
+			await send(ALT_T);
+			expect(screen()).toContain("? help");
+			await send("?");
+			expect(screen()).toContain("i DM · r revive · x kill");
+			// The card swallows other keys and closes on Esc, leaving the panel focused.
+			await send("q");
+			expect(h.sidePanel.active).toBe(true);
+			expect(screen()).toContain("i DM · r revive · x kill");
+			await send("\x1b");
+			expect(h.sidePanel.active).toBe(true);
+			expect(screen()).not.toContain("i DM · r revive · x kill");
+
+			await send("f");
+			expect(screen()).toContain("Filters");
+			expect(screen()).toContain("[x] Running subagents");
+			expect(screen()).toContain("[ ] Idle subagents");
+			await send("\x1b[B", " ");
+			expect(cfgSidebarAgentFilters.get(h.settings)).toEqual(["running", "advisors", "idle"]);
+			expect(screen()).toContain("[x] Idle subagents");
+			await send("\x1b[F", " ");
+			expect(cfgSidebarAgentOrder.get(h.settings)).toBe("newest-at-top");
+			// Esc closes the popup, not the panel or its focus.
+			await send("\x1b");
+			expect(screen()).not.toContain("Filters");
+			expect(h.sidePanel.active).toBe(true);
+		} finally {
+			h.stop();
+		}
+	});
 });
 
 describe("focused side-panel scrolling", () => {
