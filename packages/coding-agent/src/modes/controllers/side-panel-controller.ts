@@ -4,6 +4,7 @@ import {
 	type KeybindingsManager,
 	matchesKey,
 	type OverlayHandle,
+	isRightPress,
 	type SgrMouseEvent,
 	type TUI,
 } from "@oh-my-pi/pi-tui";
@@ -19,6 +20,7 @@ import {
 	cfgSidebarSide,
 	cfgSidebarSplitAt,
 	cfgSidebarView,
+	cfgSidebarWidthColumns,
 	cfgSidebarWidthMax,
 	cfgSidebarWidthMin,
 	cfgSidebarWidthRatio,
@@ -95,6 +97,8 @@ const CHAT_MIN_WIDTH = 60;
 /** Columns the composer's ` │ ` divider occupies. */
 const DIVIDER_WIDTH = 3;
 const RATIO_BOUNDS = { min: 0.1, max: 0.6 } as const;
+/** Narrowest width a divider drag leaves the panel. */
+const DRAG_MIN_WIDTH = 20;
 
 /**
  * Owns the side panel: resolves the `sidebar.*` settings into dock options for
@@ -114,6 +118,8 @@ export class SidePanelController {
 	#previousFocus: Component | null = null;
 	readonly #keys: MenuKeyReader;
 	readonly #percentChord = new PercentChord();
+	/** A divider drag in progress: the live panel width, and whether the pointer has moved it. */
+	#drag: { width: number; moved: boolean } | undefined;
 
 	constructor(host: SidePanelHost) {
 		this.#host = host;
@@ -459,6 +465,7 @@ export class SidePanelController {
 	 */
 	routeInlineMouse(event: SgrMouseEvent): boolean {
 		const { ui, composer } = this.#host;
+		if (this.#drag !== undefined && this.#continueDrag(event)) return true;
 		const viewport = ui.getMutableViewport();
 		const geometry = composer.sidePanelGeometry();
 		// An empty published viewport (resize, alt screen, deferred paint) means
@@ -466,6 +473,14 @@ export class SidePanelController {
 		if (geometry === undefined || viewport.length === 0) return false;
 		const local = event.row - viewport.top;
 		if (local < 0 || local >= viewport.length) return false;
+		if (event.col >= geometry.dividerCol && event.col < geometry.dividerCol + DIVIDER_WIDTH) {
+			if (event.leftClick) this.#drag = { width: geometry.panelRect.width, moved: false };
+			else if (isRightPress(event) && cfgSidebarWidthColumns.get(this.#host.settings) !== 0) {
+				// Right-click on the divider returns to the ratio-based width.
+				cfgSidebarWidthColumns.set(this.#host.settings, 0);
+				this.applySettings();
+			}
+		}
 		if (withinColumns(geometry.chatRect, event.col)) {
 			if (event.leftClick && ui.getFocused() === this.#panel) {
 				this.#releaseDockFocus();
@@ -488,6 +503,34 @@ export class SidePanelController {
 		} else {
 			// Divider or pad: no row is under the pointer.
 			this.#panel.pointerLeave();
+		}
+		return true;
+	}
+
+	/**
+	 * A left press on the divider started a drag: follow the pointer with a live
+	 * width and keep it as `sidebar.width.columns` on release. Motion and the
+	 * release are consumed wherever the pointer is. Any other report means the
+	 * release was lost (it happened outside the terminal): the drag ends and the
+	 * report routes normally (false).
+	 */
+	#continueDrag(event: SgrMouseEvent): boolean {
+		const drag = this.#drag!;
+		const geometry = this.#host.composer.sidePanelGeometry();
+		if (!event.motion || event.release || (event.button & 3) !== 0 || geometry === undefined) {
+			this.#drag = undefined;
+			if (drag.moved && geometry !== undefined) cfgSidebarWidthColumns.set(this.#host.settings, drag.width);
+			if (drag.moved) this.applySettings();
+			return event.release;
+		}
+		const columns = this.#host.ui.terminal.columns;
+		// The divider is ` │ `: its bar follows the pointer.
+		const wanted = geometry.side === "right" ? columns - event.col - 2 : event.col - 1;
+		const width = Math.max(DRAG_MIN_WIDTH, Math.min(columns - CHAT_MIN_WIDTH - DIVIDER_WIDTH, wanted));
+		if (width !== drag.width) {
+			drag.width = width;
+			drag.moved = true;
+			this.applySettings();
 		}
 		return true;
 	}
@@ -516,6 +559,7 @@ export class SidePanelController {
 	/** Dock options from settings, with out-of-range values warned once and replaced by defaults. */
 	#resolveDock(): SidePanelDock {
 		const settings = this.#host.settings;
+		const dragged = this.#drag?.moved ? this.#drag.width : layoutSize(cfgSidebarWidthColumns.get(settings));
 		let ratio = cfgSidebarWidthRatio.get(settings);
 		if (ratio < RATIO_BOUNDS.min || ratio > RATIO_BOUNDS.max) {
 			this.#warnInvalid(cfgSidebarWidthRatio.id, ratio, `outside [${RATIO_BOUNDS.min}, ${RATIO_BOUNDS.max}]`);
@@ -552,9 +596,12 @@ export class SidePanelController {
 			// dock the split can never show and never offer the fullscreen form.
 			splitAt = Math.max(cfgSidebarSplitAt.default, smallest);
 		}
+		// A dragged width replaces the ratio and bounds; the split still leaves the chat its minimum.
+		const width =
+			dragged > 0 ? { fixed: Math.max(DRAG_MIN_WIDTH, dragged), min: DRAG_MIN_WIDTH } : { ratio, min, max };
 		return {
 			side: cfgSidebarSide.get(settings),
-			width: { ratio, min, max },
+			width,
 			splitAt,
 			chatMinWidth: CHAT_MIN_WIDTH,
 		};
