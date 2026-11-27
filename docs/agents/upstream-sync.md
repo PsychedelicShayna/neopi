@@ -139,7 +139,7 @@ Record observed commands, results and unavailable checks in the ledger's `## Ver
 
 The built artifact must be `packages/coding-agent/dist/npi`, produced by `./build.sh`. Every upstream version bump invalidates the gitignored native addon in each checkout; `build.sh` detects that and rebuilds it, so never assemble the build from individual `bun run` commands. Source-fork verification and installation never use a remote installer, `bun setup`, a global package install, or a differently named binary.
 
-After the nightly merge or batch, build and install `npi-nightly` using `AGENTS.md` and check that it launches. A temporary-prefix installation may supply additional evidence without replacing the delivery step. Proof sessions use the bounded destination lock in [policy.md](policy.md#nightly-delivery), releasing promptly; protect the separate default-channel installation and profile.
+After the nightly merge or batch, follow [build and install](build-install.md) to install `npi-nightly` and confirm it launches. A temporary-prefix installation may supply additional evidence without replacing the delivery step. Release the [destination-scoped proof hold](policy.md#install-after-merge-batches) promptly and protect the separate default-channel installation and profile.
 
 ## 6. Publish through a PR
 
@@ -176,4 +176,4 @@ Run that fast-forward path only after preserving dirty work and confirming the m
 
 Never realign a local default branch merely because a similarly named PR exists. Verify the PR incorporated the commit's intended tree changes first. Never delete or overwrite a WIP branch as cleanup for an upstream sync.
 
-After each nightly merge or batch, use `AGENTS.md`'s `./build.sh` and nightly-destination `install.sh` commands, then check that `npi-nightly` launches. Respect the ten-minute proof hold and release in [policy.md](policy.md#nightly-delivery); preserve local configuration and recovery refs. Additional smoke/version checks are information, not integration prerequisites. Updating the separate `npi` default channel belongs to owner-decided promotion.
+After each nightly merge or batch, use [build and install](build-install.md) for `./build.sh` and the nightly-destination `install.sh` commands, then check that `npi-nightly` launches. Respect the destination-scoped proof hold and release in [policy.md](policy.md#install-after-merge-batches); preserve local configuration and recovery refs. Additional smoke/version checks are information, not integration prerequisites. Updating the separate `npi` default channel belongs to owner-decided promotion.
